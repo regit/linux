@@ -31,6 +31,7 @@
 #include <linux/kernel.h>
 #include <linux/bpf.h>
 #include <linux/list.h>
+#include <linux/err.h>
 #include <libelf.h>
 #include <gelf.h>
 

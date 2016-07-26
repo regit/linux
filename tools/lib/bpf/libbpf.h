@@ -23,7 +23,6 @@
 
 #include <stdio.h>
 #include <stdbool.h>
-#include <linux/err.h>
 
 enum libbpf_errno {
 	__LIBBPF_ERRNO__START = 4000,
