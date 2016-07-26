@@ -31,6 +31,7 @@
 #include <linux/kernel.h>
 #include <linux/bpf.h>
 #include <linux/list.h>
+#include <linux/err.h>
 #include <libelf.h>
 #include <gelf.h>
 
@@ -1446,4 +1447,14 @@ bpf_object__find_map_by_name(struct bpf_object *obj, const char *name)
 			return pos;
 	}
 	return NULL;
+}
+
+bool bpf__is_error(const void *ptr)
+{
+	return IS_ERR(ptr);
+}
+
+long bpf__get_error(const void *ptr)
+{
+	return PTR_ERR(ptr);
 }
