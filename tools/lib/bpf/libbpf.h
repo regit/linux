@@ -173,6 +173,9 @@ int bpf_program__set_kprobe(struct bpf_program *prog);
 bool bpf_program__is_tracepoint(struct bpf_program *prog);
 bool bpf_program__is_kprobe(struct bpf_program *prog);
 
+int bpf_program__set_type(struct bpf_program *prog,
+				  unsigned int type);
+
 /*
  * We don't need __attribute__((packed)) now since it is
  * unnecessary for 'bpf_map_def' because they are all aligned.
