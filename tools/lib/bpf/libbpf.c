@@ -1336,26 +1336,23 @@ int bpf_program__nth_fd(struct bpf_program *prog, int n)
 	return fd;
 }
 
-static void bpf_program__set_type(struct bpf_program *prog,
+int bpf_program__set_type(struct bpf_program *prog,
 				  enum bpf_prog_type type)
 {
+	if (!prog)
+		return -EINVAL;
 	prog->type = type;
+	return 0;
 }
 
 int bpf_program__set_tracepoint(struct bpf_program *prog)
 {
-	if (!prog)
-		return -EINVAL;
-	bpf_program__set_type(prog, BPF_PROG_TYPE_TRACEPOINT);
-	return 0;
+	return bpf_program__set_type(prog, BPF_PROG_TYPE_TRACEPOINT);
 }
 
 int bpf_program__set_kprobe(struct bpf_program *prog)
 {
-	if (!prog)
-		return -EINVAL;
-	bpf_program__set_type(prog, BPF_PROG_TYPE_KPROBE);
-	return 0;
+	return bpf_program__set_type(prog, BPF_PROG_TYPE_KPROBE);
 }
 
 static bool bpf_program__is_type(struct bpf_program *prog,
