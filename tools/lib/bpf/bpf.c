@@ -25,6 +25,7 @@
 #include <asm/unistd.h>
 #include <linux/bpf.h>
 #include "bpf.h"
+#include "libbpf.h"
 
 /*
  * When building perf, unistd.h is overrided. __NR_bpf is
@@ -97,7 +98,7 @@ int bpf_load_program(enum bpf_prog_type type, struct bpf_insn *insns,
 	return sys_bpf(BPF_PROG_LOAD, &attr, sizeof(attr));
 }
 
-int bpf_map_update_elem(int fd, void *key, void *value,
+int bpf_map__update_elem(int fd, void *key, void *value,
 			u64 flags)
 {
 	union bpf_attr attr;
@@ -109,4 +110,36 @@ int bpf_map_update_elem(int fd, void *key, void *value,
 	attr.flags = flags;
 
 	return sys_bpf(BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
+}
+
+int bpf_map__lookup_elem(int fd, void *key, void *value)
+{
+	union bpf_attr attr = {
+		.map_fd = fd,
+		.key = ptr_to_u64(key),
+		.value = ptr_to_u64(value),
+	};
+
+	return sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, sizeof(attr));
+}
+
+int bpf_map__delete_elem(int fd, void *key)
+{
+	union bpf_attr attr = {
+		.map_fd = fd,
+		.key = ptr_to_u64(key),
+	};
+
+	return sys_bpf(BPF_MAP_DELETE_ELEM, &attr, sizeof(attr));
+}
+
+int bpf_map__get_next_key(int fd, void *key, void *next_key)
+{
+	union bpf_attr attr = {
+		.map_fd = fd,
+		.key = ptr_to_u64(key),
+		.next_key = ptr_to_u64(next_key),
+	};
+
+	return sys_bpf(BPF_MAP_GET_NEXT_KEY, &attr, sizeof(attr));
 }

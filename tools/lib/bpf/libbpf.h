@@ -207,6 +207,11 @@ bpf_map__next(struct bpf_map *map, struct bpf_object *obj);
 int bpf_map__fd(struct bpf_map *map);
 const struct bpf_map_def *bpf_map__def(struct bpf_map *map);
 const char *bpf_map__name(struct bpf_map *map);
+int bpf_map__update_elem(int fd, void *key, void *value,
+			uint64_t flags);
+int bpf_map__lookup_elem(int fd, void *key, void *value);
+int bpf_map__delete_elem(int fd, void *key);
+int bpf_map__get_next_key(int fd, void *key, void *next_key);
 
 typedef void (*bpf_map_clear_priv_t)(struct bpf_map *, void *);
 int bpf_map__set_priv(struct bpf_map *map, void *priv,
