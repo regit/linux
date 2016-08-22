@@ -808,7 +808,7 @@ bpf_object__create_maps(struct bpf_object *obj)
 				zclose(obj->maps[j].fd);
 			return err;
 		}
-		pr_debug("create map: fd=%d\n", *pfd);
+		pr_warning("create map: fd=%d (name: '%s')\n", obj->maps[i].fd, obj->maps[i].name);
 	}
 
 	return 0;
