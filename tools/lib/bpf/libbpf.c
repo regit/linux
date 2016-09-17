@@ -548,6 +548,7 @@ bpf_object__init_maps(struct bpf_object *obj, void *data,
 
 		/* Save map definition into obj->maps */
 		*def = ((struct bpf_map_def *)data)[i];
+		pr_warning("Got map with type: %d\n", def->type);
 	}
 	return 0;
 }
