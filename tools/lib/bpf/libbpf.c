@@ -186,6 +186,7 @@ struct bpf_program {
 struct bpf_map {
 	int fd;
 	char *name;
+	size_t offset;
 	struct bpf_map_def def;
 	void *priv;
 	bpf_map_clear_priv_t clear_priv;
@@ -547,7 +548,7 @@ bpf_object__init_maps(struct bpf_object *obj, void *data,
 		obj->maps[i].fd = -1;
 
 		/* Save map definition into obj->maps */
-		*def = ((struct bpf_map_def *)data)[i];
+		*def = *(struct bpf_map_def *)(data + obj->maps[i].offset);
 	}
 	return 0;
 }
@@ -580,6 +581,7 @@ bpf_object__init_maps_name(struct bpf_object *obj)
 				   map_name, map_idx, obj->nr_maps);
 			continue;
 		}
+		obj->maps[map_idx].offset = sym.st_value;
 		obj->maps[map_idx].name = strdup(map_name);
 		if (!obj->maps[map_idx].name) {
 			pr_warning("failed to alloc map name\n");
