@@ -105,6 +105,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_LWT_IN,
 	BPF_PROG_TYPE_LWT_OUT,
 	BPF_PROG_TYPE_LWT_XMIT,
+	__MAX_BPF_PROG_TYPE,
 };
 
 enum bpf_attach_type {
