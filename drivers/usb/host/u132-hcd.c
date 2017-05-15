@@ -73,7 +73,7 @@ MODULE_LICENSE("GPL");
 #define INT_MODULE_PARM(n, v) static int n = v;module_param(n, int, 0444)
 INT_MODULE_PARM(testing, 0);
 /* Some boards misreport power switching/overcurrent*/
-static bool distrust_firmware = true;
+static bool distrust_firmware = 1;
 module_param(distrust_firmware, bool, 0);
 MODULE_PARM_DESC(distrust_firmware, "true to distrust firmware power/overcurren"
 	"t setup");
@@ -1309,9 +1309,13 @@ static void u132_hcd_ring_work_scheduler(struct work_struct *work)
 		u132_ring_put_kref(u132, ring);
 		return;
 	} else if (ring->curr_endp) {
-		struct u132_endp *endp, *last_endp = ring->curr_endp;
+		struct u132_endp *last_endp = ring->curr_endp;
+		struct list_head *scan;
+		struct list_head *head = &last_endp->endp_ring;
 		unsigned long wakeup = 0;
-		list_for_each_entry(endp, &last_endp->endp_ring, endp_ring) {
+		list_for_each(scan, head) {
+			struct u132_endp *endp = list_entry(scan,
+				struct u132_endp, endp_ring);
 			if (endp->queue_next == endp->queue_last) {
 			} else if ((endp->delayed == 0)
 				|| time_after_eq(jiffies, endp->jiffies)) {
@@ -1538,8 +1542,11 @@ static int u132_periodic_reinit(struct u132 *u132)
 		(fit ^ FIT) | u132->hc_fminterval);
 	if (retval)
 		return retval;
-	return u132_write_pcimem(u132, periodicstart,
-	       ((9 * fi) / 10) & 0x3fff);
+	retval = u132_write_pcimem(u132, periodicstart,
+		((9 * fi) / 10) & 0x3fff);
+	if (retval)
+		return retval;
+	return 0;
 }
 
 static char *hcfs2string(int state)
@@ -2240,8 +2247,9 @@ static int u132_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 {
 	struct u132 *u132 = hcd_to_u132(hcd);
 	if (irqs_disabled()) {
-		if (gfpflags_allow_blocking(mem_flags)) {
-			printk(KERN_ERR "invalid context for function that might sleep\n");
+		if (__GFP_WAIT & mem_flags) {
+			printk(KERN_ERR "invalid context for function that migh"
+				"t sleep\n");
 			return -EINVAL;
 		}
 	}
@@ -2389,12 +2397,14 @@ static int u132_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 static int dequeue_from_overflow_chain(struct u132 *u132,
 	struct u132_endp *endp, struct urb *urb)
 {
-	struct u132_urbq *urbq;
-
-	list_for_each_entry(urbq, &endp->urb_more, urb_more) {
+	struct list_head *scan;
+	struct list_head *head = &endp->urb_more;
+	list_for_each(scan, head) {
+		struct u132_urbq *urbq = list_entry(scan, struct u132_urbq,
+			urb_more);
 		if (urbq->urb == urb) {
 			struct usb_hcd *hcd = u132_to_hcd(u132);
-			list_del(&urbq->urb_more);
+			list_del(scan);
 			endp->queue_size -= 1;
 			urb->error_count = 0;
 			usb_hcd_giveback_urb(hcd, urb, 0);
@@ -2574,21 +2584,21 @@ static int u132_roothub_descriptor(struct u132 *u132,
 	retval = u132_read_pcimem(u132, roothub.a, &rh_a);
 	if (retval)
 		return retval;
-	desc->bDescriptorType = USB_DT_HUB;
+	desc->bDescriptorType = 0x29;
 	desc->bPwrOn2PwrGood = (rh_a & RH_A_POTPGT) >> 24;
 	desc->bHubContrCurrent = 0;
 	desc->bNbrPorts = u132->num_ports;
 	temp = 1 + (u132->num_ports / 8);
 	desc->bDescLength = 7 + 2 * temp;
-	temp = HUB_CHAR_COMMON_LPSM | HUB_CHAR_COMMON_OCPM;
+	temp = 0;
 	if (rh_a & RH_A_NPS)
-		temp |= HUB_CHAR_NO_LPSM;
+		temp |= 0x0002;
 	if (rh_a & RH_A_PSM)
-		temp |= HUB_CHAR_INDV_PORT_LPSM;
+		temp |= 0x0001;
 	if (rh_a & RH_A_NOCP)
-		temp |= HUB_CHAR_NO_OCPM;
+		temp |= 0x0010;
 	else if (rh_a & RH_A_OCPM)
-		temp |= HUB_CHAR_INDV_PORT_OCPM;
+		temp |= 0x0008;
 	desc->wHubCharacteristics = cpu_to_le16(temp);
 	retval = u132_read_pcimem(u132, roothub.b, &rh_b);
 	if (retval)
@@ -2691,18 +2701,28 @@ static int u132_roothub_setportfeature(struct u132 *u132, u16 wValue,
 	if (wIndex == 0 || wIndex > u132->num_ports) {
 		return -EINVAL;
 	} else {
+		int retval;
 		int port_index = wIndex - 1;
 		struct u132_port *port = &u132->port[port_index];
 		port->Status &= ~(1 << wValue);
 		switch (wValue) {
 		case USB_PORT_FEAT_SUSPEND:
-			return u132_write_pcimem(u132,
-			       roothub.portstatus[port_index], RH_PS_PSS);
+			retval = u132_write_pcimem(u132,
+				roothub.portstatus[port_index], RH_PS_PSS);
+			if (retval)
+				return retval;
+			return 0;
 		case USB_PORT_FEAT_POWER:
-			return u132_write_pcimem(u132,
-			       roothub.portstatus[port_index], RH_PS_PPS);
+			retval = u132_write_pcimem(u132,
+				roothub.portstatus[port_index], RH_PS_PPS);
+			if (retval)
+				return retval;
+			return 0;
 		case USB_PORT_FEAT_RESET:
-			return u132_roothub_portreset(u132, port_index);
+			retval = u132_roothub_portreset(u132, port_index);
+			if (retval)
+				return retval;
+			return 0;
 		default:
 			return -EPIPE;
 		}
@@ -2717,6 +2737,7 @@ static int u132_roothub_clearportfeature(struct u132 *u132, u16 wValue,
 	} else {
 		int port_index = wIndex - 1;
 		u32 temp;
+		int retval;
 		struct u132_port *port = &u132->port[port_index];
 		port->Status &= ~(1 << wValue);
 		switch (wValue) {
@@ -2752,8 +2773,11 @@ static int u132_roothub_clearportfeature(struct u132 *u132, u16 wValue,
 		default:
 			return -EPIPE;
 		}
-		return u132_write_pcimem(u132, roothub.portstatus[port_index],
-		       temp);
+		retval = u132_write_pcimem(u132, roothub.portstatus[port_index],
+			 temp);
+		if (retval)
+			return retval;
+		return 0;
 	}
 }
 
@@ -3120,7 +3144,8 @@ static int u132_probe(struct platform_device *pdev)
 #ifdef CONFIG_PM
 /*
  * for this device there's no useful distinction between the controller
- * and its root hub.
+ * and its root hub, except that the root hub only gets direct PM calls
+ * when CONFIG_PM_RUNTIME is enabled.
  */
 static int u132_suspend(struct platform_device *pdev, pm_message_t state)
 {
@@ -3194,6 +3219,7 @@ static struct platform_driver u132_platform_driver = {
 	.resume = u132_resume,
 	.driver = {
 		   .name = hcd_name,
+		   .owner = THIS_MODULE,
 		   },
 };
 static int __init u132_hcd_init(void)

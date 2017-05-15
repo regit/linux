@@ -178,7 +178,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/mutex.h>
 #include <linux/io.h>
-#include <linux/clk.h>
 
 #include <video/sa1100fb.h>
 
@@ -269,8 +268,7 @@ static int
 sa1100fb_setpalettereg(u_int regno, u_int red, u_int green, u_int blue,
 		       u_int trans, struct fb_info *info)
 {
-	struct sa1100fb_info *fbi =
-		container_of(info, struct sa1100fb_info, fb);
+	struct sa1100fb_info *fbi = (struct sa1100fb_info *)info;
 	u_int val, ret = 1;
 
 	if (regno < fbi->palette_size) {
@@ -291,8 +289,7 @@ static int
 sa1100fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 		   u_int trans, struct fb_info *info)
 {
-	struct sa1100fb_info *fbi =
-		container_of(info, struct sa1100fb_info, fb);
+	struct sa1100fb_info *fbi = (struct sa1100fb_info *)info;
 	unsigned int val;
 	int ret = 1;
 
@@ -369,8 +366,7 @@ static inline unsigned int sa1100fb_display_dma_period(struct fb_var_screeninfo 
 static int
 sa1100fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
-	struct sa1100fb_info *fbi =
-		container_of(info, struct sa1100fb_info, fb);
+	struct sa1100fb_info *fbi = (struct sa1100fb_info *)info;
 	int rgbidx;
 
 	if (var->xres < MIN_XRES)
@@ -417,9 +413,9 @@ sa1100fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 		var->transp.offset);
 
 #ifdef CONFIG_CPU_FREQ
-	dev_dbg(fbi->dev, "dma period = %d ps, clock = %ld kHz\n",
+	dev_dbg(fbi->dev, "dma period = %d ps, clock = %d kHz\n",
 		sa1100fb_display_dma_period(var),
-		clk_get_rate(fbi->clk) / 1000);
+		cpufreq_get(smp_processor_id()));
 #endif
 
 	return 0;
@@ -437,8 +433,7 @@ static void sa1100fb_set_visual(struct sa1100fb_info *fbi, u32 visual)
  */
 static int sa1100fb_set_par(struct fb_info *info)
 {
-	struct sa1100fb_info *fbi =
-		container_of(info, struct sa1100fb_info, fb);
+	struct sa1100fb_info *fbi = (struct sa1100fb_info *)info;
 	struct fb_var_screeninfo *var = &info->var;
 	unsigned long palette_mem_size;
 
@@ -531,8 +526,7 @@ sa1100fb_set_cmap(struct fb_cmap *cmap, int kspc, int con,
  */
 static int sa1100fb_blank(int blank, struct fb_info *info)
 {
-	struct sa1100fb_info *fbi =
-		container_of(info, struct sa1100fb_info, fb);
+	struct sa1100fb_info *fbi = (struct sa1100fb_info *)info;
 	int i;
 
 	dev_dbg(fbi->dev, "sa1100fb_blank: blank=%d\n", blank);
@@ -561,14 +555,13 @@ static int sa1100fb_blank(int blank, struct fb_info *info)
 static int sa1100fb_mmap(struct fb_info *info,
 			 struct vm_area_struct *vma)
 {
-	struct sa1100fb_info *fbi =
-		container_of(info, struct sa1100fb_info, fb);
+	struct sa1100fb_info *fbi = (struct sa1100fb_info *)info;
 	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
 
 	if (off < info->fix.smem_len) {
 		vma->vm_pgoff += 1; /* skip over the palette */
-		return dma_mmap_wc(fbi->dev, vma, fbi->map_cpu, fbi->map_dma,
-				   fbi->map_size);
+		return dma_mmap_writecombine(fbi->dev, vma, fbi->map_cpu,
+					     fbi->map_dma, fbi->map_size);
 	}
 
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
@@ -593,10 +586,9 @@ static struct fb_ops sa1100fb_ops = {
  * Calculate the PCD value from the clock rate (in picoseconds).
  * We take account of the PPCR clock setting.
  */
-static inline unsigned int get_pcd(struct sa1100fb_info *fbi,
-		unsigned int pixclock)
+static inline unsigned int get_pcd(unsigned int pixclock, unsigned int cpuclock)
 {
-	unsigned int pcd = clk_get_rate(fbi->clk) / 100 / 1000;
+	unsigned int pcd = cpuclock / 100;
 
 	pcd *= pixclock;
 	pcd /= 10000000;
@@ -675,7 +667,7 @@ static int sa1100fb_activate_var(struct fb_var_screeninfo *var, struct sa1100fb_
 		LCCR2_BegFrmDel(var->upper_margin) +
 		LCCR2_EndFrmDel(var->lower_margin);
 
-	pcd = get_pcd(fbi, var->pixclock);
+	pcd = get_pcd(var->pixclock, cpufreq_get(0));
 	new_regs.lccr3 = LCCR3_PixClkDiv(pcd) | fbi->inf->lccr3 |
 		(var->sync & FB_SYNC_HOR_HIGH_ACT ? LCCR3_HorSnchH : LCCR3_HorSnchL) |
 		(var->sync & FB_SYNC_VERT_HIGH_ACT ? LCCR3_VrtSnchH : LCCR3_VrtSnchL);
@@ -789,9 +781,6 @@ static void sa1100fb_enable_controller(struct sa1100fb_info *fbi)
 	fbi->palette_cpu[0] &= 0xcfff;
 	fbi->palette_cpu[0] |= palette_pbs(&fbi->fb.var);
 
-	/* enable LCD controller clock */
-	clk_prepare_enable(fbi->clk);
-
 	/* Sequence from 11.7.10 */
 	writel_relaxed(fbi->reg_lccr3, fbi->base + LCCR3);
 	writel_relaxed(fbi->reg_lccr2, fbi->base + LCCR2);
@@ -836,9 +825,6 @@ static void sa1100fb_disable_controller(struct sa1100fb_info *fbi)
 
 	schedule_timeout(20 * HZ / 1000);
 	remove_wait_queue(&fbi->ctrlr_wait, &wait);
-
-	/* disable LCD controller clock */
-	clk_disable_unprepare(fbi->clk);
 }
 
 /*
@@ -1017,6 +1003,7 @@ sa1100fb_freq_transition(struct notifier_block *nb, unsigned long val,
 			 void *data)
 {
 	struct sa1100fb_info *fbi = TO_INF(nb, freq_transition);
+	struct cpufreq_freqs *f = data;
 	u_int pcd;
 
 	switch (val) {
@@ -1025,7 +1012,7 @@ sa1100fb_freq_transition(struct notifier_block *nb, unsigned long val,
 		break;
 
 	case CPUFREQ_POSTCHANGE:
-		pcd = get_pcd(fbi, fbi->fb.var.pixclock);
+		pcd = get_pcd(fbi->fb.var.pixclock, f->new);
 		fbi->reg_lccr3 = (fbi->reg_lccr3 & ~0xff) | LCCR3_PixClkDiv(pcd);
 		set_ctrlr_state(fbi, C_ENABLE_CLKCHANGE);
 		break;
@@ -1042,6 +1029,7 @@ sa1100fb_freq_policy(struct notifier_block *nb, unsigned long val,
 
 	switch (val) {
 	case CPUFREQ_ADJUST:
+	case CPUFREQ_INCOMPATIBLE:
 		dev_dbg(fbi->dev, "min dma period: %d ps, "
 			"new clock %d kHz\n", sa1100fb_min_dma_period(fbi),
 			policy->max);
@@ -1099,8 +1087,8 @@ static int sa1100fb_map_video_memory(struct sa1100fb_info *fbi)
 	 * of the framebuffer.
 	 */
 	fbi->map_size = PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
-	fbi->map_cpu = dma_alloc_wc(fbi->dev, fbi->map_size, &fbi->map_dma,
-				    GFP_KERNEL);
+	fbi->map_cpu = dma_alloc_writecombine(fbi->dev, fbi->map_size,
+					      &fbi->map_dma, GFP_KERNEL);
 
 	if (fbi->map_cpu) {
 		fbi->fb.screen_base = fbi->map_cpu + PAGE_SIZE;
@@ -1231,13 +1219,6 @@ static int sa1100fb_probe(struct platform_device *pdev)
 	if (!fbi)
 		goto failed;
 
-	fbi->clk = clk_get(&pdev->dev, NULL);
-	if (IS_ERR(fbi->clk)) {
-		ret = PTR_ERR(fbi->clk);
-		fbi->clk = NULL;
-		goto failed;
-	}
-
 	fbi->base = ioremap(res->start, resource_size(res));
 	if (!fbi->base)
 		goto failed;
@@ -1290,8 +1271,6 @@ static int sa1100fb_probe(struct platform_device *pdev)
  failed:
 	if (fbi)
 		iounmap(fbi->base);
-	if (fbi->clk)
-		clk_put(fbi->clk);
 	kfree(fbi);
 	release_mem_region(res->start, resource_size(res));
 	return ret;
@@ -1303,6 +1282,7 @@ static struct platform_driver sa1100fb_driver = {
 	.resume		= sa1100fb_resume,
 	.driver		= {
 		.name	= "sa11x0-fb",
+		.owner	= THIS_MODULE,
 	},
 };
 

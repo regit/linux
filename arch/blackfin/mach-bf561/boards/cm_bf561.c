@@ -18,7 +18,6 @@
 #endif
 #include <linux/ata_platform.h>
 #include <linux/irq.h>
-#include <linux/gpio.h>
 #include <asm/dma.h>
 #include <asm/bfin5xx_spi.h>
 #include <asm/portmux.h>
@@ -146,8 +145,7 @@ static struct platform_device hitachi_fb_device = {
 #include <linux/smc91x.h>
 
 static struct smc91x_platdata smc91x_info = {
-	.flags = SMC91X_USE_8BIT | SMC91X_USE_16BIT | SMC91X_USE_32BIT |
-		 SMC91X_NOWAIT,
+	.flags = SMC91X_USE_32BIT | SMC91X_NOWAIT,
 	.leda = RPC_LED_100_10,
 	.ledb = RPC_LED_TX_RX,
 };
@@ -355,6 +353,7 @@ static struct platform_device bfin_sir0_device = {
 
 static struct pata_platform_info bfin_pata_platform_data = {
 	.ioport_shift = 2,
+	.irq_type = IRQF_TRIGGER_HIGH,
 };
 
 static struct resource bfin_pata_resources[] = {
@@ -371,7 +370,7 @@ static struct resource bfin_pata_resources[] = {
 	{
 		.start = PATA_INT,
 		.end = PATA_INT,
-		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL,
+		.flags = IORESOURCE_IRQ,
 	},
 };
 

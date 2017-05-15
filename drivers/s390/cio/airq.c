@@ -87,9 +87,8 @@ static irqreturn_t do_airq_interrupt(int irq, void *dummy)
 	struct airq_struct *airq;
 	struct hlist_head *head;
 
-	set_cpu_flag(CIF_NOHZ_DELAY);
+	__this_cpu_write(s390_idle.nohz_delay, 1);
 	tpi_info = (struct tpi_info *) &get_irq_regs()->int_code;
-	trace_s390_cio_adapter_int(tpi_info);
 	head = &airq_lists[tpi_info->isc];
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(airq, head, list)

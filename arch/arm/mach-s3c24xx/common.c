@@ -21,7 +21,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-#include <linux/dma-mapping.h>
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
@@ -33,7 +33,6 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/platform_data/dma-s3c24xx.h>
-#include <linux/dmaengine.h>
 
 #include <mach/hardware.h>
 #include <mach/regs-clock.h>
@@ -50,8 +49,11 @@
 
 #include <plat/cpu.h>
 #include <plat/devs.h>
+#include <plat/clock.h>
 #include <plat/cpu-freq.h>
+#include <plat/pll.h>
 #include <plat/pwm-core.h>
+#include <plat/watchdog-reset.h>
 
 #include "common.h"
 
@@ -305,8 +307,6 @@ struct s3c24xx_uart_resources s3c2410_uart_resources[] __initdata = {
 	},
 };
 
-#define s3c24xx_device_dma_mask (*((u64[]) { DMA_BIT_MASK(32) }))
-
 #if defined(CONFIG_CPU_S3C2410) || defined(CONFIG_CPU_S3C2412) || \
 	defined(CONFIG_CPU_S3C2440) || defined(CONFIG_CPU_S3C2442)
 static struct resource s3c2410_dma_resource[] = {
@@ -345,40 +345,10 @@ static struct s3c24xx_dma_channel s3c2410_dma_channels[DMACH_MAX] = {
 	[DMACH_USB_EP4] = { S3C24XX_DMA_APB, true, S3C24XX_DMA_CHANREQ(4, 3), },
 };
 
-static const struct dma_slave_map s3c2410_dma_slave_map[] = {
-	{ "s3c2410-sdi", "rx-tx", (void *)DMACH_SDI },
-	{ "s3c2410-spi.0", "rx", (void *)DMACH_SPI0_RX },
-	{ "s3c2410-spi.0", "tx", (void *)DMACH_SPI0_TX },
-	{ "s3c2410-spi.1", "rx", (void *)DMACH_SPI1_RX },
-	{ "s3c2410-spi.1", "tx", (void *)DMACH_SPI1_TX },
-	/*
-	 * The DMA request source[1] (DMACH_UARTx_SRC2) are
-	 * not used in the UART driver.
-	 */
-	{ "s3c2410-uart.0", "rx", (void *)DMACH_UART0 },
-	{ "s3c2410-uart.0", "tx", (void *)DMACH_UART0 },
-	{ "s3c2410-uart.1", "rx", (void *)DMACH_UART1 },
-	{ "s3c2410-uart.1", "tx", (void *)DMACH_UART1 },
-	{ "s3c2410-uart.2", "rx", (void *)DMACH_UART2 },
-	{ "s3c2410-uart.2", "tx", (void *)DMACH_UART2 },
-	{ "s3c24xx-iis", "rx", (void *)DMACH_I2S_IN },
-	{ "s3c24xx-iis", "tx", (void *)DMACH_I2S_OUT },
-	{ "s3c-hsudc", "rx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "tx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "rx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "tx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "rx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "tx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "rx3", (void *)DMACH_USB_EP4 },
-	{ "s3c-hsudc", "tx3", (void *)DMACH_USB_EP4 }
-};
-
 static struct s3c24xx_dma_platdata s3c2410_dma_platdata = {
 	.num_phy_channels = 4,
 	.channels = s3c2410_dma_channels,
 	.num_channels = DMACH_MAX,
-	.slave_map = s3c2410_dma_slave_map,
-	.slavecnt = ARRAY_SIZE(s3c2410_dma_slave_map),
 };
 
 struct platform_device s3c2410_device_dma = {
@@ -387,9 +357,7 @@ struct platform_device s3c2410_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2410_dma_resource),
 	.resource	= s3c2410_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2410_dma_platdata,
+		.platform_data	= &s3c2410_dma_platdata,
 	},
 };
 #endif
@@ -418,36 +386,10 @@ static struct s3c24xx_dma_channel s3c2412_dma_channels[DMACH_MAX] = {
 	[DMACH_USB_EP4] = { S3C24XX_DMA_APB, true, 16 },
 };
 
-static const struct dma_slave_map s3c2412_dma_slave_map[] = {
-	{ "s3c2412-sdi", "rx-tx", (void *)DMACH_SDI },
-	{ "s3c2412-spi.0", "rx", (void *)DMACH_SPI0_RX },
-	{ "s3c2412-spi.0", "tx", (void *)DMACH_SPI0_TX },
-	{ "s3c2412-spi.1", "rx", (void *)DMACH_SPI1_RX },
-	{ "s3c2412-spi.1", "tx", (void *)DMACH_SPI1_TX },
-	{ "s3c2440-uart.0", "rx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.0", "tx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.1", "rx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.1", "tx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.2", "rx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.2", "tx", (void *)DMACH_UART2 },
-	{ "s3c2412-iis", "rx", (void *)DMACH_I2S_IN },
-	{ "s3c2412-iis", "tx", (void *)DMACH_I2S_OUT },
-	{ "s3c-hsudc", "rx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "tx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "rx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "tx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "rx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "tx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "rx3", (void *)DMACH_USB_EP4 },
-	{ "s3c-hsudc", "tx3", (void *)DMACH_USB_EP4 }
-};
-
 static struct s3c24xx_dma_platdata s3c2412_dma_platdata = {
 	.num_phy_channels = 4,
 	.channels = s3c2412_dma_channels,
 	.num_channels = DMACH_MAX,
-	.slave_map = s3c2412_dma_slave_map,
-	.slavecnt = ARRAY_SIZE(s3c2412_dma_slave_map),
 };
 
 struct platform_device s3c2412_device_dma = {
@@ -456,9 +398,7 @@ struct platform_device s3c2412_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2410_dma_resource),
 	.resource	= s3c2410_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2412_dma_platdata,
+		.platform_data	= &s3c2412_dma_platdata,
 	},
 };
 #endif
@@ -502,44 +442,10 @@ static struct s3c24xx_dma_channel s3c2440_dma_channels[DMACH_MAX] = {
 	[DMACH_USB_EP4] = { S3C24XX_DMA_APB, true, S3C24XX_DMA_CHANREQ(4, 3), },
 };
 
-static const struct dma_slave_map s3c2440_dma_slave_map[] = {
-	/* TODO: DMACH_XD0 */
-	/* TODO: DMACH_XD1 */
-	{ "s3c2440-sdi", "rx-tx", (void *)DMACH_SDI },
-	{ "s3c2410-spi.0", "rx", (void *)DMACH_SPI0 },
-	{ "s3c2410-spi.0", "tx", (void *)DMACH_SPI0 },
-	{ "s3c2410-spi.1", "rx", (void *)DMACH_SPI1 },
-	{ "s3c2410-spi.1", "tx", (void *)DMACH_SPI1 },
-	{ "s3c2440-uart.0", "rx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.0", "tx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.1", "rx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.1", "tx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.2", "rx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.2", "tx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.3", "rx", (void *)DMACH_UART3 },
-	{ "s3c2440-uart.3", "tx", (void *)DMACH_UART3 },
-	/* TODO: DMACH_TIMER */
-	{ "s3c24xx-iis", "rx", (void *)DMACH_I2S_IN },
-	{ "s3c24xx-iis", "tx", (void *)DMACH_I2S_OUT },
-	{ "samsung-ac97", "rx", (void *)DMACH_PCM_IN },
-	{ "samsung-ac97", "tx", (void *)DMACH_PCM_OUT },
-	{ "samsung-ac97", "rx", (void *)DMACH_MIC_IN },
-	{ "s3c-hsudc", "rx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "rx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "rx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "rx3", (void *)DMACH_USB_EP4 },
-	{ "s3c-hsudc", "tx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "tx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "tx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "tx3", (void *)DMACH_USB_EP4 }
-};
-
 static struct s3c24xx_dma_platdata s3c2440_dma_platdata = {
 	.num_phy_channels = 4,
 	.channels = s3c2440_dma_channels,
 	.num_channels = DMACH_MAX,
-	.slave_map = s3c2440_dma_slave_map,
-	.slavecnt = ARRAY_SIZE(s3c2440_dma_slave_map),
 };
 
 struct platform_device s3c2440_device_dma = {
@@ -548,9 +454,7 @@ struct platform_device s3c2440_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2410_dma_resource),
 	.resource	= s3c2410_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2440_dma_platdata,
+		.platform_data	= &s3c2440_dma_platdata,
 	},
 };
 #endif
@@ -590,30 +494,10 @@ static struct s3c24xx_dma_channel s3c2443_dma_channels[DMACH_MAX] = {
 	[DMACH_MIC_IN] = { S3C24XX_DMA_APB, true, 29 },
 };
 
-static const struct dma_slave_map s3c2443_dma_slave_map[] = {
-	{ "s3c2440-sdi", "rx-tx", (void *)DMACH_SDI },
-	{ "s3c2443-spi.0", "rx", (void *)DMACH_SPI0_RX },
-	{ "s3c2443-spi.0", "tx", (void *)DMACH_SPI0_TX },
-	{ "s3c2443-spi.1", "rx", (void *)DMACH_SPI1_RX },
-	{ "s3c2443-spi.1", "tx", (void *)DMACH_SPI1_TX },
-	{ "s3c2440-uart.0", "rx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.0", "tx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.1", "rx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.1", "tx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.2", "rx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.2", "tx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.3", "rx", (void *)DMACH_UART3 },
-	{ "s3c2440-uart.3", "tx", (void *)DMACH_UART3 },
-	{ "s3c24xx-iis", "rx", (void *)DMACH_I2S_IN },
-	{ "s3c24xx-iis", "tx", (void *)DMACH_I2S_OUT },
-};
-
 static struct s3c24xx_dma_platdata s3c2443_dma_platdata = {
 	.num_phy_channels = 6,
 	.channels = s3c2443_dma_channels,
 	.num_channels = DMACH_MAX,
-	.slave_map = s3c2443_dma_slave_map,
-	.slavecnt = ARRAY_SIZE(s3c2443_dma_slave_map),
 };
 
 struct platform_device s3c2443_device_dma = {
@@ -622,9 +506,7 @@ struct platform_device s3c2443_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2443_dma_resource),
 	.resource	= s3c2443_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2443_dma_platdata,
+		.platform_data	= &s3c2443_dma_platdata,
 	},
 };
 #endif
@@ -633,6 +515,7 @@ struct platform_device s3c2443_device_dma = {
 void __init s3c2410_init_clocks(int xtal)
 {
 	s3c2410_common_clk_init(NULL, xtal, 0, S3C24XX_VA_CLKPWR);
+	samsung_wdt_reset_init(S3C24XX_VA_WATCHDOG);
 }
 #endif
 
@@ -654,6 +537,7 @@ void __init s3c2416_init_clocks(int xtal)
 void __init s3c2440_init_clocks(int xtal)
 {
 	s3c2410_common_clk_init(NULL, xtal, 1, S3C24XX_VA_CLKPWR);
+	samsung_wdt_reset_init(S3C24XX_VA_WATCHDOG);
 }
 #endif
 
@@ -661,6 +545,7 @@ void __init s3c2440_init_clocks(int xtal)
 void __init s3c2442_init_clocks(int xtal)
 {
 	s3c2410_common_clk_init(NULL, xtal, 2, S3C24XX_VA_CLKPWR);
+	samsung_wdt_reset_init(S3C24XX_VA_WATCHDOG);
 }
 #endif
 

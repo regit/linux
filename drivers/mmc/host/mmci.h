@@ -41,37 +41,18 @@
 /* Modified PL180 on Versatile Express platform */
 #define MCI_ARM_HWFCEN		(1 << 12)
 
-/* Modified on Qualcomm Integrations */
-#define MCI_QCOM_CLK_WIDEBUS_8	(BIT(10) | BIT(11))
-#define MCI_QCOM_CLK_FLOWENA	BIT(12)
-#define MCI_QCOM_CLK_INVERTOUT	BIT(13)
-
-/* select in latch data and command in */
-#define MCI_QCOM_CLK_SELECT_IN_FBCLK	BIT(15)
-#define MCI_QCOM_CLK_SELECT_IN_DDR_MODE	(BIT(14) | BIT(15))
-
 #define MMCIARGUMENT		0x008
-
-/* The command register controls the Command Path State Machine (CPSM) */
 #define MMCICOMMAND		0x00c
-#define MCI_CPSM_RESPONSE	BIT(6)
-#define MCI_CPSM_LONGRSP	BIT(7)
-#define MCI_CPSM_INTERRUPT	BIT(8)
-#define MCI_CPSM_PENDING	BIT(9)
-#define MCI_CPSM_ENABLE		BIT(10)
-/* Command register flag extenstions in the ST Micro versions */
-#define MCI_CPSM_ST_SDIO_SUSP		BIT(11)
-#define MCI_CPSM_ST_ENCMD_COMPL		BIT(12)
-#define MCI_CPSM_ST_NIEN		BIT(13)
-#define MCI_CPSM_ST_CE_ATACMD		BIT(14)
-/* Command register flag extensions in the Qualcomm versions */
-#define MCI_CPSM_QCOM_PROGENA		BIT(11)
-#define MCI_CPSM_QCOM_DATCMD		BIT(12)
-#define MCI_CPSM_QCOM_MCIABORT		BIT(13)
-#define MCI_CPSM_QCOM_CCSENABLE		BIT(14)
-#define MCI_CPSM_QCOM_CCSDISABLE	BIT(15)
-#define MCI_CPSM_QCOM_AUTO_CMD19	BIT(16)
-#define MCI_CPSM_QCOM_AUTO_CMD21	BIT(21)
+#define MCI_CPSM_RESPONSE	(1 << 6)
+#define MCI_CPSM_LONGRSP	(1 << 7)
+#define MCI_CPSM_INTERRUPT	(1 << 8)
+#define MCI_CPSM_PENDING	(1 << 9)
+#define MCI_CPSM_ENABLE		(1 << 10)
+/* Argument flag extenstions in the ST Micro versions */
+#define MCI_ST_SDIO_SUSP	(1 << 11)
+#define MCI_ST_ENCMD_COMPL	(1 << 12)
+#define MCI_ST_NIEN		(1 << 13)
+#define MCI_ST_CE_ATACMD	(1 << 14)
 
 #define MMCIRESPCMD		0x010
 #define MMCIRESPONSE0		0x014
@@ -80,27 +61,22 @@
 #define MMCIRESPONSE3		0x020
 #define MMCIDATATIMER		0x024
 #define MMCIDATALENGTH		0x028
-
-/* The data control register controls the Data Path State Machine (DPSM) */
 #define MMCIDATACTRL		0x02c
-#define MCI_DPSM_ENABLE		BIT(0)
-#define MCI_DPSM_DIRECTION	BIT(1)
-#define MCI_DPSM_MODE		BIT(2)
-#define MCI_DPSM_DMAENABLE	BIT(3)
-#define MCI_DPSM_BLOCKSIZE	BIT(4)
+#define MCI_DPSM_ENABLE		(1 << 0)
+#define MCI_DPSM_DIRECTION	(1 << 1)
+#define MCI_DPSM_MODE		(1 << 2)
+#define MCI_DPSM_DMAENABLE	(1 << 3)
+#define MCI_DPSM_BLOCKSIZE	(1 << 4)
 /* Control register extensions in the ST Micro U300 and Ux500 versions */
-#define MCI_DPSM_ST_RWSTART	BIT(8)
-#define MCI_DPSM_ST_RWSTOP	BIT(9)
-#define MCI_DPSM_ST_RWMOD	BIT(10)
-#define MCI_DPSM_ST_SDIOEN	BIT(11)
+#define MCI_ST_DPSM_RWSTART	(1 << 8)
+#define MCI_ST_DPSM_RWSTOP	(1 << 9)
+#define MCI_ST_DPSM_RWMOD	(1 << 10)
+#define MCI_ST_DPSM_SDIOEN	(1 << 11)
 /* Control register extensions in the ST Micro Ux500 versions */
-#define MCI_DPSM_ST_DMAREQCTL	BIT(12)
-#define MCI_DPSM_ST_DBOOTMODEEN	BIT(13)
-#define MCI_DPSM_ST_BUSYMODE	BIT(14)
-#define MCI_DPSM_ST_DDRMODE	BIT(15)
-/* Control register extensions in the Qualcomm versions */
-#define MCI_DPSM_QCOM_DATA_PEND	BIT(17)
-#define MCI_DPSM_QCOM_RX_DATA_PEND BIT(20)
+#define MCI_ST_DPSM_DMAREQCTL	(1 << 12)
+#define MCI_ST_DPSM_DBOOTMODEEN	(1 << 13)
+#define MCI_ST_DPSM_BUSYMODE	(1 << 14)
+#define MCI_ST_DPSM_DDRMODE	(1 << 15)
 
 #define MMCIDATACNT		0x030
 #define MMCISTATUS		0x034
@@ -174,7 +150,7 @@
 /* Extended status bits for the ST Micro variants */
 #define MCI_ST_SDIOITMASK	(1 << 22)
 #define MCI_ST_CEATAENDMASK	(1 << 23)
-#define MCI_ST_BUSYENDMASK	(1 << 24)
+#define MCI_ST_BUSYEND		(1 << 24)
 
 #define MMCIMASK1		0x040
 #define MMCIFIFOCNT		0x048
@@ -215,8 +191,6 @@ struct mmci_host {
 	spinlock_t		lock;
 
 	unsigned int		mclk;
-	/* cached value of requested clk in set_ios */
-	unsigned int		clock_cache;
 	unsigned int		cclk;
 	u32			pwr_reg;
 	u32			pwr_reg_add;
@@ -236,7 +210,6 @@ struct mmci_host {
 	/* pio stuff */
 	struct sg_mapping_iter	sg_miter;
 	unsigned int		size;
-	int (*get_rx_fifocnt)(struct mmci_host *h, u32 status, int remain);
 
 #ifdef CONFIG_DMA_ENGINE
 	/* DMA stuff */

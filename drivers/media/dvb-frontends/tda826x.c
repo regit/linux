@@ -41,10 +41,11 @@ struct tda826x_priv {
 	u32 frequency;
 };
 
-static void tda826x_release(struct dvb_frontend *fe)
+static int tda826x_release(struct dvb_frontend *fe)
 {
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
+	return 0;
 }
 
 static int tda826x_sleep(struct dvb_frontend *fe)
@@ -128,7 +129,7 @@ static int tda826x_get_frequency(struct dvb_frontend *fe, u32 *frequency)
 	return 0;
 }
 
-static const struct dvb_tuner_ops tda826x_tuner_ops = {
+static struct dvb_tuner_ops tda826x_tuner_ops = {
 	.info = {
 		.name = "Philips TDA826X",
 		.frequency_min = 950000,

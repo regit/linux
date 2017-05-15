@@ -119,7 +119,7 @@
 #include <linux/slab.h>
 
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define DRV_NAME "ns83820"
 
@@ -134,7 +134,7 @@ static int lnksts = 0;		/* CFG_LNKSTS bit polarity */
 
 /* tunables */
 #define RX_BUF_SIZE	1500	/* 8192 */
-#if IS_ENABLED(CONFIG_VLAN_8021Q)
+#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
 #define NS83820_VLAN_ACCEL_SUPPORT
 #endif
 
@@ -919,7 +919,7 @@ netdev_mangle_me_harder_failed:
 				ndev->stats.rx_dropped++;
 			}
 		} else {
-			dev_kfree_skb_irq(skb);
+			kfree_skb(skb);
 		}
 
 		nr++;
@@ -1122,12 +1122,12 @@ again:
 	}
 
 #ifdef NS83820_VLAN_ACCEL_SUPPORT
-	if (skb_vlan_tag_present(skb)) {
+	if(vlan_tx_tag_present(skb)) {
 		/* fetch the vlan tag info out of the
 		 * ancillary data if the vlan code
 		 * is using hw vlan acceleration
 		 */
-		short tag = skb_vlan_tag_get(skb);
+		short tag = vlan_tx_tag_get(skb);
 		extsts |= (EXTSTS_VPKT | htons(tag));
 	}
 #endif
@@ -1679,6 +1679,14 @@ static void ns83820_getmac(struct ns83820 *dev, u8 *mac)
 	}
 }
 
+static int ns83820_change_mtu(struct net_device *ndev, int new_mtu)
+{
+	if (new_mtu > RX_BUF_SIZE)
+		return -EINVAL;
+	ndev->mtu = new_mtu;
+	return 0;
+}
+
 static void ns83820_set_multicast(struct net_device *ndev)
 {
 	struct ns83820 *dev = PRIV(ndev);
@@ -1925,6 +1933,7 @@ static const struct net_device_ops netdev_ops = {
 	.ndo_stop		= ns83820_stop,
 	.ndo_start_xmit		= ns83820_hard_start_xmit,
 	.ndo_get_stats		= ns83820_get_stats,
+	.ndo_change_mtu		= ns83820_change_mtu,
 	.ndo_set_rx_mode	= ns83820_set_multicast,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
@@ -2181,8 +2190,6 @@ static int ns83820_init_one(struct pci_dev *pci_dev,
 	ndev->features |= NETIF_F_SG;
 	ndev->features |= NETIF_F_IP_CSUM;
 
-	ndev->min_mtu = 0;
-
 #ifdef NS83820_VLAN_ACCEL_SUPPORT
 	/* We also support hardware vlan acceleration */
 	ndev->features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_CTAG_RX;
@@ -2253,7 +2260,7 @@ static void ns83820_remove_one(struct pci_dev *pci_dev)
 	free_netdev(ndev);
 }
 
-static const struct pci_device_id ns83820_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(ns83820_pci_tbl) = {
 	{ 0x100b, 0x0022, PCI_ANY_ID, PCI_ANY_ID, 0, .driver_data = 0, },
 	{ 0, },
 };

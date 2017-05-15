@@ -56,20 +56,17 @@ u64 notrace trace_clock(void)
 {
 	return local_clock();
 }
-EXPORT_SYMBOL_GPL(trace_clock);
 
 /*
  * trace_jiffy_clock(): Simply use jiffies as a clock counter.
- * Note that this use of jiffies_64 is not completely safe on
- * 32-bit systems. But the window is tiny, and the effect if
- * we are affected is that we will have an obviously bogus
- * timestamp on a trace event - i.e. not life threatening.
  */
 u64 notrace trace_clock_jiffies(void)
 {
-	return jiffies_64_to_clock_t(jiffies_64 - INITIAL_JIFFIES);
+	u64 jiffy = jiffies - INITIAL_JIFFIES;
+
+	/* Return nsecs */
+	return (u64)jiffies_to_usecs(jiffy) * 1000ULL;
 }
-EXPORT_SYMBOL_GPL(trace_clock_jiffies);
 
 /*
  * trace_clock_global(): special globally coherent trace clock
@@ -125,7 +122,6 @@ u64 notrace trace_clock_global(void)
 
 	return now;
 }
-EXPORT_SYMBOL_GPL(trace_clock_global);
 
 static atomic64_t trace_counter;
 

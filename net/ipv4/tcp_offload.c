@@ -14,43 +14,6 @@
 #include <net/tcp.h>
 #include <net/protocol.h>
 
-static void tcp_gso_tstamp(struct sk_buff *skb, unsigned int ts_seq,
-			   unsigned int seq, unsigned int mss)
-{
-	while (skb) {
-		if (before(ts_seq, seq + mss)) {
-			skb_shinfo(skb)->tx_flags |= SKBTX_SW_TSTAMP;
-			skb_shinfo(skb)->tskey = ts_seq;
-			return;
-		}
-
-		skb = skb->next;
-		seq += mss;
-	}
-}
-
-static struct sk_buff *tcp4_gso_segment(struct sk_buff *skb,
-					netdev_features_t features)
-{
-	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
-		return ERR_PTR(-EINVAL);
-
-	if (unlikely(skb->ip_summed != CHECKSUM_PARTIAL)) {
-		const struct iphdr *iph = ip_hdr(skb);
-		struct tcphdr *th = tcp_hdr(skb);
-
-		/* Set up checksum pseudo header, usually expect stack to
-		 * have done this already.
-		 */
-
-		th->check = 0;
-		skb->ip_summed = CHECKSUM_PARTIAL;
-		__tcp_v4_send_check(skb, iph->saddr, iph->daddr);
-	}
-
-	return tcp_gso_segment(skb, features);
-}
-
 struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 				netdev_features_t features)
 {
@@ -66,6 +29,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	__sum16 newcheck;
 	bool ooo_okay, copy_destructor;
 
+	if (!pskb_may_pull(skb, sizeof(*th)))
+		goto out;
+
 	th = tcp_hdr(skb);
 	thlen = th->doff * 4;
 	if (thlen < sizeof(*th))
@@ -77,12 +43,29 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	oldlen = (u16)~skb->len;
 	__skb_pull(skb, thlen);
 
-	mss = skb_shinfo(skb)->gso_size;
+	mss = tcp_skb_mss(skb);
 	if (unlikely(skb->len <= mss))
 		goto out;
 
 	if (skb_gso_ok(skb, features | NETIF_F_GSO_ROBUST)) {
 		/* Packet is from an untrusted source, reset gso_segs. */
+		int type = skb_shinfo(skb)->gso_type;
+
+		if (unlikely(type &
+			     ~(SKB_GSO_TCPV4 |
+			       SKB_GSO_DODGY |
+			       SKB_GSO_TCP_ECN |
+			       SKB_GSO_TCPV6 |
+			       SKB_GSO_GRE |
+			       SKB_GSO_GRE_CSUM |
+			       SKB_GSO_IPIP |
+			       SKB_GSO_SIT |
+			       SKB_GSO_MPLS |
+			       SKB_GSO_UDP_TUNNEL |
+			       SKB_GSO_UDP_TUNNEL_CSUM |
+			       0) ||
+			     !(type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))))
+			goto out;
 
 		skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(skb->len, mss);
 
@@ -102,32 +85,20 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	/* Only first segment might have ooo_okay set */
 	segs->ooo_okay = ooo_okay;
 
-	/* GSO partial and frag_list segmentation only requires splitting
-	 * the frame into an MSS multiple and possibly a remainder, both
-	 * cases return a GSO skb. So update the mss now.
-	 */
-	if (skb_is_gso(segs))
-		mss *= skb_shinfo(segs)->gso_segs;
-
 	delta = htonl(oldlen + (thlen + mss));
 
 	skb = segs;
 	th = tcp_hdr(skb);
 	seq = ntohl(th->seq);
 
-	if (unlikely(skb_shinfo(gso_skb)->tx_flags & SKBTX_SW_TSTAMP))
-		tcp_gso_tstamp(segs, skb_shinfo(gso_skb)->tskey, seq, mss);
-
 	newcheck = ~csum_fold((__force __wsum)((__force u32)th->check +
 					       (__force u32)delta));
 
-	while (skb->next) {
+	do {
 		th->fin = th->psh = 0;
 		th->check = newcheck;
 
-		if (skb->ip_summed == CHECKSUM_PARTIAL)
-			gso_reset_checksum(skb, ~th->check);
-		else
+		if (skb->ip_summed != CHECKSUM_PARTIAL)
 			th->check = gso_make_checksum(skb, ~th->check);
 
 		seq += mss;
@@ -141,7 +112,7 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 
 		th->seq = htonl(seq);
 		th->cwr = 0;
-	}
+	} while (skb->next);
 
 	/* Following permits TCP Small Queues to work well with GSO :
 	 * The callback to TCP stack will be called at the time last frag
@@ -161,9 +132,7 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 		      skb->data_len);
 	th->check = ~csum_fold((__force __wsum)((__force u32)th->check +
 				(__force u32)delta));
-	if (skb->ip_summed == CHECKSUM_PARTIAL)
-		gso_reset_checksum(skb, ~th->check);
-	else
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
 		th->check = gso_make_checksum(skb, ~th->check);
 out:
 	return segs;
@@ -227,7 +196,7 @@ struct sk_buff **tcp_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 
 found:
 	/* Include the IP ID check below from the inner most IP hdr */
-	flush = NAPI_GRO_CB(p)->flush;
+	flush = NAPI_GRO_CB(p)->flush | NAPI_GRO_CB(p)->flush_id;
 	flush |= (__force int)(flags & TCP_FLAG_CWR);
 	flush |= (__force int)((flags ^ tcp_flag_word(th2)) &
 		  ~(TCP_FLAG_CWR | TCP_FLAG_FIN | TCP_FLAG_PSH));
@@ -236,18 +205,7 @@ found:
 		flush |= *(u32 *)((u8 *)th + i) ^
 			 *(u32 *)((u8 *)th2 + i);
 
-	/* When we receive our second frame we can made a decision on if we
-	 * continue this flow as an atomic flow with a fixed ID or if we use
-	 * an incrementing ID.
-	 */
-	if (NAPI_GRO_CB(p)->flush_id != 1 ||
-	    NAPI_GRO_CB(p)->count != 1 ||
-	    !NAPI_GRO_CB(p)->is_atomic)
-		flush |= NAPI_GRO_CB(p)->flush_id;
-	else
-		NAPI_GRO_CB(p)->is_atomic = false;
-
-	mss = skb_shinfo(p)->gso_size;
+	mss = tcp_skb_mss(p);
 
 	flush |= (len - 1) >= mss;
 	flush |= (ntohl(th2->seq) + skb_gro_len(p)) ^ ntohl(th->seq);
@@ -293,16 +251,54 @@ int tcp_gro_complete(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(tcp_gro_complete);
 
+static int tcp_v4_gso_send_check(struct sk_buff *skb)
+{
+	const struct iphdr *iph;
+	struct tcphdr *th;
+
+	if (!pskb_may_pull(skb, sizeof(*th)))
+		return -EINVAL;
+
+	iph = ip_hdr(skb);
+	th = tcp_hdr(skb);
+
+	th->check = 0;
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	__tcp_v4_send_check(skb, iph->saddr, iph->daddr);
+	return 0;
+}
+
 static struct sk_buff **tcp4_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 {
+	/* Use the IP hdr immediately proceeding for this transport */
+	const struct iphdr *iph = skb_gro_network_header(skb);
+	__wsum wsum;
+
 	/* Don't bother verifying checksum if we're going to flush anyway. */
-	if (!NAPI_GRO_CB(skb)->flush &&
-	    skb_gro_checksum_validate(skb, IPPROTO_TCP,
-				      inet_gro_compute_pseudo)) {
+	if (NAPI_GRO_CB(skb)->flush)
+		goto skip_csum;
+
+	wsum = NAPI_GRO_CB(skb)->csum;
+
+	switch (skb->ip_summed) {
+	case CHECKSUM_NONE:
+		wsum = skb_checksum(skb, skb_gro_offset(skb), skb_gro_len(skb),
+				    0);
+
+		/* fall through */
+
+	case CHECKSUM_COMPLETE:
+		if (!tcp_v4_check(skb_gro_len(skb), iph->saddr, iph->daddr,
+				  wsum)) {
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
+			break;
+		}
+
 		NAPI_GRO_CB(skb)->flush = 1;
 		return NULL;
 	}
 
+skip_csum:
 	return tcp_gro_receive(head, skb);
 }
 
@@ -313,17 +309,15 @@ static int tcp4_gro_complete(struct sk_buff *skb, int thoff)
 
 	th->check = ~tcp_v4_check(skb->len - thoff, iph->saddr,
 				  iph->daddr, 0);
-	skb_shinfo(skb)->gso_type |= SKB_GSO_TCPV4;
-
-	if (NAPI_GRO_CB(skb)->is_atomic)
-		skb_shinfo(skb)->gso_type |= SKB_GSO_TCP_FIXEDID;
+	skb_shinfo(skb)->gso_type = SKB_GSO_TCPV4;
 
 	return tcp_gro_complete(skb);
 }
 
 static const struct net_offload tcpv4_offload = {
 	.callbacks = {
-		.gso_segment	=	tcp4_gso_segment,
+		.gso_send_check	=	tcp_v4_gso_send_check,
+		.gso_segment	=	tcp_gso_segment,
 		.gro_receive	=	tcp4_gro_receive,
 		.gro_complete	=	tcp4_gro_complete,
 	},

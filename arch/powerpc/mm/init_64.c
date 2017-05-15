@@ -34,6 +34,7 @@
 #include <linux/vmalloc.h>
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/bootmem.h>
 #include <linux/highmem.h>
 #include <linux/idr.h>
 #include <linux/nodemask.h>
@@ -51,7 +52,7 @@
 #include <asm/mmu_context.h>
 #include <asm/pgtable.h>
 #include <asm/mmu.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/smp.h>
 #include <asm/machdep.h>
 #include <asm/tlb.h>
@@ -66,11 +67,11 @@
 #include "mmu_decl.h"
 
 #ifdef CONFIG_PPC_STD_MMU_64
-#if H_PGTABLE_RANGE > USER_VSID_RANGE
+#if PGTABLE_RANGE > USER_VSID_RANGE
 #warning Limited user VSID range means pagetable space is wasted
 #endif
 
-#if (TASK_SIZE_USER64 < H_PGTABLE_RANGE) && (TASK_SIZE_USER64 < USER_VSID_RANGE)
+#if (TASK_SIZE_USER64 < PGTABLE_RANGE) && (TASK_SIZE_USER64 < USER_VSID_RANGE)
 #warning TASK_SIZE is smaller than it needs to be.
 #endif
 #endif /* CONFIG_PPC_STD_MMU_64 */
@@ -79,6 +80,77 @@ phys_addr_t memstart_addr = ~0;
 EXPORT_SYMBOL_GPL(memstart_addr);
 phys_addr_t kernstart_addr;
 EXPORT_SYMBOL_GPL(kernstart_addr);
+
+static void pgd_ctor(void *addr)
+{
+	memset(addr, 0, PGD_TABLE_SIZE);
+}
+
+static void pmd_ctor(void *addr)
+{
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	memset(addr, 0, PMD_TABLE_SIZE * 2);
+#else
+	memset(addr, 0, PMD_TABLE_SIZE);
+#endif
+}
+
+struct kmem_cache *pgtable_cache[MAX_PGTABLE_INDEX_SIZE];
+
+/*
+ * Create a kmem_cache() for pagetables.  This is not used for PTE
+ * pages - they're linked to struct page, come from the normal free
+ * pages pool and have a different entry size (see real_pte_t) to
+ * everything else.  Caches created by this function are used for all
+ * the higher level pagetables, and for hugepage pagetables.
+ */
+void pgtable_cache_add(unsigned shift, void (*ctor)(void *))
+{
+	char *name;
+	unsigned long table_size = sizeof(void *) << shift;
+	unsigned long align = table_size;
+
+	/* When batching pgtable pointers for RCU freeing, we store
+	 * the index size in the low bits.  Table alignment must be
+	 * big enough to fit it.
+	 *
+	 * Likewise, hugeapge pagetable pointers contain a (different)
+	 * shift value in the low bits.  All tables must be aligned so
+	 * as to leave enough 0 bits in the address to contain it. */
+	unsigned long minalign = max(MAX_PGTABLE_INDEX_SIZE + 1,
+				     HUGEPD_SHIFT_MASK + 1);
+	struct kmem_cache *new;
+
+	/* It would be nice if this was a BUILD_BUG_ON(), but at the
+	 * moment, gcc doesn't seem to recognize is_power_of_2 as a
+	 * constant expression, so so much for that. */
+	BUG_ON(!is_power_of_2(minalign));
+	BUG_ON((shift < 1) || (shift > MAX_PGTABLE_INDEX_SIZE));
+
+	if (PGT_CACHE(shift))
+		return; /* Already have a cache of this size */
+
+	align = max_t(unsigned long, align, minalign);
+	name = kasprintf(GFP_KERNEL, "pgtable-2^%d", shift);
+	new = kmem_cache_create(name, table_size, align, 0, ctor);
+	pgtable_cache[shift - 1] = new;
+	pr_debug("Allocated pgtable cache for order %d\n", shift);
+}
+
+
+void pgtable_cache_init(void)
+{
+	pgtable_cache_add(PGD_INDEX_SIZE, pgd_ctor);
+	pgtable_cache_add(PMD_CACHE_INDEX, pmd_ctor);
+	if (!PGT_CACHE(PGD_INDEX_SIZE) || !PGT_CACHE(PMD_CACHE_INDEX))
+		panic("Couldn't allocate pgtable caches");
+	/* In all current configs, when the PUD index exists it's the
+	 * same size as either the pgd or pmd index.  Verify that the
+	 * initialization above has also created a PUD cache.  This
+	 * will need re-examiniation if we add new possibilities for
+	 * the pagetable layout. */
+	BUG_ON(PUD_INDEX_SIZE && !PGT_CACHE(PUD_INDEX_SIZE));
+}
 
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
 /*
@@ -103,34 +175,65 @@ static unsigned long __meminit vmemmap_section_start(unsigned long page)
 static int __meminit vmemmap_populated(unsigned long start, int page_size)
 {
 	unsigned long end = start + page_size;
-	start = (unsigned long)(pfn_to_page(vmemmap_section_start(start)));
 
 	for (; start < end; start += (PAGES_PER_SECTION * sizeof(struct page)))
-		if (pfn_valid(page_to_pfn((struct page *)start)))
+		if (pfn_valid(vmemmap_section_start(start)))
 			return 1;
 
 	return 0;
 }
 
+/* On hash-based CPUs, the vmemmap is bolted in the hash table.
+ *
+ * On Book3E CPUs, the vmemmap is currently mapped in the top half of
+ * the vmalloc space using normal page tables, though the size of
+ * pages encoded in the PTEs can be different
+ */
+
+#ifdef CONFIG_PPC_BOOK3E
+static void __meminit vmemmap_create_mapping(unsigned long start,
+					     unsigned long page_size,
+					     unsigned long phys)
+{
+	/* Create a PTE encoding without page size */
+	unsigned long i, flags = _PAGE_PRESENT | _PAGE_ACCESSED |
+		_PAGE_KERNEL_RW;
+
+	/* PTEs only contain page size encodings up to 32M */
+	BUG_ON(mmu_psize_defs[mmu_vmemmap_psize].enc > 0xf);
+
+	/* Encode the size in the PTE */
+	flags |= mmu_psize_defs[mmu_vmemmap_psize].enc << 8;
+
+	/* For each PTE for that area, map things. Note that we don't
+	 * increment phys because all PTEs are of the large size and
+	 * thus must have the low bits clear
+	 */
+	for (i = 0; i < page_size; i += PAGE_SIZE)
+		BUG_ON(map_kernel_page(start + i, phys, flags));
+}
+#else /* CONFIG_PPC_BOOK3E */
+static void __meminit vmemmap_create_mapping(unsigned long start,
+					     unsigned long page_size,
+					     unsigned long phys)
+{
+	int  mapped = htab_bolt_mapping(start, start + page_size, phys,
+					pgprot_val(PAGE_KERNEL),
+					mmu_vmemmap_psize,
+					mmu_kernel_ssize);
+	BUG_ON(mapped < 0);
+}
+#endif /* CONFIG_PPC_BOOK3E */
+
 struct vmemmap_backing *vmemmap_list;
-static struct vmemmap_backing *next;
-static int num_left;
-static int num_freed;
 
 static __meminit struct vmemmap_backing * vmemmap_list_alloc(int node)
 {
-	struct vmemmap_backing *vmem_back;
-	/* get from freed entries first */
-	if (num_freed) {
-		num_freed--;
-		vmem_back = next;
-		next = next->list;
-
-		return vmem_back;
-	}
+	static struct vmemmap_backing *next;
+	static int num_left;
 
 	/* allocate a page when required and hand out chunks */
-	if (!num_left) {
+	if (!next || !num_left) {
 		next = vmemmap_alloc_block(PAGE_SIZE, node);
 		if (unlikely(!next)) {
 			WARN_ON(1);
@@ -174,7 +277,6 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node)
 
 	for (; start < end; start += page_size) {
 		void *p;
-		int rc;
 
 		if (vmemmap_populated(start, page_size))
 			continue;
@@ -188,97 +290,16 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node)
 		pr_debug("      * %016lx..%016lx allocated at %p\n",
 			 start, start + page_size, p);
 
-		rc = vmemmap_create_mapping(start, page_size, __pa(p));
-		if (rc < 0) {
-			pr_warning(
-				"vmemmap_populate: Unable to create vmemmap mapping: %d\n",
-				rc);
-			return -EFAULT;
-		}
+		vmemmap_create_mapping(start, page_size, __pa(p));
 	}
 
 	return 0;
 }
 
-#ifdef CONFIG_MEMORY_HOTPLUG
-static unsigned long vmemmap_list_free(unsigned long start)
+void vmemmap_free(unsigned long start, unsigned long end)
 {
-	struct vmemmap_backing *vmem_back, *vmem_back_prev;
-
-	vmem_back_prev = vmem_back = vmemmap_list;
-
-	/* look for it with prev pointer recorded */
-	for (; vmem_back; vmem_back = vmem_back->list) {
-		if (vmem_back->virt_addr == start)
-			break;
-		vmem_back_prev = vmem_back;
-	}
-
-	if (unlikely(!vmem_back)) {
-		WARN_ON(1);
-		return 0;
-	}
-
-	/* remove it from vmemmap_list */
-	if (vmem_back == vmemmap_list) /* remove head */
-		vmemmap_list = vmem_back->list;
-	else
-		vmem_back_prev->list = vmem_back->list;
-
-	/* next point to this freed entry */
-	vmem_back->list = next;
-	next = vmem_back;
-	num_freed++;
-
-	return vmem_back->phys;
 }
 
-void __ref vmemmap_free(unsigned long start, unsigned long end)
-{
-	unsigned long page_size = 1 << mmu_psize_defs[mmu_vmemmap_psize].shift;
-
-	start = _ALIGN_DOWN(start, page_size);
-
-	pr_debug("vmemmap_free %lx...%lx\n", start, end);
-
-	for (; start < end; start += page_size) {
-		unsigned long addr;
-
-		/*
-		 * the section has already be marked as invalid, so
-		 * vmemmap_populated() true means some other sections still
-		 * in this page, so skip it.
-		 */
-		if (vmemmap_populated(start, page_size))
-			continue;
-
-		addr = vmemmap_list_free(start);
-		if (addr) {
-			struct page *page = pfn_to_page(addr >> PAGE_SHIFT);
-
-			if (PageReserved(page)) {
-				/* allocated from bootmem */
-				if (page_size < PAGE_SIZE) {
-					/*
-					 * this shouldn't happen, but if it is
-					 * the case, leave the memory there
-					 */
-					WARN_ON_ONCE(1);
-				} else {
-					unsigned int nr_pages =
-						1 << get_order(page_size);
-					while (nr_pages--)
-						free_reserved_page(page++);
-				}
-			} else
-				free_pages((unsigned long)(__va(addr)),
-							get_order(page_size));
-
-			vmemmap_remove_mapping(start, page_size);
-		}
-	}
-}
-#endif
 void register_page_bootmem_memmap(unsigned long section_nr,
 				  struct page *start_page, unsigned long size)
 {
@@ -310,16 +331,16 @@ struct page *realmode_pfn_to_page(unsigned long pfn)
 		if (pg_va < vmem_back->virt_addr)
 			continue;
 
-		/* After vmemmap_list entry free is possible, need check all */
-		if ((pg_va + sizeof(struct page)) <=
-				(vmem_back->virt_addr + page_size)) {
-			page = (struct page *) (vmem_back->phys + pg_va -
+		/* Check that page struct is not split between real pages */
+		if ((pg_va + sizeof(struct page)) >
+				(vmem_back->virt_addr + page_size))
+			return NULL;
+
+		page = (struct page *) (vmem_back->phys + pg_va -
 				vmem_back->virt_addr);
-			return page;
-		}
+		return page;
 	}
 
-	/* Probably that page struct is split between real pages */
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(realmode_pfn_to_page);
@@ -334,25 +355,3 @@ struct page *realmode_pfn_to_page(unsigned long pfn)
 EXPORT_SYMBOL_GPL(realmode_pfn_to_page);
 
 #endif /* CONFIG_SPARSEMEM_VMEMMAP/CONFIG_FLATMEM */
-
-#ifdef CONFIG_PPC_STD_MMU_64
-static bool disable_radix;
-static int __init parse_disable_radix(char *p)
-{
-	disable_radix = true;
-	return 0;
-}
-early_param("disable_radix", parse_disable_radix);
-
-void __init mmu_early_init_devtree(void)
-{
-	/* Disable radix mode based on kernel command line. */
-	if (disable_radix)
-		cur_cpu_spec->mmu_features &= ~MMU_FTR_TYPE_RADIX;
-
-	if (early_radix_enabled())
-		radix__early_init_devtree();
-	else
-		hash__early_init_devtree();
-}
-#endif /* CONFIG_PPC_STD_MMU_64 */

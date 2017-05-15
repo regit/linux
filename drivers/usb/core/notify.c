@@ -6,8 +6,6 @@
  * notifier functions originally based on those in kernel/sys.c
  * but fixed up to not be so broken.
  *
- * Released under the GPLv2 only.
- * SPDX-License-Identifier: GPL-2.0
  */
 
 

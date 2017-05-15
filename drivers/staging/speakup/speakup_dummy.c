@@ -17,6 +17,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  * specificly written as a driver for the speakup screenreview
  * s not a general device driver.
  */
@@ -125,8 +129,18 @@ module_param_named(start, synth_dummy.startup, short, S_IRUGO);
 MODULE_PARM_DESC(ser, "Set the serial port for the synthesizer (0-based).");
 MODULE_PARM_DESC(start, "Start the synthesizer once it is loaded.");
 
-module_spk_synth(synth_dummy);
+static int __init dummy_init(void)
+{
+	return synth_add(&synth_dummy);
+}
 
+static void __exit dummy_exit(void)
+{
+	synth_remove(&synth_dummy);
+}
+
+module_init(dummy_init);
+module_exit(dummy_exit);
 MODULE_AUTHOR("Samuel Thibault <samuel.thibault@ens-lyon.org>");
 MODULE_DESCRIPTION("Speakup support for text console");
 MODULE_LICENSE("GPL");

@@ -29,7 +29,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/wait.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "i2c.h"
 
 #define D(x)
@@ -395,7 +395,7 @@ static int eeprom_open(struct inode * inode, struct file * file)
 static loff_t eeprom_lseek(struct file * file, loff_t offset, int orig)
 {
 /*
- *  orig 0: position from beginning of eeprom
+ *  orig 0: position from begning of eeprom
  *  orig 1: relative from current position
  *  orig 2: position from last eeprom address
  */
@@ -848,4 +848,5 @@ static void eeprom_disable_write_protect(void)
     /* Write protect disabled */
   }
 }
-device_initcall(eeprom_init);
+
+module_init(eeprom_init);

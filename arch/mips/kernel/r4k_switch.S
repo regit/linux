@@ -15,14 +15,12 @@
 #include <asm/fpregdef.h>
 #include <asm/mipsregs.h>
 #include <asm/asm-offsets.h>
+#include <asm/pgtable-bits.h>
 #include <asm/regdef.h>
 #include <asm/stackframe.h>
 #include <asm/thread_info.h>
 
 #include <asm/asmmacro.h>
-
-/* preprocessor replaces the fp in ".set fp=64" with $30 otherwise */
-#undef fp
 
 /*
  * Offset to the current process status flags, the first 32 bytes of the
@@ -33,7 +31,7 @@
 #ifndef USE_ALTERNATE_RESUME_IMPL
 /*
  * task_struct *resume(task_struct *prev, task_struct *next,
- *		       struct thread_info *next_ti)
+ *		       struct thread_info *next_ti, s32 fp_save)
  */
 	.align	5
 	LEAF(resume)
@@ -41,6 +39,39 @@
 	LONG_S	t1, THREAD_STATUS(a0)
 	cpu_save_nonscratch a0
 	LONG_S	ra, THREAD_REG31(a0)
+
+	/*
+	 * Check whether we need to save any FP context. FP context is saved
+	 * iff the process has used the context with the scalar FPU or the MSA
+	 * ASE in the current time slice, as indicated by _TIF_USEDFPU and
+	 * _TIF_USEDMSA respectively. switch_to will have set fp_save
+	 * accordingly to an FP_SAVE_ enum value.
+	 */
+	beqz	a3, 2f
+
+	/*
+	 * We do. Clear the saved CU1 bit for prev, such that next time it is
+	 * scheduled it will start in userland with the FPU disabled. If the
+	 * task uses the FPU then it will be enabled again via the do_cpu trap.
+	 * This allows us to lazily restore the FP context.
+	 */
+	PTR_L	t3, TASK_THREAD_INFO(a0)
+	LONG_L	t0, ST_OFF(t3)
+	li	t1, ~ST0_CU1
+	and	t0, t0, t1
+	LONG_S	t0, ST_OFF(t3)
+
+	/* Check whether we're saving scalar or vector context. */
+	bgtz	a3, 1f
+
+	/* Save 128b MSA vector context. */
+	msa_save_all	a0
+	b	2f
+
+1:	/* Save 32b/64b scalar FP context. */
+	fpu_save_double a0 t0 t1		# c0_status passed in t0
+						# clobbers t1
+2:
 
 #if defined(CONFIG_CC_STACKPROTECTOR) && !defined(CONFIG_SMP)
 	PTR_LA	t8, __stack_chk_guard
@@ -75,8 +106,7 @@
  * Save a thread's fp context.
  */
 LEAF(_save_fp)
-#if defined(CONFIG_64BIT) || defined(CONFIG_CPU_MIPS32_R2) || \
-		defined(CONFIG_CPU_MIPS32_R6)
+#if defined(CONFIG_64BIT) || defined(CONFIG_CPU_MIPS32_R2)
 	mfc0	t0, CP0_STATUS
 #endif
 	fpu_save_double a0 t0 t1		# clobbers t1
@@ -87,8 +117,7 @@ LEAF(_save_fp)
  * Restore a thread's fp context.
  */
 LEAF(_restore_fp)
-#if defined(CONFIG_64BIT) || defined(CONFIG_CPU_MIPS32_R2) || \
-		defined(CONFIG_CPU_MIPS32_R6)
+#if defined(CONFIG_64BIT) || defined(CONFIG_CPU_MIPS32_R2)
 	mfc0	t0, CP0_STATUS
 #endif
 	fpu_restore_double a0 t0 t1		# clobbers t1
@@ -113,11 +142,6 @@ LEAF(_restore_msa)
 	jr	ra
 	END(_restore_msa)
 
-LEAF(_init_msa_upper)
-	msa_init_all_upper
-	jr	ra
-	END(_init_msa_upper)
-
 #endif
 
 /*
@@ -125,11 +149,10 @@ LEAF(_init_msa_upper)
  * the property that no matter whether considered as single or as double
  * precision represents signaling NANS.
  *
- * The value to initialize fcr31 to comes in $a0.
+ * We initialize fcr31 to rounding to nearest, no exceptions.
  */
 
-	.set push
-	SET_HARDFLOAT
+#define FPU_DEFAULT  0x00000000
 
 LEAF(_init_fpu)
 	mfc0	t0, CP0_STATUS
@@ -138,7 +161,8 @@ LEAF(_init_fpu)
 	mtc0	t0, CP0_STATUS
 	enable_fpu_hazard
 
-	ctc1	a0, fcr31
+	li	t1, FPU_DEFAULT
+	ctc1	t1, fcr31
 
 	li	t1, -1				# SNaN
 
@@ -199,10 +223,9 @@ LEAF(_init_fpu)
 	mtc1	t1, $f30
 	mtc1	t1, $f31
 
-#if defined(CONFIG_CPU_MIPS32_R2) || defined(CONFIG_CPU_MIPS32_R6)
+#ifdef CONFIG_CPU_MIPS32_R2
 	.set    push
-	.set    MIPS_ISA_LEVEL_RAW
-	.set	fp=64
+	.set    mips64r2
 	sll     t0, t0, 5			# is Status.FR set?
 	bgez    t0, 1f				# no: skip setting upper 32b
 
@@ -239,9 +262,9 @@ LEAF(_init_fpu)
 	mthc1   t1, $f30
 	mthc1   t1, $f31
 1:	.set    pop
-#endif /* CONFIG_CPU_MIPS32_R2 || CONFIG_CPU_MIPS32_R6 */
+#endif /* CONFIG_CPU_MIPS32_R2 */
 #else
-	.set	MIPS_ISA_ARCH_LEVEL_RAW
+	.set	arch=r4000
 	dmtc1	t1, $f0
 	dmtc1	t1, $f2
 	dmtc1	t1, $f4
@@ -261,5 +284,3 @@ LEAF(_init_fpu)
 #endif
 	jr	ra
 	END(_init_fpu)
-
-	.set pop	/* SET_HARDFLOAT */

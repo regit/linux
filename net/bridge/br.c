@@ -19,7 +19,6 @@
 #include <linux/llc.h>
 #include <net/llc.h>
 #include <net/stp.h>
-#include <net/switchdev.h>
 
 #include "br_private.h"
 
@@ -121,47 +120,6 @@ static struct notifier_block br_device_notifier = {
 	.notifier_call = br_device_event
 };
 
-/* called with RTNL */
-static int br_switchdev_event(struct notifier_block *unused,
-			      unsigned long event, void *ptr)
-{
-	struct net_device *dev = switchdev_notifier_info_to_dev(ptr);
-	struct net_bridge_port *p;
-	struct net_bridge *br;
-	struct switchdev_notifier_fdb_info *fdb_info;
-	int err = NOTIFY_DONE;
-
-	p = br_port_get_rtnl(dev);
-	if (!p)
-		goto out;
-
-	br = p->br;
-
-	switch (event) {
-	case SWITCHDEV_FDB_ADD:
-		fdb_info = ptr;
-		err = br_fdb_external_learn_add(br, p, fdb_info->addr,
-						fdb_info->vid);
-		if (err)
-			err = notifier_from_errno(err);
-		break;
-	case SWITCHDEV_FDB_DEL:
-		fdb_info = ptr;
-		err = br_fdb_external_learn_del(br, p, fdb_info->addr,
-						fdb_info->vid);
-		if (err)
-			err = notifier_from_errno(err);
-		break;
-	}
-
-out:
-	return err;
-}
-
-static struct notifier_block br_switchdev_notifier = {
-	.notifier_call = br_switchdev_event,
-};
-
 static void __net_exit br_net_exit(struct net *net)
 {
 	struct net_device *dev;
@@ -189,8 +147,6 @@ static int __init br_init(void)
 {
 	int err;
 
-	BUILD_BUG_ON(sizeof(struct br_input_skb_cb) > FIELD_SIZEOF(struct sk_buff, cb));
-
 	err = stp_proto_register(&br_stp_proto);
 	if (err < 0) {
 		pr_err("bridge: can't register sap for STP\n");
@@ -205,7 +161,7 @@ static int __init br_init(void)
 	if (err)
 		goto err_out1;
 
-	err = br_nf_core_init();
+	err = br_netfilter_init();
 	if (err)
 		goto err_out2;
 
@@ -213,13 +169,9 @@ static int __init br_init(void)
 	if (err)
 		goto err_out3;
 
-	err = register_switchdev_notifier(&br_switchdev_notifier);
-	if (err)
-		goto err_out4;
-
 	err = br_netlink_init();
 	if (err)
-		goto err_out5;
+		goto err_out4;
 
 	brioctl_set(br_ioctl_deviceless_stub);
 
@@ -227,20 +179,11 @@ static int __init br_init(void)
 	br_fdb_test_addr_hook = br_fdb_test_addr;
 #endif
 
-#if IS_MODULE(CONFIG_BRIDGE_NETFILTER)
-	pr_info("bridge: filtering via arp/ip/ip6tables is no longer available "
-		"by default. Update your scripts to load br_netfilter if you "
-		"need this.\n");
-#endif
-
 	return 0;
-
-err_out5:
-	unregister_switchdev_notifier(&br_switchdev_notifier);
 err_out4:
 	unregister_netdevice_notifier(&br_device_notifier);
 err_out3:
-	br_nf_core_fini();
+	br_netfilter_fini();
 err_out2:
 	unregister_pernet_subsys(&br_net_ops);
 err_out1:
@@ -253,18 +196,20 @@ err_out:
 static void __exit br_deinit(void)
 {
 	stp_proto_unregister(&br_stp_proto);
+
 	br_netlink_fini();
-	unregister_switchdev_notifier(&br_switchdev_notifier);
 	unregister_netdevice_notifier(&br_device_notifier);
 	brioctl_set(NULL);
+
 	unregister_pernet_subsys(&br_net_ops);
 
 	rcu_barrier(); /* Wait for completion of call_rcu()'s */
 
-	br_nf_core_fini();
+	br_netfilter_fini();
 #if IS_ENABLED(CONFIG_ATM_LANE)
 	br_fdb_test_addr_hook = NULL;
 #endif
+
 	br_fdb_fini();
 }
 

@@ -157,6 +157,7 @@ static int mt2060_set_params(struct dvb_frontend *fe)
 {
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	struct mt2060_priv *priv;
+	int ret=0;
 	int i=0;
 	u32 freq;
 	u8  lnaband;
@@ -239,7 +240,7 @@ static int mt2060_set_params(struct dvb_frontend *fe)
 	if (fe->ops.i2c_gate_ctrl)
 		fe->ops.i2c_gate_ctrl(fe, 0); /* close i2c_gate */
 
-	return 0;
+	return ret;
 }
 
 static void mt2060_calibrate(struct mt2060_priv *priv)
@@ -332,10 +333,11 @@ static int mt2060_sleep(struct dvb_frontend *fe)
 	return ret;
 }
 
-static void mt2060_release(struct dvb_frontend *fe)
+static int mt2060_release(struct dvb_frontend *fe)
 {
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
+	return 0;
 }
 
 static const struct dvb_tuner_ops mt2060_tuner_ops = {

@@ -23,20 +23,19 @@
 
 #include <asm/kvm_ppc.h>
 #include <asm/kvm_book3s.h>
-#include <asm/book3s/64/mmu-hash.h>
+#include <asm/mmu-hash64.h>
 #include <asm/machdep.h>
 #include <asm/mmu_context.h>
 #include <asm/hw_irq.h>
 #include "trace_pr.h"
-#include "book3s.h"
 
 #define PTE_SIZE 12
 
 void kvmppc_mmu_invalidate_pte(struct kvm_vcpu *vcpu, struct hpte_cache *pte)
 {
-	mmu_hash_ops.hpte_invalidate(pte->slot, pte->host_vpn,
-				     pte->pagesize, pte->pagesize,
-				     MMU_SEGSIZE_256M, false);
+	ppc_md.hpte_invalidate(pte->slot, pte->host_vpn,
+			       pte->pagesize, pte->pagesize, MMU_SEGSIZE_256M,
+			       false);
 }
 
 /* We keep 512 gvsid->hvsid entries, mapping the guest ones to the array using
@@ -83,7 +82,7 @@ int kvmppc_mmu_map_page(struct kvm_vcpu *vcpu, struct kvmppc_pte *orig_pte,
 			bool iswrite)
 {
 	unsigned long vpn;
-	kvm_pfn_t hpaddr;
+	pfn_t hpaddr;
 	ulong hash, hpteg;
 	u64 vsid;
 	int ret;
@@ -105,10 +104,9 @@ int kvmppc_mmu_map_page(struct kvm_vcpu *vcpu, struct kvmppc_pte *orig_pte,
 	smp_rmb();
 
 	/* Get host physical address for gpa */
-	pfn = kvmppc_gpa_to_pfn(vcpu, orig_pte->raddr, iswrite, &writable);
+	pfn = kvmppc_gfn_to_pfn(vcpu, gfn, iswrite, &writable);
 	if (is_error_noslot_pfn(pfn)) {
-		printk(KERN_INFO "Couldn't get guest page for gpa %lx!\n",
-		       orig_pte->raddr);
+		printk(KERN_INFO "Couldn't get guest page for gfn %lx!\n", gfn);
 		r = -EINVAL;
 		goto out;
 	}
@@ -169,13 +167,13 @@ map_again:
 
 	/* In case we tried normal mapping already, let's nuke old entries */
 	if (attempt > 1)
-		if (mmu_hash_ops.hpte_remove(hpteg) < 0) {
+		if (ppc_md.hpte_remove(hpteg) < 0) {
 			r = -1;
 			goto out_unlock;
 		}
 
-	ret = mmu_hash_ops.hpte_insert(hpteg, vpn, hpaddr, rflags, vflags,
-				       hpsize, hpsize, MMU_SEGSIZE_256M);
+	ret = ppc_md.hpte_insert(hpteg, vpn, hpaddr, rflags, vflags,
+				 hpsize, hpsize, MMU_SEGSIZE_256M);
 
 	if (ret < 0) {
 		/* If we couldn't map a primary PTE, try a secondary */
@@ -187,10 +185,8 @@ map_again:
 		trace_kvm_book3s_64_mmu_map(rflags, hpteg,
 					    vpn, hpaddr, orig_pte);
 
-		/*
-		 * The mmu_hash_ops code may give us a secondary entry even
-		 * though we asked for a primary. Fix up.
-		 */
+		/* The ppc_md code may give us a secondary entry even though we
+		   asked for a primary. Fix up. */
 		if ((ret & _PTEIDX_SECONDARY) && !(vflags & HPTE_V_SECONDARY)) {
 			hash = ~hash;
 			hpteg = ((hash & htab_hash_mask) * HPTES_PER_GROUP);

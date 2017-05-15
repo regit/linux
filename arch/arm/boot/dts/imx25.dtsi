@@ -9,12 +9,10 @@
  * http://www.gnu.org/copyleft/gpl.html
  */
 
+#include "skeleton.dtsi"
 #include "imx25-pinfunc.h"
 
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
-
 	aliases {
 		ethernet0 = &fec;
 		gpio0 = &gpio1;
@@ -26,10 +24,6 @@
 		i2c2 = &i2c3;
 		mmc0 = &esdhc1;
 		mmc1 = &esdhc2;
-		pwm0 = &pwm1;
-		pwm1 = &pwm2;
-		pwm2 = &pwm3;
-		pwm3 = &pwm4;
 		serial0 = &uart1;
 		serial1 = &uart2;
 		serial2 = &uart3;
@@ -168,7 +162,7 @@
 				#size-cells = <0>;
 				compatible = "fsl,imx25-cspi", "fsl,imx35-cspi";
 				reg = <0x43fa4000 0x4000>;
-				clocks = <&clks 78>, <&clks 78>;
+				clocks = <&clks 62>, <&clks 62>;
 				clock-names = "ipg", "per";
 				interrupts = <14>;
 				status = "disabled";
@@ -245,7 +239,6 @@
 			};
 
 			ssi2: ssi@50014000 {
-				#sound-dai-cells = <0>;
 				compatible = "fsl,imx25-ssi", "fsl,imx21-ssi";
 				reg = <0x50014000 0x4000>;
 				interrupts = <11>;
@@ -271,40 +264,16 @@
 				status = "disabled";
 			};
 
-			tscadc: tscadc@50030000 {
-				compatible = "fsl,imx25-tsadc";
-				reg = <0x50030000 0xc>;
+			tsc: tsc@50030000 {
+				compatible = "fsl,imx25-adc", "fsl,imx21-tsc";
+				reg = <0x50030000 0x4000>;
 				interrupts = <46>;
 				clocks = <&clks 119>;
 				clock-names = "ipg";
-				interrupt-controller;
-				#interrupt-cells = <1>;
-				#address-cells = <1>;
-				#size-cells = <1>;
 				status = "disabled";
-
-				adc: adc@50030800 {
-					compatible = "fsl,imx25-gcq";
-					reg = <0x50030800 0x60>;
-					interrupt-parent = <&tscadc>;
-					interrupts = <1>;
-					#address-cells = <1>;
-					#size-cells = <0>;
-					status = "disabled";
-				};
-
-				tsc: tcq@50030400 {
-					compatible = "fsl,imx25-tcq";
-					reg = <0x50030400 0x60>;
-					interrupt-parent = <&tscadc>;
-					interrupts = <0>;
-					fsl,wires = <4>;
-					status = "disabled";
-				};
 			};
 
 			ssi1: ssi@50034000 {
-				#sound-dai-cells = <0>;
 				compatible = "fsl,imx25-ssi", "fsl,imx21-ssi";
 				reg = <0x50034000 0x4000>;
 				interrupts = <12>;
@@ -343,7 +312,7 @@
 			gpt4: timer@53f84000 {
 				compatible = "fsl,imx25-gpt", "fsl,imx31-gpt";
 				reg = <0x53f84000 0x4000>;
-				clocks = <&clks 95>, <&clks 47>;
+				clocks = <&clks 9>, <&clks 45>;
 				clock-names = "ipg", "per";
 				interrupts = <1>;
 			};
@@ -351,7 +320,7 @@
 			gpt3: timer@53f88000 {
 				compatible = "fsl,imx25-gpt", "fsl,imx31-gpt";
 				reg = <0x53f88000 0x4000>;
-				clocks = <&clks 94>, <&clks 47>;
+				clocks = <&clks 9>, <&clks 47>;
 				clock-names = "ipg", "per";
 				interrupts = <29>;
 			};
@@ -359,7 +328,7 @@
 			gpt2: timer@53f8c000 {
 				compatible = "fsl,imx25-gpt", "fsl,imx31-gpt";
 				reg = <0x53f8c000 0x4000>;
-				clocks = <&clks 93>, <&clks 47>;
+				clocks = <&clks 9>, <&clks 47>;
 				clock-names = "ipg", "per";
 				interrupts = <53>;
 			};
@@ -367,7 +336,7 @@
 			gpt1: timer@53f90000 {
 				compatible = "fsl,imx25-gpt", "fsl,imx31-gpt";
 				reg = <0x53f90000 0x4000>;
-				clocks = <&clks 92>, <&clks 47>;
+				clocks = <&clks 9>, <&clks 47>;
 				clock-names = "ipg", "per";
 				interrupts = <54>;
 			};
@@ -398,7 +367,7 @@
 				compatible = "fsl,imx25-pwm", "fsl,imx27-pwm";
 				#pwm-cells = <2>;
 				reg = <0x53fa0000 0x4000>;
-				clocks = <&clks 106>, <&clks 52>;
+				clocks = <&clks 106>, <&clks 36>;
 				clock-names = "ipg", "per";
 				interrupts = <36>;
 			};
@@ -417,18 +386,9 @@
 				compatible = "fsl,imx25-pwm", "fsl,imx27-pwm";
 				#pwm-cells = <2>;
 				reg = <0x53fa8000 0x4000>;
-				clocks = <&clks 107>, <&clks 52>;
+				clocks = <&clks 107>, <&clks 36>;
 				clock-names = "ipg", "per";
 				interrupts = <41>;
-			};
-
-			scc: crypto@53fac000 {
-				compatible = "fsl,imx25-scc";
-				reg = <0x53fac000 0x4000>;
-				clocks = <&clks 111>;
-				clock-names = "ipg";
-				interrupts = <49>, <50>;
-				interrupt-names = "scm", "smn";
 			};
 
 			esdhc1: esdhc@53fb4000 {
@@ -466,9 +426,8 @@
 
 			pwm4: pwm@53fc8000 {
 				compatible = "fsl,imx25-pwm", "fsl,imx27-pwm";
-				#pwm-cells = <2>;
 				reg = <0x53fc8000 0x4000>;
-				clocks = <&clks 108>, <&clks 52>;
+				clocks = <&clks 108>, <&clks 36>;
 				clock-names = "ipg", "per";
 				interrupts = <42>;
 			};
@@ -494,7 +453,7 @@
 			};
 
 			sdma: sdma@53fd4000 {
-				compatible = "fsl,imx25-sdma";
+				compatible = "fsl,imx25-sdma", "fsl,imx35-sdma";
 				reg = <0x53fd4000 0x4000>;
 				clocks = <&clks 112>, <&clks 68>;
 				clock-names = "ipg", "ahb";
@@ -515,7 +474,7 @@
 				compatible = "fsl,imx25-pwm", "fsl,imx27-pwm";
 				#pwm-cells = <2>;
 				reg = <0x53fe0000 0x4000>;
-				clocks = <&clks 105>, <&clks 52>;
+				clocks = <&clks 105>, <&clks 36>;
 				clock-names = "ipg", "per";
 				interrupts = <26>;
 			};
@@ -531,8 +490,7 @@
 				compatible = "fsl,imx25-usb", "fsl,imx27-usb";
 				reg = <0x53ff4000 0x0200>;
 				interrupts = <37>;
-				clocks = <&clks 9>, <&clks 70>, <&clks 8>;
-				clock-names = "ipg", "ahb", "per";
+				clocks = <&clks 70>;
 				fsl,usbmisc = <&usbmisc 0>;
 				fsl,usbphy = <&usbphy0>;
 				status = "disabled";
@@ -542,8 +500,7 @@
 				compatible = "fsl,imx25-usb", "fsl,imx27-usb";
 				reg = <0x53ff4400 0x0200>;
 				interrupts = <35>;
-				clocks = <&clks 9>, <&clks 70>, <&clks 8>;
-				clock-names = "ipg", "ahb", "per";
+				clocks = <&clks 70>;
 				fsl,usbmisc = <&usbmisc 1>;
 				fsl,usbphy = <&usbphy1>;
 				status = "disabled";
@@ -552,6 +509,8 @@
 			usbmisc: usbmisc@53ff4600 {
 				#index-cells = <1>;
 				compatible = "fsl,imx25-usbmisc";
+				clocks = <&clks 9>, <&clks 70>, <&clks 8>;
+				clock-names = "ipg", "ahb", "per";
 				reg = <0x53ff4600 0x00f>;
 			};
 

@@ -14,7 +14,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/sched.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "internal.h"
 
 static struct proc_dir_entry *proc_afs;
@@ -230,9 +230,14 @@ static ssize_t afs_proc_cells_write(struct file *file, const char __user *buf,
 	if (size <= 1 || size >= PAGE_SIZE)
 		return -EINVAL;
 
-	kbuf = memdup_user_nul(buf, size);
-	if (IS_ERR(kbuf))
-		return PTR_ERR(kbuf);
+	kbuf = kmalloc(size + 1, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
+
+	ret = -EFAULT;
+	if (copy_from_user(kbuf, buf, size) != 0)
+		goto done;
+	kbuf[size] = 0;
 
 	/* trim to first NL */
 	name = memchr(kbuf, '\n', size);
@@ -310,9 +315,15 @@ static ssize_t afs_proc_rootcell_write(struct file *file,
 	if (size <= 1 || size >= PAGE_SIZE)
 		return -EINVAL;
 
-	kbuf = memdup_user_nul(buf, size);
-	if (IS_ERR(kbuf))
-		return PTR_ERR(kbuf);
+	ret = -ENOMEM;
+	kbuf = kmalloc(size + 1, GFP_KERNEL);
+	if (!kbuf)
+		goto nomem;
+
+	ret = -EFAULT;
+	if (copy_from_user(kbuf, buf, size) != 0)
+		goto infault;
+	kbuf[size] = 0;
 
 	/* trim to first NL */
 	s = memchr(kbuf, '\n', size);
@@ -326,7 +337,9 @@ static ssize_t afs_proc_rootcell_write(struct file *file,
 	if (ret >= 0)
 		ret = size;	/* consume everything, always */
 
+infault:
 	kfree(kbuf);
+nomem:
 	_leave(" = %d", ret);
 	return ret;
 }

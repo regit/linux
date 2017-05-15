@@ -33,6 +33,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <media/rc-core.h>
+#include <linux/pci_ids.h>
 
 #include "fintek-cir.h"
 
@@ -104,7 +105,11 @@ static inline void fintek_cir_reg_write(struct fintek_dev *fintek, u8 val, u8 of
 /* read val from cir config register */
 static u8 fintek_cir_reg_read(struct fintek_dev *fintek, u8 offset)
 {
-	return inb(fintek->cir_addr + offset);
+	u8 val;
+
+	val = inb(fintek->cir_addr + offset);
+
+	return val;
 }
 
 /* dump current cir register contents */
@@ -143,6 +148,7 @@ static int fintek_hw_detect(struct fintek_dev *fintek)
 	u8 vendor_major, vendor_minor;
 	u8 portsel, ir_class;
 	u16 vendor, chip;
+	int ret = 0;
 
 	fintek_config_mode_enable(fintek);
 
@@ -202,7 +208,7 @@ static int fintek_hw_detect(struct fintek_dev *fintek)
 
 	spin_unlock_irqrestore(&fintek->fintek_lock, flags);
 
-	return 0;
+	return ret;
 }
 
 static void fintek_cir_ldev_init(struct fintek_dev *fintek)
@@ -535,7 +541,7 @@ static int fintek_probe(struct pnp_dev *pdev, const struct pnp_device_id *dev_id
 	/* Set up the rc device */
 	rdev->priv = fintek;
 	rdev->driver_type = RC_DRIVER_IR_RAW;
-	rdev->allowed_protocols = RC_BIT_ALL;
+	rc_set_allowed_protocols(rdev, RC_BIT_ALL);
 	rdev->open = fintek_open;
 	rdev->close = fintek_close;
 	rdev->input_name = FINTEK_DESCRIPTION;
@@ -638,6 +644,7 @@ static int fintek_suspend(struct pnp_dev *pdev, pm_message_t state)
 
 static int fintek_resume(struct pnp_dev *pdev)
 {
+	int ret = 0;
 	struct fintek_dev *fintek = pnp_get_drvdata(pdev);
 
 	fit_dbg("%s called", __func__);
@@ -654,7 +661,7 @@ static int fintek_resume(struct pnp_dev *pdev)
 
 	fintek_cir_regs_init(fintek);
 
-	return 0;
+	return ret;
 }
 
 static void fintek_shutdown(struct pnp_dev *pdev)
@@ -679,6 +686,16 @@ static struct pnp_driver fintek_driver = {
 	.shutdown	= fintek_shutdown,
 };
 
+static int fintek_init(void)
+{
+	return pnp_register_driver(&fintek_driver);
+}
+
+static void fintek_exit(void)
+{
+	pnp_unregister_driver(&fintek_driver);
+}
+
 module_param(debug, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Enable debugging output");
 
@@ -688,4 +705,5 @@ MODULE_DESCRIPTION(FINTEK_DESCRIPTION " driver");
 MODULE_AUTHOR("Jarod Wilson <jarod@redhat.com>");
 MODULE_LICENSE("GPL");
 
-module_pnp_driver(fintek_driver);
+module_init(fintek_init);
+module_exit(fintek_exit);

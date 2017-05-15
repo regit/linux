@@ -66,8 +66,6 @@
 #define E1000_PBA      0x01000  /* Packet Buffer Allocation - RW */
 #define E1000_PBS      0x01008  /* Packet Buffer Size */
 #define E1000_EEMNGCTL 0x01010  /* MNG EEprom Control */
-#define E1000_EEMNGCTL_I210 0x12030  /* MNG EEprom Control */
-#define E1000_EEARBC_I210 0x12024  /* EEPROM Auto Read Bus Control */
 #define E1000_EEWR     0x0102C  /* EEPROM Write Register - RW */
 #define E1000_I2CCMD   0x01028  /* SFPI2C Command Register - RW */
 #define E1000_FRTIMER  0x01048  /* Free Running Timer - RW */
@@ -105,8 +103,6 @@
 #define E1000_TRGTTIMH0  0x0B648 /* Target Time Register 0 High - RW */
 #define E1000_TRGTTIML1  0x0B64C /* Target Time Register 1 Low  - RW */
 #define E1000_TRGTTIMH1  0x0B650 /* Target Time Register 1 High - RW */
-#define E1000_FREQOUT0   0x0B654 /* Frequency Out 0 Control Register - RW */
-#define E1000_FREQOUT1   0x0B658 /* Frequency Out 1 Control Register - RW */
 #define E1000_AUXSTMPL0  0x0B65C /* Auxiliary Time Stamp 0 Register Low  - RO */
 #define E1000_AUXSTMPH0  0x0B660 /* Auxiliary Time Stamp 0 Register High - RO */
 #define E1000_AUXSTMPL1  0x0B664 /* Auxiliary Time Stamp 1 Register Low  - RO */
@@ -309,7 +305,6 @@
 					(0x054E0 + ((_i - 16) * 8)))
 #define E1000_RAH(_i)  (((_i) <= 15) ? (0x05404 + ((_i) * 8)) : \
 					(0x054E4 + ((_i - 16) * 8)))
-#define E1000_VLAPQF	0x055B0  /* VLAN Priority Queue Filter VLAPQF */
 #define E1000_IP4AT_REG(_i)     (0x05840 + ((_i) * 8))
 #define E1000_IP6AT_REG(_i)     (0x05880 + ((_i) * 4))
 #define E1000_WUPM_REG(_i)      (0x05A00 + ((_i) * 4))
@@ -359,7 +354,6 @@
 #define E1000_UTA       0x0A000 /* Unicast Table Array - RW */
 #define E1000_IOVTCL    0x05BBC /* IOV Control Register */
 #define E1000_TXSWC     0x05ACC /* Tx Switch Control */
-#define E1000_LVMMC	0x03548 /* Last VM Misbehavior cause */
 /* These act per VF so an array friendly macro is used */
 #define E1000_P2VMAILBOX(_n)   (0x00C00 + (4 * (_n)))
 #define E1000_VMBMEM(_n)       (0x00800 + (64 * (_n)))
@@ -387,7 +381,8 @@ do { \
 #define array_wr32(reg, offset, value) \
 	wr32((reg) + ((offset) << 2), (value))
 
-#define array_rd32(reg, offset) (igb_rd32(hw, reg + ((offset) << 2)))
+#define array_rd32(reg, offset) \
+	(readl(hw->hw_addr + reg + ((offset) << 2)))
 
 /* DMA Coalescing registers */
 #define E1000_PCIEMISC	0x05BB8 /* PCIE misc config register */

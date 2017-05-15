@@ -16,7 +16,6 @@
 #include <linux/time.h>
 
 #include <asm/irq_cpu.h>
-#include <asm/setup.h>
 
 #include <msp_int.h>
 
@@ -52,7 +51,7 @@ static inline void sec_int_dispatch(void)  { do_IRQ(MSP_INT_SEC);  }
  * the range 40-71.
  */
 
-asmlinkage void plat_irq_dispatch(void)
+asmlinkage void plat_irq_dispatch(struct pt_regs *regs)
 {
 	u32 pending;
 

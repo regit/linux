@@ -284,7 +284,6 @@ static struct s3c2410_platform_nand __initdata qt2410_nand_info = {
 	.twrph1		= 20,
 	.nr_sets	= ARRAY_SIZE(qt2410_nand_sets),
 	.sets		= qt2410_nand_sets,
-	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 /* UDC */
@@ -353,4 +352,5 @@ MACHINE_START(QT2410, "QT2410")
 	.init_irq	= s3c2410_init_irq,
 	.init_machine	= qt2410_machine_init,
 	.init_time	= qt2410_init_time,
+	.restart	= s3c2410_restart,
 MACHINE_END

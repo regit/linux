@@ -13,11 +13,7 @@ Documentation/devicetree/bindings/mtd/nand.txt
 
 Required properties:
 
- - compatible:	"ti,omap2-nand"
- - reg:		range id (CS number), base offset and length of the
-		NAND I/O space
- - interrupt-parent: must point to gpmc node
- - interrupts:	Two interrupt specifiers, one for fifoevent, one for termcount.
+ - reg:		The CS line the peripheral is connected to
 
 Optional properties:
 
@@ -26,7 +22,7 @@ Optional properties:
 				width of 8 is assumed.
 
  - ti,nand-ecc-opt:		A string setting the ECC layout to use. One of:
-		"sw"		1-bit Hamming ecc code via software
+		"sw"		<deprecated> use "ham1" instead
 		"hw"		<deprecated> use "ham1" instead
 		"hw-romcode"	<deprecated> use "ham1" instead
 		"ham1"		1-bit Hamming ecc code
@@ -39,7 +35,7 @@ Optional properties:
 
 		"prefetch-polled"	Prefetch polled mode (default)
 		"polled"		Polled mode, without prefetch
-		"prefetch-dma"		Prefetch enabled DMA mode
+		"prefetch-dma"		Prefetch enabled sDMA mode
 		"prefetch-irq"		Prefetch enabled irq mode
 
  - elm_id:	<deprecated> use "ti,elm-id" instead
@@ -48,7 +44,6 @@ Optional properties:
 		locating ECC errors for BCHx algorithms. SoC devices which have
 		ELM hardware engines should specify this device node in .dtsi
 		Using ELM for ECC error correction frees some CPU cycles.
- - rb-gpios:	GPIO specifier for the ready/busy# pin.
 
 For inline partition table parsing (optional):
 
@@ -60,26 +55,20 @@ Example for an AM33xx board:
 	gpmc: gpmc@50000000 {
 		compatible = "ti,am3352-gpmc";
 		ti,hwmods = "gpmc";
-		reg = <0x50000000 0x36c>;
+		reg = <0x50000000 0x1000000>;
 		interrupts = <100>;
 		gpmc,num-cs = <8>;
 		gpmc,num-waitpins = <2>;
 		#address-cells = <2>;
 		#size-cells = <1>;
-		ranges = <0 0 0x08000000 0x1000000>;	/* CS0 space, 16MB */
+		ranges = <0 0 0x08000000 0x2000>;	/* CS0: NAND */
 		elm_id = <&elm>;
-		interrupt-controller;
-		#interrupt-cells = <2>;
 
 		nand@0,0 {
-			compatible = "ti,omap2-nand";
-			reg = <0 0 4>;		/* CS0, offset 0, NAND I/O window 4 */
-			interrupt-parent = <&gpmc>;
-			interrupts = <0 IRQ_TYPE_NONE>, <1 IRQ_TYPE NONE>;
+			reg = <0 0 0>; /* CS0, offset 0 */
 			nand-bus-width = <16>;
 			ti,nand-ecc-opt = "bch8";
 			ti,nand-xfer-type = "polled";
-			rb-gpios = <&gpmc 0 GPIO_ACTIVE_HIGH>; /* gpmc_wait0 */
 
 			gpmc,sync-clk-ps = <0>;
 			gpmc,cs-on-ns = <0>;
@@ -121,8 +110,8 @@ on various other factors also like;
 	Other factor which governs the selection of ecc-scheme is oob-size.
 	Higher ECC schemes require more OOB/Spare area to store ECC syndrome,
 	so the device should have enough free bytes available its OOB/Spare
-	area to accommodate ECC for entire page. In general following expression
-	helps in determining if given device can accommodate ECC syndrome:
+	area to accomodate ECC for entire page. In general following expression
+	helps in determining if given device can accomodate ECC syndrome:
 	"2 + (PAGESIZE / 512) * ECC_BYTES" >= OOBSIZE"
 	where
 		OOBSIZE		number of bytes in OOB/spare area
@@ -144,5 +133,5 @@ on various other factors also like;
 	Example(b): For a device with PAGESIZE = 2048 and OOBSIZE = 128 and
 		trying to use BCH16 (ECC_BYTES=26) ecc-scheme.
 		Number of ECC bytes per page = (2 + (2048 / 512) * 26) = 106 B
-		which can be accommodated in the OOB/Spare area of this device
+		which can be accomodate in the OOB/Spare area of this device
 		(OOBSIZE=128). So this device can use BCH16 ecc-scheme.

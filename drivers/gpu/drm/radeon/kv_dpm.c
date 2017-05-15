@@ -33,8 +33,6 @@
 #define KV_MINIMUM_ENGINE_CLOCK         800
 #define SMC_RAM_END                     0x40000
 
-static int kv_enable_nb_dpm(struct radeon_device *rdev,
-			    bool enable);
 static void kv_init_graphics_levels(struct radeon_device *rdev);
 static int kv_calculate_ds_divider(struct radeon_device *rdev);
 static int kv_calculate_nbps_level_settings(struct radeon_device *rdev);
@@ -1169,19 +1167,6 @@ void kv_dpm_enable_bapm(struct radeon_device *rdev, bool enable)
 	}
 }
 
-static void kv_enable_thermal_int(struct radeon_device *rdev, bool enable)
-{
-	u32 thermal_int;
-
-	thermal_int = RREG32_SMC(CG_THERMAL_INT_CTRL);
-	if (enable)
-		thermal_int |= THERM_INTH_MASK | THERM_INTL_MASK;
-	else
-		thermal_int &= ~(THERM_INTH_MASK | THERM_INTL_MASK);
-	WREG32_SMC(CG_THERMAL_INT_CTRL, thermal_int);
-
-}
-
 int kv_dpm_enable(struct radeon_device *rdev)
 {
 	struct kv_power_info *pi = kv_get_pi(rdev);
@@ -1293,7 +1278,8 @@ int kv_dpm_late_enable(struct radeon_device *rdev)
 			DRM_ERROR("kv_set_thermal_temperature_range failed\n");
 			return ret;
 		}
-		kv_enable_thermal_int(rdev, true);
+		rdev->irq.dpm_thermal = true;
+		radeon_irq_set(rdev);
 	}
 
 	/* powerdown unused blocks for now */
@@ -1309,9 +1295,6 @@ void kv_dpm_disable(struct radeon_device *rdev)
 {
 	kv_smc_bapm_enable(rdev, false);
 
-	if (rdev->family == CHIP_MULLINS)
-		kv_enable_nb_dpm(rdev, false);
-
 	/* powerup blocks */
 	kv_dpm_powergate_acp(rdev, false);
 	kv_dpm_powergate_samu(rdev, false);
@@ -1324,7 +1307,6 @@ void kv_dpm_disable(struct radeon_device *rdev)
 	kv_stop_dpm(rdev);
 	kv_enable_ulv(rdev, false);
 	kv_reset_am(rdev);
-	kv_enable_thermal_int(rdev, false);
 
 	kv_update_current_ps(rdev, rdev->pm.dpm.boot_ps);
 }
@@ -1456,14 +1438,14 @@ static int kv_update_uvd_dpm(struct radeon_device *rdev, bool gate)
 	return kv_enable_uvd_dpm(rdev, !gate);
 }
 
-static u8 kv_get_vce_boot_level(struct radeon_device *rdev, u32 evclk)
+static u8 kv_get_vce_boot_level(struct radeon_device *rdev)
 {
 	u8 i;
 	struct radeon_vce_clock_voltage_dependency_table *table =
 		&rdev->pm.dpm.dyn_state.vce_clock_voltage_dependency_table;
 
 	for (i = 0; i < table->count; i++) {
-		if (table->entries[i].evclk >= evclk)
+		if (table->entries[i].evclk >= 0) /* XXX */
 			break;
 	}
 
@@ -1486,7 +1468,7 @@ static int kv_update_vce_dpm(struct radeon_device *rdev,
 		if (pi->caps_stable_p_state)
 			pi->vce_boot_level = table->count - 1;
 		else
-			pi->vce_boot_level = kv_get_vce_boot_level(rdev, radeon_new_state->evclk);
+			pi->vce_boot_level = kv_get_vce_boot_level(rdev);
 
 		ret = kv_copy_bytes_to_smc(rdev,
 					   pi->dpm_table_start +
@@ -1787,24 +1769,15 @@ static int kv_update_dfs_bypass_settings(struct radeon_device *rdev,
 	return ret;
 }
 
-static int kv_enable_nb_dpm(struct radeon_device *rdev,
-			    bool enable)
+static int kv_enable_nb_dpm(struct radeon_device *rdev)
 {
 	struct kv_power_info *pi = kv_get_pi(rdev);
 	int ret = 0;
 
-	if (enable) {
-		if (pi->enable_nb_dpm && !pi->nb_dpm_enabled) {
-			ret = kv_notify_message_to_smu(rdev, PPSMC_MSG_NBDPM_Enable);
-			if (ret == 0)
-				pi->nb_dpm_enabled = true;
-		}
-	} else {
-		if (pi->enable_nb_dpm && pi->nb_dpm_enabled) {
-			ret = kv_notify_message_to_smu(rdev, PPSMC_MSG_NBDPM_Disable);
-			if (ret == 0)
-				pi->nb_dpm_enabled = false;
-		}
+	if (pi->enable_nb_dpm && !pi->nb_dpm_enabled) {
+		ret = kv_notify_message_to_smu(rdev, PPSMC_MSG_NBDPM_Enable);
+		if (ret == 0)
+			pi->nb_dpm_enabled = true;
 	}
 
 	return ret;
@@ -1891,7 +1864,7 @@ int kv_dpm_set_power_state(struct radeon_device *rdev)
 			}
 			kv_update_sclk_t(rdev);
 			if (rdev->family == CHIP_MULLINS)
-				kv_enable_nb_dpm(rdev, true);
+				kv_enable_nb_dpm(rdev);
 		}
 	} else {
 		if (pi->enable_dpm) {
@@ -1916,7 +1889,7 @@ int kv_dpm_set_power_state(struct radeon_device *rdev)
 			}
 			kv_update_acp_boot_level(rdev);
 			kv_update_sclk_t(rdev);
-			kv_enable_nb_dpm(rdev, true);
+			kv_enable_nb_dpm(rdev);
 		}
 	}
 
@@ -1938,7 +1911,6 @@ void kv_dpm_setup_asic(struct radeon_device *rdev)
 	kv_init_sclk_t(rdev);
 }
 
-#if 0
 void kv_dpm_reset_asic(struct radeon_device *rdev)
 {
 	struct kv_power_info *pi = kv_get_pi(rdev);
@@ -1959,7 +1931,6 @@ void kv_dpm_reset_asic(struct radeon_device *rdev)
 		kv_set_enabled_level(rdev, pi->graphics_boot_level);
 	}
 }
-#endif
 
 //XXX use sumo_dpm_display_configuration_changed
 
@@ -2164,7 +2135,7 @@ static void kv_apply_state_adjust_rules(struct radeon_device *rdev,
 	if (pi->caps_stable_p_state) {
 		stable_p_state_sclk = (max_limits->sclk * 75) / 100;
 
-		for (i = table->count - 1; i >= 0; i--) {
+		for (i = table->count - 1; i >= 0; i++) {
 			if (stable_p_state_sclk >= table->entries[i].clk) {
 				stable_p_state_sclk = table->entries[i].clk;
 				break;
@@ -2640,7 +2611,7 @@ static int kv_parse_power_table(struct radeon_device *rdev)
 	struct _NonClockInfoArray *non_clock_info_array;
 	union power_info *power_info;
 	int index = GetIndexIntoMasterTable(DATA, PowerPlayInfo);
-	u16 data_offset;
+        u16 data_offset;
 	u8 frev, crev;
 	u8 *power_state_offset;
 	struct kv_ps *ps;
@@ -2738,13 +2709,9 @@ int kv_dpm_init(struct radeon_device *rdev)
 	for (i = 0; i < SUMO_MAX_HARDWARE_POWERLEVELS; i++)
 		pi->at[i] = TRINITY_AT_DFLT;
 
-	pi->sram_end = SMC_RAM_END;
+        pi->sram_end = SMC_RAM_END;
 
-	/* Enabling nb dpm on an asrock system prevents dpm from working */
-	if (rdev->pdev->subsystem_vendor == 0x1849)
-		pi->enable_nb_dpm = false;
-	else
-		pi->enable_nb_dpm = true;
+	pi->enable_nb_dpm = true;
 
 	pi->caps_power_containment = true;
 	pi->caps_cac = true;
@@ -2759,17 +2726,7 @@ int kv_dpm_init(struct radeon_device *rdev)
 	pi->caps_sclk_ds = true;
 	pi->enable_auto_thermal_throttling = true;
 	pi->disable_nb_ps3_in_battery = false;
-	if (radeon_bapm == -1) {
-		/* only enable bapm on KB, ML by default */
-		if (rdev->family == CHIP_KABINI || rdev->family == CHIP_MULLINS)
-			pi->bapm_enable = true;
-		else
-			pi->bapm_enable = false;
-	} else if (radeon_bapm == 0) {
-		pi->bapm_enable = false;
-	} else {
-		pi->bapm_enable = true;
-	}
+	pi->bapm_enable = true;
 	pi->voltage_drop_t = 0;
 	pi->caps_sclk_throttle_low_notification = false;
 	pi->caps_fps = false; /* true? */
@@ -2813,34 +2770,9 @@ void kv_dpm_debugfs_print_current_performance_level(struct radeon_device *rdev,
 		tmp = (RREG32_SMC(SMU_VOLTAGE_STATUS) & SMU_VOLTAGE_CURRENT_LEVEL_MASK) >>
 			SMU_VOLTAGE_CURRENT_LEVEL_SHIFT;
 		vddc = kv_convert_8bit_index_to_voltage(rdev, (u16)tmp);
-		seq_printf(m, "uvd    %sabled\n", pi->uvd_power_gated ? "dis" : "en");
-		seq_printf(m, "vce    %sabled\n", pi->vce_power_gated ? "dis" : "en");
 		seq_printf(m, "power level %d    sclk: %u vddc: %u\n",
 			   current_index, sclk, vddc);
 	}
-}
-
-u32 kv_dpm_get_current_sclk(struct radeon_device *rdev)
-{
-	struct kv_power_info *pi = kv_get_pi(rdev);
-	u32 current_index =
-		(RREG32_SMC(TARGET_AND_CURRENT_PROFILE_INDEX) & CURR_SCLK_INDEX_MASK) >>
-		CURR_SCLK_INDEX_SHIFT;
-	u32 sclk;
-
-	if (current_index >= SMU__NUM_SCLK_DPM_STATE) {
-		return 0;
-	} else {
-		sclk = be32_to_cpu(pi->graphics_level[current_index].SclkFrequency);
-		return sclk;
-	}
-}
-
-u32 kv_dpm_get_current_mclk(struct radeon_device *rdev)
-{
-	struct kv_power_info *pi = kv_get_pi(rdev);
-
-	return pi->sys_info.bootup_uma_clk;
 }
 
 void kv_dpm_print_power_state(struct radeon_device *rdev,

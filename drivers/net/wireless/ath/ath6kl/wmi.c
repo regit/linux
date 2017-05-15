@@ -59,55 +59,6 @@ static const s32 wmi_rate_tbl[][2] = {
 	{0, 0}
 };
 
-static const s32 wmi_rate_tbl_mcs15[][2] = {
-	/* {W/O SGI, with SGI} */
-	{1000, 1000},
-	{2000, 2000},
-	{5500, 5500},
-	{11000, 11000},
-	{6000, 6000},
-	{9000, 9000},
-	{12000, 12000},
-	{18000, 18000},
-	{24000, 24000},
-	{36000, 36000},
-	{48000, 48000},
-	{54000, 54000},
-	{6500, 7200},     /* HT 20, MCS 0 */
-	{13000, 14400},
-	{19500, 21700},
-	{26000, 28900},
-	{39000, 43300},
-	{52000, 57800},
-	{58500, 65000},
-	{65000, 72200},
-	{13000, 14400},   /* HT 20, MCS 8 */
-	{26000, 28900},
-	{39000, 43300},
-	{52000, 57800},
-	{78000, 86700},
-	{104000, 115600},
-	{117000, 130000},
-	{130000, 144400}, /* HT 20, MCS 15 */
-	{13500, 15000},   /*HT 40, MCS 0 */
-	{27000, 30000},
-	{40500, 45000},
-	{54000, 60000},
-	{81000, 90000},
-	{108000, 120000},
-	{121500, 135000},
-	{135000, 150000},
-	{27000, 30000},   /*HT 40, MCS 8 */
-	{54000, 60000},
-	{81000, 90000},
-	{108000, 120000},
-	{162000, 180000},
-	{216000, 240000},
-	{243000, 270000},
-	{270000, 300000}, /*HT 40, MCS 15 */
-	{0, 0}
-};
-
 /* 802.1d to AC mapping. Refer pg 57 of WMM-test-plan-v1.2 */
 static const u8 up_to_ac[] = {
 	WMM_AC_BE,
@@ -154,7 +105,7 @@ struct ath6kl_vif *ath6kl_get_vif_by_index(struct ath6kl *ar, u8 if_idx)
 }
 
 /*  Performs DIX to 802.3 encapsulation for transmit packets.
- *  Assumes the entire DIX header is contiguous and that there is
+ *  Assumes the entire DIX header is contigous and that there is
  *  enough room in the buffer for a 802.3 mac header and LLC+SNAP headers.
  */
 int ath6kl_wmi_dix_2_dot3(struct wmi *wmi, struct sk_buff *skb)
@@ -421,6 +372,10 @@ int ath6kl_wmi_dot11_hdr_remove(struct wmi *wmi, struct sk_buff *skb)
 
 	switch ((le16_to_cpu(wh.frame_control)) &
 		(IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS)) {
+	case 0:
+		memcpy(eth_hdr.h_dest, wh.addr1, ETH_ALEN);
+		memcpy(eth_hdr.h_source, wh.addr2, ETH_ALEN);
+		break;
 	case IEEE80211_FCTL_TODS:
 		memcpy(eth_hdr.h_dest, wh.addr3, ETH_ALEN);
 		memcpy(eth_hdr.h_source, wh.addr2, ETH_ALEN);
@@ -430,10 +385,6 @@ int ath6kl_wmi_dot11_hdr_remove(struct wmi *wmi, struct sk_buff *skb)
 		memcpy(eth_hdr.h_source, wh.addr3, ETH_ALEN);
 		break;
 	case IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS:
-		break;
-	default:
-		memcpy(eth_hdr.h_dest, wh.addr1, ETH_ALEN);
-		memcpy(eth_hdr.h_source, wh.addr2, ETH_ALEN);
 		break;
 	}
 
@@ -449,7 +400,7 @@ int ath6kl_wmi_dot11_hdr_remove(struct wmi *wmi, struct sk_buff *skb)
 
 /*
  * Performs 802.3 to DIX encapsulation for received packets.
- * Assumes the entire 802.3 header is contiguous.
+ * Assumes the entire 802.3 header is contigous.
  */
 int ath6kl_wmi_dot3_2_dix(struct sk_buff *skb)
 {
@@ -619,7 +570,8 @@ static int ath6kl_wmi_rx_probe_req_event_rx(struct wmi *wmi, u8 *datap, int len,
 		   dlen, freq, vif->probe_req_report);
 
 	if (vif->probe_req_report || vif->nw_type == AP_NETWORK)
-		cfg80211_rx_mgmt(&vif->wdev, freq, 0, ev->data, dlen, 0);
+		cfg80211_rx_mgmt(&vif->wdev, freq, 0, ev->data, dlen, 0,
+				 GFP_ATOMIC);
 
 	return 0;
 }
@@ -658,7 +610,7 @@ static int ath6kl_wmi_rx_action_event_rx(struct wmi *wmi, u8 *datap, int len,
 		return -EINVAL;
 	}
 	ath6kl_dbg(ATH6KL_DBG_WMI, "rx_action: len=%u freq=%u\n", dlen, freq);
-	cfg80211_rx_mgmt(&vif->wdev, freq, 0, ev->data, dlen, 0);
+	cfg80211_rx_mgmt(&vif->wdev, freq, 0, ev->data, dlen, 0, GFP_ATOMIC);
 
 	return 0;
 }
@@ -1092,6 +1044,7 @@ static int ath6kl_wmi_bssinfo_event_rx(struct wmi *wmi, u8 *datap, int len,
 	u8 *buf;
 	struct ieee80211_channel *channel;
 	struct ath6kl *ar = wmi->parent_dev;
+	struct ieee80211_mgmt *mgmt;
 	struct cfg80211_bss *bss;
 
 	if (len <= sizeof(struct wmi_bss_info_hdr2))
@@ -1137,15 +1090,39 @@ static int ath6kl_wmi_bssinfo_event_rx(struct wmi *wmi, u8 *datap, int len,
 		}
 	}
 
-	bss = cfg80211_inform_bss(ar->wiphy, channel,
-				  bih->frame_type == BEACON_FTYPE ?
-					CFG80211_BSS_FTYPE_BEACON :
-					CFG80211_BSS_FTYPE_PRESP,
-				  bih->bssid, get_unaligned_le64((__le64 *)buf),
-				  get_unaligned_le16(((__le16 *)buf) + 5),
-				  get_unaligned_le16(((__le16 *)buf) + 4),
-				  buf + 8 + 2 + 2, len - 8 - 2 - 2,
-				  (bih->snr - 95) * 100, GFP_ATOMIC);
+	/*
+	 * In theory, use of cfg80211_inform_bss() would be more natural here
+	 * since we do not have the full frame. However, at least for now,
+	 * cfg80211 can only distinguish Beacon and Probe Response frames from
+	 * each other when using cfg80211_inform_bss_frame(), so let's build a
+	 * fake IEEE 802.11 header to be able to take benefit of this.
+	 */
+	mgmt = kmalloc(24 + len, GFP_ATOMIC);
+	if (mgmt == NULL)
+		return -EINVAL;
+
+	if (bih->frame_type == BEACON_FTYPE) {
+		mgmt->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT |
+						  IEEE80211_STYPE_BEACON);
+		memset(mgmt->da, 0xff, ETH_ALEN);
+	} else {
+		struct net_device *dev = vif->ndev;
+
+		mgmt->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT |
+						  IEEE80211_STYPE_PROBE_RESP);
+		memcpy(mgmt->da, dev->dev_addr, ETH_ALEN);
+	}
+	mgmt->duration = cpu_to_le16(0);
+	memcpy(mgmt->sa, bih->bssid, ETH_ALEN);
+	memcpy(mgmt->bssid, bih->bssid, ETH_ALEN);
+	mgmt->seq_ctrl = cpu_to_le16(0);
+
+	memcpy(&mgmt->u.beacon, buf, len);
+
+	bss = cfg80211_inform_bss_frame(ar->wiphy, channel, mgmt,
+					24 + len, (bih->snr - 95) * 100,
+					GFP_ATOMIC);
+	kfree(mgmt);
 	if (bss == NULL)
 		return -ENOMEM;
 	cfg80211_put_bss(ar->wiphy, bss);
@@ -1583,11 +1560,6 @@ static int ath6kl_wmi_txe_notify_event_rx(struct wmi *wmi, u8 *datap, int len,
 
 	if (len < sizeof(*ev))
 		return -EINVAL;
-
-	if (vif->nw_type != INFRA_NETWORK ||
-	    !test_bit(ATH6KL_FW_CAPABILITY_TX_ERR_NOTIFY,
-		      vif->ar->fw_capabilities))
-		return -EOPNOTSUPP;
 
 	if (vif->sme_state != SME_CONNECTED)
 		return -ENOTCONN;
@@ -2048,7 +2020,7 @@ int ath6kl_wmi_beginscan_cmd(struct wmi *wmi, u8 if_idx,
 	sc->no_cck = cpu_to_le32(no_cck);
 	sc->num_ch = num_chan;
 
-	for (band = 0; band < NUM_NL80211_BANDS; band++) {
+	for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
 		sband = ar->wiphy->bands[band];
 
 		if (!sband)
@@ -2544,7 +2516,8 @@ int ath6kl_wmi_create_pstream_cmd(struct wmi *wmi, u8 if_idx,
 	s32 nominal_phy = 0;
 	int ret;
 
-	if (!((params->user_pri <= 0x7) &&
+	if (!((params->user_pri < 8) &&
+	      (params->user_pri <= 0x7) &&
 	      (up_to_ac[params->user_pri & 0x7] == params->traffic_class) &&
 	      (params->traffic_direc == UPLINK_TRAFFIC ||
 	       params->traffic_direc == DNLINK_TRAFFIC ||
@@ -2769,10 +2742,10 @@ static int ath6kl_set_bitrate_mask64(struct wmi *wmi, u8 if_idx,
 	memset(&ratemask, 0, sizeof(ratemask));
 
 	/* only check 2.4 and 5 GHz bands, skip the rest */
-	for (band = 0; band <= NL80211_BAND_5GHZ; band++) {
+	for (band = 0; band <= IEEE80211_BAND_5GHZ; band++) {
 		/* copy legacy rate mask */
 		ratemask[band] = mask->control[band].legacy;
-		if (band == NL80211_BAND_5GHZ)
+		if (band == IEEE80211_BAND_5GHZ)
 			ratemask[band] =
 				mask->control[band].legacy << 4;
 
@@ -2798,9 +2771,9 @@ static int ath6kl_set_bitrate_mask64(struct wmi *wmi, u8 if_idx,
 		if (mode == WMI_RATES_MODE_11A ||
 		    mode == WMI_RATES_MODE_11A_HT20 ||
 		    mode == WMI_RATES_MODE_11A_HT40)
-			band = NL80211_BAND_5GHZ;
+			band = IEEE80211_BAND_5GHZ;
 		else
-			band = NL80211_BAND_2GHZ;
+			band = IEEE80211_BAND_2GHZ;
 		cmd->ratemask[mode] = cpu_to_le64(ratemask[band]);
 	}
 
@@ -2821,10 +2794,10 @@ static int ath6kl_set_bitrate_mask32(struct wmi *wmi, u8 if_idx,
 	memset(&ratemask, 0, sizeof(ratemask));
 
 	/* only check 2.4 and 5 GHz bands, skip the rest */
-	for (band = 0; band <= NL80211_BAND_5GHZ; band++) {
+	for (band = 0; band <= IEEE80211_BAND_5GHZ; band++) {
 		/* copy legacy rate mask */
 		ratemask[band] = mask->control[band].legacy;
-		if (band == NL80211_BAND_5GHZ)
+		if (band == IEEE80211_BAND_5GHZ)
 			ratemask[band] =
 				mask->control[band].legacy << 4;
 
@@ -2848,9 +2821,9 @@ static int ath6kl_set_bitrate_mask32(struct wmi *wmi, u8 if_idx,
 		if (mode == WMI_RATES_MODE_11A ||
 		    mode == WMI_RATES_MODE_11A_HT20 ||
 		    mode == WMI_RATES_MODE_11A_HT40)
-			band = NL80211_BAND_5GHZ;
+			band = IEEE80211_BAND_5GHZ;
 		else
-			band = NL80211_BAND_2GHZ;
+			band = IEEE80211_BAND_2GHZ;
 		cmd->ratemask[mode] = cpu_to_le32(ratemask[band]);
 	}
 
@@ -2865,8 +2838,7 @@ int ath6kl_wmi_set_bitrate_mask(struct wmi *wmi, u8 if_idx,
 {
 	struct ath6kl *ar = wmi->parent_dev;
 
-	if (test_bit(ATH6KL_FW_CAPABILITY_64BIT_RATES,
-		     ar->fw_capabilities))
+	if (ar->hw.flags & ATH6KL_HW_64BIT_RATES)
 		return ath6kl_set_bitrate_mask64(wmi, if_idx, mask);
 	else
 		return ath6kl_set_bitrate_mask32(wmi, if_idx, mask);
@@ -3173,7 +3145,7 @@ int ath6kl_wmi_set_keepalive_cmd(struct wmi *wmi, u8 if_idx,
 }
 
 int ath6kl_wmi_set_htcap_cmd(struct wmi *wmi, u8 if_idx,
-			     enum nl80211_band band,
+			     enum ieee80211_band band,
 			     struct ath6kl_htcap *htcap)
 {
 	struct sk_buff *skb;
@@ -3186,7 +3158,7 @@ int ath6kl_wmi_set_htcap_cmd(struct wmi *wmi, u8 if_idx,
 	cmd = (struct wmi_set_htcap_cmd *) skb->data;
 
 	/*
-	 * NOTE: Band in firmware matches enum nl80211_band, it is unlikely
+	 * NOTE: Band in firmware matches enum ieee80211_band, it is unlikely
 	 * this will be changed in firmware. If at all there is any change in
 	 * band value, the host needs to be fixed.
 	 */
@@ -3307,11 +3279,9 @@ int ath6kl_wmi_set_regdomain_cmd(struct wmi *wmi, const char *alpha2)
 				   NO_SYNC_WMIFLAG);
 }
 
-s32 ath6kl_wmi_get_rate(struct wmi *wmi, s8 rate_index)
+s32 ath6kl_wmi_get_rate(s8 rate_index)
 {
-	struct ath6kl *ar = wmi->parent_dev;
 	u8 sgi = 0;
-	s32 ret;
 
 	if (rate_index == RATE_AUTO)
 		return 0;
@@ -3322,20 +3292,10 @@ s32 ath6kl_wmi_get_rate(struct wmi *wmi, s8 rate_index)
 		sgi = 1;
 	}
 
-	if (test_bit(ATH6KL_FW_CAPABILITY_RATETABLE_MCS15,
-		     ar->fw_capabilities)) {
-		if (WARN_ON(rate_index >= ARRAY_SIZE(wmi_rate_tbl_mcs15)))
-			return 0;
+	if (WARN_ON(rate_index > RATE_MCS_7_40))
+		rate_index = RATE_MCS_7_40;
 
-		ret = wmi_rate_tbl_mcs15[(u32) rate_index][sgi];
-	} else {
-		if (WARN_ON(rate_index >= ARRAY_SIZE(wmi_rate_tbl)))
-			return 0;
-
-		ret = wmi_rate_tbl[(u32) rate_index][sgi];
-	}
-
-	return ret;
+	return wmi_rate_tbl[(u32) rate_index][sgi];
 }
 
 static int ath6kl_wmi_get_pmkid_list_event_rx(struct wmi *wmi, u8 *datap,
@@ -3520,7 +3480,7 @@ int ath6kl_wmi_set_pvb_cmd(struct wmi *wmi, u8 if_idx, u16 aid,
 	ret = ath6kl_wmi_cmd_send(wmi, if_idx, skb, WMI_AP_SET_PVB_CMDID,
 				  NO_SYNC_WMIFLAG);
 
-	return ret;
+	return 0;
 }
 
 int ath6kl_wmi_set_rx_frame_format_cmd(struct wmi *wmi, u8 if_idx,

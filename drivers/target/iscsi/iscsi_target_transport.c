@@ -1,6 +1,5 @@
 #include <linux/spinlock.h>
 #include <linux/list.h>
-#include <linux/module.h>
 #include <target/iscsi/iscsi_transport.h>
 
 static LIST_HEAD(g_transport_list);
@@ -27,7 +26,8 @@ struct iscsit_transport *iscsit_get_transport(int type)
 
 void iscsit_put_transport(struct iscsit_transport *t)
 {
-	module_put(t->owner);
+	if (t->owner)
+		module_put(t->owner);
 }
 
 int iscsit_register_transport(struct iscsit_transport *t)

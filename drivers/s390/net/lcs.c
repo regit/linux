@@ -88,8 +88,10 @@ static debug_info_t *lcs_dbf_trace;
 static void
 lcs_unregister_debug_facility(void)
 {
-	debug_unregister(lcs_dbf_setup);
-	debug_unregister(lcs_dbf_trace);
+	if (lcs_dbf_setup)
+		debug_unregister(lcs_dbf_setup);
+	if (lcs_dbf_trace)
+		debug_unregister(lcs_dbf_trace);
 }
 
 static int
@@ -1761,8 +1763,8 @@ lcs_get_control(struct lcs_card *card, struct lcs_cmd *cmd)
 			lcs_schedule_recovery(card);
 			break;
 		case LCS_CMD_STOPLAN:
-			pr_warn("Stoplan for %s initiated by LGW\n",
-				card->dev->name);
+			pr_warning("Stoplan for %s initiated by LGW.\n",
+				   card->dev->name);
 			if (card->dev)
 				netif_carrier_off(card->dev);
 			break;
@@ -1888,7 +1890,7 @@ lcs_stop_device(struct net_device *dev)
 	rc = lcs_stopcard(card);
 	if (rc)
 		dev_err(&card->dev->dev,
-			" Shutting down the LCS device failed\n");
+			" Shutting down the LCS device failed\n ");
 	return rc;
 }
 
@@ -1941,16 +1943,15 @@ static ssize_t
 lcs_portno_store (struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
         struct lcs_card *card;
-	int rc;
-	s16 value;
+	int value, rc;
 
 	card = dev_get_drvdata(dev);
 
         if (!card)
                 return 0;
 
-	rc = kstrtos16(buf, 0, &value);
-	if (rc)
+	rc = sscanf(buf, "%d", &value);
+	if (rc != 1)
 		return -EINVAL;
         /* TODO: sanity checks */
         card->portno = value;
@@ -2006,8 +2007,8 @@ lcs_timeout_store (struct device *dev, struct device_attribute *attr, const char
         if (!card)
                 return 0;
 
-	rc = kstrtouint(buf, 0, &value);
-	if (rc)
+	rc = sscanf(buf, "%u", &value);
+	if (rc != 1)
 		return -EINVAL;
         /* TODO: sanity checks */
         card->lancmd_timeout = value;
@@ -2150,7 +2151,7 @@ lcs_new_device(struct ccwgroup_device *ccwgdev)
 	rc = lcs_detect(card);
 	if (rc) {
 		LCS_DBF_TEXT(2, setup, "dtctfail");
-		dev_err(&ccwgdev->dev,
+		dev_err(&card->dev->dev,
 			"Detecting a network adapter for LCS devices"
 			" failed with rc=%d (0x%x)\n", rc, rc);
 		lcs_stopcard(card);

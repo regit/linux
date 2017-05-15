@@ -7,6 +7,9 @@
  *
  */
 
+
+#include <linux/module.h>
+
 #include <linux/kernel.h>
 #include <linux/delay.h>
 #include <linux/types.h>
@@ -261,6 +264,7 @@ static const struct net_device_ops e100_netdev_ops = {
 	.ndo_do_ioctl		= e100_ioctl,
 	.ndo_set_mac_address	= e100_set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_config		= e100_set_config,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= e100_netpoll,
@@ -408,7 +412,6 @@ etrax_ethernet_init(void)
 	led_next_time = jiffies;
 	return 0;
 }
-device_initcall(etrax_ethernet_init)
 
 /* set MAC address of the interface. called from the core after a
  * SIOCSIFADDR ioctl, and from the bootup above.
@@ -1103,7 +1106,7 @@ e100_send_packet(struct sk_buff *skb, struct net_device *dev)
 
 	myNextTxDesc->skb = skb;
 
-	netif_trans_update(dev); /* NETIF_F_LLTX driver :( */
+	dev->trans_start = jiffies; /* NETIF_F_LLTX driver :( */
 
 	e100_hardware_send_packet(np, buf, skb->len);
 
@@ -1493,6 +1496,7 @@ e100_set_config(struct net_device *dev, struct ifmap *map)
 		case IF_PORT_AUI:
 			spin_unlock(&np->lock);
 			return -EOPNOTSUPP;
+			break;
 		default:
 			printk(KERN_ERR "%s: Invalid media selected", dev->name);
 			spin_unlock(&np->lock);
@@ -1712,6 +1716,11 @@ e100_netpoll(struct net_device* netdev)
 }
 #endif
 
+static int
+etrax_init_module(void)
+{
+	return etrax_ethernet_init();
+}
 
 static int __init
 e100_boot_setup(char* str)
@@ -1734,3 +1743,5 @@ e100_boot_setup(char* str)
 }
 
 __setup("etrax100_eth=", e100_boot_setup);
+
+module_init(etrax_init_module);

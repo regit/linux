@@ -9,7 +9,7 @@
  * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/i2c.h>
 #include <linux/mfd/max8925.h>
@@ -37,7 +37,7 @@ static inline int max8925_read_device(struct i2c_client *i2c,
 static inline int max8925_write_device(struct i2c_client *i2c,
 				       int reg, int bytes, void *src)
 {
-	unsigned char buf[9];
+	unsigned char buf[bytes + 1];
 	int ret;
 
 	buf[0] = (unsigned char)reg;
@@ -133,6 +133,7 @@ static const struct i2c_device_id max8925_id_table[] = {
 	{ "max8925", 0 },
 	{ },
 };
+MODULE_DEVICE_TABLE(i2c, max8925_id_table);
 
 static int max8925_dt_init(struct device_node *np, struct device *dev,
 			   struct max8925_platform_data *pdata)
@@ -214,7 +215,7 @@ static int max8925_remove(struct i2c_client *client)
 #ifdef CONFIG_PM_SLEEP
 static int max8925_suspend(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 	struct max8925_chip *chip = i2c_get_clientdata(client);
 
 	if (device_may_wakeup(dev) && chip->wakeup_flag)
@@ -224,7 +225,7 @@ static int max8925_suspend(struct device *dev)
 
 static int max8925_resume(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 	struct max8925_chip *chip = i2c_get_clientdata(client);
 
 	if (device_may_wakeup(dev) && chip->wakeup_flag)
@@ -239,10 +240,12 @@ static const struct of_device_id max8925_dt_ids[] = {
 	{ .compatible = "maxim,max8925", },
 	{},
 };
+MODULE_DEVICE_TABLE(of, max8925_dt_ids);
 
 static struct i2c_driver max8925_driver = {
 	.driver	= {
 		.name	= "max8925",
+		.owner	= THIS_MODULE,
 		.pm     = &max8925_pm_ops,
 		.of_match_table = max8925_dt_ids,
 	},
@@ -254,11 +257,19 @@ static struct i2c_driver max8925_driver = {
 static int __init max8925_i2c_init(void)
 {
 	int ret;
-
 	ret = i2c_add_driver(&max8925_driver);
 	if (ret != 0)
 		pr_err("Failed to register MAX8925 I2C driver: %d\n", ret);
-
 	return ret;
 }
 subsys_initcall(max8925_i2c_init);
+
+static void __exit max8925_i2c_exit(void)
+{
+	i2c_del_driver(&max8925_driver);
+}
+module_exit(max8925_i2c_exit);
+
+MODULE_DESCRIPTION("I2C Driver for Maxim 8925");
+MODULE_AUTHOR("Haojian Zhuang <haojian.zhuang@marvell.com>");
+MODULE_LICENSE("GPL");

@@ -236,17 +236,14 @@ static int si21_writeregs(struct si21xx_state *state, u8 reg1,
 				.len = len + 1
 	};
 
-	if (len > sizeof(buf) - 1)
-		return -EINVAL;
-
 	msg.buf[0] =  reg1;
 	memcpy(msg.buf + 1, data, len);
 
 	ret = i2c_transfer(state->i2c, &msg, 1);
 
 	if (ret != 1)
-		dprintk("%s: writereg error (reg1 == 0x%02x, data == 0x%02x, ret == %i)\n",
-			__func__, reg1, data[0], ret);
+		dprintk("%s: writereg error (reg1 == 0x%02x, data == 0x%02x, "
+			"ret == %i)\n", __func__, reg1, data[0], ret);
 
 	return (ret != 1) ? -EREMOTEIO : 0;
 }
@@ -265,8 +262,8 @@ static int si21_writereg(struct si21xx_state *state, u8 reg, u8 data)
 	ret = i2c_transfer(state->i2c, &msg, 1);
 
 	if (ret != 1)
-		dprintk("%s: writereg error (reg == 0x%02x, data == 0x%02x, ret == %i)\n",
-			__func__, reg, data, ret);
+		dprintk("%s: writereg error (reg == 0x%02x, data == 0x%02x, "
+			"ret == %i)\n", __func__, reg, data, ret);
 
 	return (ret != 1) ? -EREMOTEIO : 0;
 }
@@ -410,7 +407,7 @@ static int si21xx_send_diseqc_msg(struct dvb_frontend *fe,
 }
 
 static int si21xx_send_diseqc_burst(struct dvb_frontend *fe,
-				    enum fe_sec_mini_cmd burst)
+						fe_sec_mini_cmd_t burst)
 {
 	struct si21xx_state *state = fe->demodulator_priv;
 	u8 val;
@@ -434,7 +431,7 @@ static int si21xx_send_diseqc_burst(struct dvb_frontend *fe,
 	return 0;
 }
 /*	30.06.2008 */
-static int si21xx_set_tone(struct dvb_frontend *fe, enum fe_sec_tone_mode tone)
+static int si21xx_set_tone(struct dvb_frontend *fe, fe_sec_tone_mode_t tone)
 {
 	struct si21xx_state *state = fe->demodulator_priv;
 	u8 val;
@@ -454,7 +451,7 @@ static int si21xx_set_tone(struct dvb_frontend *fe, enum fe_sec_tone_mode tone)
 	}
 }
 
-static int si21xx_set_voltage(struct dvb_frontend *fe, enum fe_sec_voltage volt)
+static int si21xx_set_voltage(struct dvb_frontend *fe, fe_sec_voltage_t volt)
 {
 	struct si21xx_state *state = fe->demodulator_priv;
 
@@ -536,7 +533,7 @@ static int si21xx_init(struct dvb_frontend *fe)
 
 }
 
-static int si21_read_status(struct dvb_frontend *fe, enum fe_status *status)
+static int si21_read_status(struct dvb_frontend *fe, fe_status_t *status)
 {
 	struct si21xx_state *state = fe->demodulator_priv;
 	u8 regs_read[2];
@@ -641,7 +638,7 @@ static int si21_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
 /*	initiates a channel acquisition sequence
 	using the specified symbol rate and code rate */
 static int si21xx_setacquire(struct dvb_frontend *fe, int symbrate,
-			     enum fe_code_rate crate)
+						fe_code_rate_t crate)
 {
 
 	struct si21xx_state *state = fe->demodulator_priv;
@@ -866,7 +863,7 @@ static void si21xx_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops si21xx_ops = {
+static struct dvb_frontend_ops si21xx_ops = {
 	.delsys = { SYS_DVBS },
 	.info = {
 		.name			= "SL SI21XX DVB-S",

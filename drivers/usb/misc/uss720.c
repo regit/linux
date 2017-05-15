@@ -124,8 +124,12 @@ static void async_complete(struct urb *urb)
 	} else if (rq->dr->bRequest == 3) {
 		memcpy(priv->reg, rq->reg, sizeof(priv->reg));
 #if 0
-		dev_dbg(&priv->usbdev->dev, "async_complete regs %7ph\n",
-			priv->reg);
+		dev_dbg(&priv->usbdev->dev,
+			"async_complete regs %02x %02x %02x %02x %02x %02x %02x\n",
+			(unsigned int)priv->reg[0], (unsigned int)priv->reg[1],
+			(unsigned int)priv->reg[2], (unsigned int)priv->reg[3],
+			(unsigned int)priv->reg[4], (unsigned int)priv->reg[5],
+			(unsigned int)priv->reg[6]);
 #endif
 		/* if nAck interrupts are enabled and we have an interrupt, call the interrupt procedure */
 		if (rq->reg[2] & rq->reg[1] & 0x10 && pp)
@@ -150,8 +154,10 @@ static struct uss720_async_request *submit_async_request(struct parport_uss720_p
 	if (!usbdev)
 		return NULL;
 	rq = kzalloc(sizeof(struct uss720_async_request), mem_flags);
-	if (!rq)
+	if (!rq) {
+		dev_err(&usbdev->dev, "submit_async_request out of memory\n");
 		return NULL;
+	}
 	kref_init(&rq->ref_count);
 	INIT_LIST_HEAD(&rq->asynclist);
 	init_completion(&rq->compl);
@@ -160,6 +166,7 @@ static struct uss720_async_request *submit_async_request(struct parport_uss720_p
 	rq->urb = usb_alloc_urb(0, mem_flags);
 	if (!rq->urb) {
 		kref_put(&rq->ref_count, destroy_async);
+		dev_err(&usbdev->dev, "submit_async_request out of memory\n");
 		return NULL;
 	}
 	rq->dr = kmalloc(sizeof(*rq->dr), mem_flags);
@@ -711,8 +718,7 @@ static int uss720_probe(struct usb_interface *intf,
 	/*
 	 * Allocate parport interface 
 	 */
-	priv = kzalloc(sizeof(struct parport_uss720_private), GFP_KERNEL);
-	if (!priv) {
+	if (!(priv = kzalloc(sizeof(struct parport_uss720_private), GFP_KERNEL))) {
 		usb_put_dev(usbdev);
 		return -ENOMEM;
 	}
@@ -721,8 +727,7 @@ static int uss720_probe(struct usb_interface *intf,
 	kref_init(&priv->ref_count);
 	spin_lock_init(&priv->asynclock);
 	INIT_LIST_HEAD(&priv->asynclist);
-	pp = parport_register_port(0, PARPORT_IRQ_NONE, PARPORT_DMA_NONE, &parport_uss720_ops);
-	if (!pp) {
+	if (!(pp = parport_register_port(0, PARPORT_IRQ_NONE, PARPORT_DMA_NONE, &parport_uss720_ops))) {
 		printk(KERN_WARNING "uss720: could not register parport\n");
 		goto probe_abort;
 	}
@@ -737,7 +742,9 @@ static int uss720_probe(struct usb_interface *intf,
 	set_1284_register(pp, 2, 0x0c, GFP_KERNEL);
 	/* debugging */
 	get_1284_register(pp, 0, &reg, GFP_KERNEL);
-	dev_dbg(&intf->dev, "reg: %7ph\n", priv->reg);
+	dev_dbg(&intf->dev, "reg: %02x %02x %02x %02x %02x %02x %02x\n",
+		priv->reg[0], priv->reg[1], priv->reg[2], priv->reg[3],
+		priv->reg[4], priv->reg[5], priv->reg[6]);
 
 	endpoint = &interface->endpoint[2];
 	dev_dbg(&intf->dev, "epaddr %d interval %d\n",

@@ -160,7 +160,7 @@ MODULE_PARM_DESC(id, "ID string for the Audiowerk2 soundcard.");
 module_param_array(enable, bool, NULL, 0444);
 MODULE_PARM_DESC(enable, "Enable Audiowerk2 soundcard.");
 
-static const struct pci_device_id snd_aw2_ids[] = {
+static DEFINE_PCI_DEVICE_TABLE(snd_aw2_ids) = {
 	{PCI_VENDOR_ID_PHILIPS, PCI_DEVICE_ID_PHILIPS_SAA7146, 0, 0,
 	 0, 0, 0},
 	{0}
@@ -179,7 +179,7 @@ static struct pci_driver aw2_driver = {
 module_pci_driver(aw2_driver);
 
 /* operators for playback PCM alsa interface */
-static const struct snd_pcm_ops snd_aw2_playback_ops = {
+static struct snd_pcm_ops snd_aw2_playback_ops = {
 	.open = snd_aw2_pcm_playback_open,
 	.close = snd_aw2_pcm_playback_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -191,7 +191,7 @@ static const struct snd_pcm_ops snd_aw2_playback_ops = {
 };
 
 /* operators for capture PCM alsa interface */
-static const struct snd_pcm_ops snd_aw2_capture_ops = {
+static struct snd_pcm_ops snd_aw2_capture_ops = {
 	.open = snd_aw2_pcm_capture_open,
 	.close = snd_aw2_pcm_capture_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -229,7 +229,9 @@ static int snd_aw2_dev_free(struct snd_device *device)
 	if (chip->irq >= 0)
 		free_irq(chip->irq, (void *)chip);
 	/* release the i/o ports & memory */
-	iounmap(chip->iobase_virt);
+	if (chip->iobase_virt)
+		iounmap(chip->iobase_virt);
+
 	pci_release_regions(chip->pci);
 	/* disable the PCI entry */
 	pci_disable_device(chip->pci);
@@ -258,8 +260,8 @@ static int snd_aw2_create(struct snd_card *card,
 	pci_set_master(pci);
 
 	/* check PCI availability (32bit DMA) */
-	if ((dma_set_mask(&pci->dev, DMA_BIT_MASK(32)) < 0) ||
-	    (dma_set_coherent_mask(&pci->dev, DMA_BIT_MASK(32)) < 0)) {
+	if ((pci_set_dma_mask(pci, DMA_BIT_MASK(32)) < 0) ||
+	    (pci_set_consistent_dma_mask(pci, DMA_BIT_MASK(32)) < 0)) {
 		dev_err(card->dev, "Impossible to set 32bit mask DMA\n");
 		pci_disable_device(pci);
 		return -ENXIO;
@@ -723,10 +725,19 @@ static int snd_aw2_new_pcm(struct aw2 *chip)
 static int snd_aw2_control_switch_capture_info(struct snd_kcontrol *kcontrol,
 					       struct snd_ctl_elem_info *uinfo)
 {
-	static const char * const texts[2] = {
+	static char *texts[2] = {
 		"Analog", "Digital"
 	};
-	return snd_ctl_enum_info(uinfo, 1, 2, texts);
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->count = 1;
+	uinfo->value.enumerated.items = 2;
+	if (uinfo->value.enumerated.item >= uinfo->value.enumerated.items) {
+		uinfo->value.enumerated.item =
+		    uinfo->value.enumerated.items - 1;
+	}
+	strcpy(uinfo->value.enumerated.name,
+	       texts[uinfo->value.enumerated.item]);
+	return 0;
 }
 
 static int snd_aw2_control_switch_capture_get(struct snd_kcontrol *kcontrol,

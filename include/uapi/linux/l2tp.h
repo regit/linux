@@ -108,7 +108,7 @@ enum {
 	L2TP_ATTR_VLAN_ID,		/* u16 */
 	L2TP_ATTR_COOKIE,		/* 0, 4 or 8 bytes */
 	L2TP_ATTR_PEER_COOKIE,		/* 0, 4 or 8 bytes */
-	L2TP_ATTR_DEBUG,		/* u32, enum l2tp_debug_flags */
+	L2TP_ATTR_DEBUG,		/* u32 */
 	L2TP_ATTR_RECV_SEQ,		/* u8 */
 	L2TP_ATTR_SEND_SEQ,		/* u8 */
 	L2TP_ATTR_LNS_MODE,		/* u8 */
@@ -124,9 +124,8 @@ enum {
 	L2TP_ATTR_STATS,		/* nested */
 	L2TP_ATTR_IP6_SADDR,		/* struct in6_addr */
 	L2TP_ATTR_IP6_DADDR,		/* struct in6_addr */
-	L2TP_ATTR_UDP_ZERO_CSUM6_TX,	/* flag */
-	L2TP_ATTR_UDP_ZERO_CSUM6_RX,	/* flag */
-	L2TP_ATTR_PAD,
+	L2TP_ATTR_UDP_ZERO_CSUM6_TX,	/* u8 */
+	L2TP_ATTR_UDP_ZERO_CSUM6_RX,	/* u8 */
 	__L2TP_ATTR_MAX,
 };
 
@@ -143,7 +142,6 @@ enum {
 	L2TP_ATTR_RX_SEQ_DISCARDS,	/* u64 */
 	L2TP_ATTR_RX_OOS_PACKETS,	/* u64 */
 	L2TP_ATTR_RX_ERRORS,		/* u64 */
-	L2TP_ATTR_STATS_PAD,
 	__L2TP_ATTR_STATS_MAX,
 };
 
@@ -175,26 +173,10 @@ enum l2tp_seqmode {
 	L2TP_SEQ_ALL = 2,
 };
 
-/**
- * enum l2tp_debug_flags - debug message categories for L2TP tunnels/sessions
- *
- * @L2TP_MSG_DEBUG: verbose debug (if compiled in)
- * @L2TP_MSG_CONTROL: userspace - kernel interface
- * @L2TP_MSG_SEQ: sequence numbers
- * @L2TP_MSG_DATA: data packets
- */
-enum l2tp_debug_flags {
-	L2TP_MSG_DEBUG		= (1 << 0),
-	L2TP_MSG_CONTROL	= (1 << 1),
-	L2TP_MSG_SEQ		= (1 << 2),
-	L2TP_MSG_DATA		= (1 << 3),
-};
-
 /*
  * NETLINK_GENERIC related info
  */
 #define L2TP_GENL_NAME		"l2tp"
 #define L2TP_GENL_VERSION	0x1
-#define L2TP_GENL_MCGROUP       "l2tp"
 
 #endif /* _UAPI_LINUX_L2TP_H_ */

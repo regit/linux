@@ -17,29 +17,39 @@
 #include <linux/init.h>
 #include <linux/smp.h>
 #include <linux/io.h>
-
 #include <asm/smp_plat.h>
+#include <mach/common.h>
+#include <mach/r8a7791.h>
+#include <mach/rcar-gen2.h>
 
-#include "common.h"
-#include "platsmp-apmu.h"
-#include "r8a7791.h"
-#include "rcar-gen2.h"
-
-static struct rcar_apmu_config r8a7791_apmu_config[] = {
-	{
-		.iomem = DEFINE_RES_MEM(0xe6152000, 0x188),
-		.cpus = { 0, 1 },
-	}
-};
+#define RST		0xe6160000
+#define CA15BAR		0x0020
+#define CA15RESCNT	0x0040
+#define RAM		0xe6300000
 
 static void __init r8a7791_smp_prepare_cpus(unsigned int max_cpus)
 {
-	/* let APMU code install data related to shmobile_boot_vector */
-	shmobile_smp_apmu_prepare_cpus(max_cpus,
-				       r8a7791_apmu_config,
-				       ARRAY_SIZE(r8a7791_apmu_config));
+	void __iomem *p;
+	u32 bar;
 
-	rcar_gen2_pm_init();
+	/* let APMU code install data related to shmobile_boot_vector */
+	shmobile_smp_apmu_prepare_cpus(max_cpus);
+
+	/* RAM for jump stub, because BAR requires 256KB aligned address */
+	p = ioremap_nocache(RAM, shmobile_boot_size);
+	memcpy_toio(p, shmobile_boot_vector, shmobile_boot_size);
+	iounmap(p);
+
+	/* setup reset vectors */
+	p = ioremap_nocache(RST, 0x63);
+	bar = (RAM >> 8) & 0xfffffc00;
+	writel_relaxed(bar, p + CA15BAR);
+	writel_relaxed(bar | 0x10, p + CA15BAR);
+
+	/* enable clocks to all CPUs */
+	writel_relaxed((readl_relaxed(p + CA15RESCNT) & ~0x0f) | 0xa5a50000,
+		       p + CA15RESCNT);
+	iounmap(p);
 }
 
 static int r8a7791_smp_boot_secondary(unsigned int cpu,
@@ -54,11 +64,11 @@ static int r8a7791_smp_boot_secondary(unsigned int cpu,
 	return shmobile_smp_apmu_boot_secondary(cpu, idle);
 }
 
-const struct smp_operations r8a7791_smp_ops __initconst = {
+struct smp_operations r8a7791_smp_ops __initdata = {
 	.smp_prepare_cpus	= r8a7791_smp_prepare_cpus,
 	.smp_boot_secondary	= r8a7791_smp_boot_secondary,
 #ifdef CONFIG_HOTPLUG_CPU
-	.cpu_can_disable	= shmobile_smp_cpu_can_disable,
+	.cpu_disable		= shmobile_smp_cpu_disable,
 	.cpu_die		= shmobile_smp_apmu_cpu_die,
 	.cpu_kill		= shmobile_smp_apmu_cpu_kill,
 #endif

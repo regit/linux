@@ -110,9 +110,9 @@ static void em_sti_disable(struct em_sti_priv *p)
 	clk_disable_unprepare(p->clk);
 }
 
-static u64 em_sti_count(struct em_sti_priv *p)
+static cycle_t em_sti_count(struct em_sti_priv *p)
 {
-	u64 ticks;
+	cycle_t ticks;
 	unsigned long flags;
 
 	/* the STI hardware buffers the 48-bit count, but to
@@ -121,14 +121,14 @@ static u64 em_sti_count(struct em_sti_priv *p)
 	 * Always read STI_COUNT_H before STI_COUNT_L.
 	 */
 	raw_spin_lock_irqsave(&p->lock, flags);
-	ticks = (u64)(em_sti_read(p, STI_COUNT_H) & 0xffff) << 32;
+	ticks = (cycle_t)(em_sti_read(p, STI_COUNT_H) & 0xffff) << 32;
 	ticks |= em_sti_read(p, STI_COUNT_L);
 	raw_spin_unlock_irqrestore(&p->lock, flags);
 
 	return ticks;
 }
 
-static u64 em_sti_set_next(struct em_sti_priv *p, u64 next)
+static cycle_t em_sti_set_next(struct em_sti_priv *p, cycle_t next)
 {
 	unsigned long flags;
 
@@ -198,7 +198,7 @@ static struct em_sti_priv *cs_to_em_sti(struct clocksource *cs)
 	return container_of(cs, struct em_sti_priv, cs);
 }
 
-static u64 em_sti_clocksource_read(struct clocksource *cs)
+static cycle_t em_sti_clocksource_read(struct clocksource *cs)
 {
 	return em_sti_count(cs_to_em_sti(cs));
 }
@@ -210,7 +210,7 @@ static int em_sti_clocksource_enable(struct clocksource *cs)
 
 	ret = em_sti_start(p, USER_CLOCKSOURCE);
 	if (!ret)
-		__clocksource_update_freq_hz(cs, p->rate);
+		__clocksource_updatefreq_hz(cs, p->rate);
 	return ret;
 }
 
@@ -228,6 +228,7 @@ static int em_sti_register_clocksource(struct em_sti_priv *p)
 {
 	struct clocksource *cs = &p->cs;
 
+	memset(cs, 0, sizeof(*cs));
 	cs->name = dev_name(&p->pdev->dev);
 	cs->rating = 200;
 	cs->read = em_sti_clocksource_read;
@@ -250,28 +251,40 @@ static struct em_sti_priv *ced_to_em_sti(struct clock_event_device *ced)
 	return container_of(ced, struct em_sti_priv, ced);
 }
 
-static int em_sti_clock_event_shutdown(struct clock_event_device *ced)
-{
-	struct em_sti_priv *p = ced_to_em_sti(ced);
-	em_sti_stop(p, USER_CLOCKEVENT);
-	return 0;
-}
-
-static int em_sti_clock_event_set_oneshot(struct clock_event_device *ced)
+static void em_sti_clock_event_mode(enum clock_event_mode mode,
+				    struct clock_event_device *ced)
 {
 	struct em_sti_priv *p = ced_to_em_sti(ced);
 
-	dev_info(&p->pdev->dev, "used for oneshot clock events\n");
-	em_sti_start(p, USER_CLOCKEVENT);
-	clockevents_config(&p->ced, p->rate);
-	return 0;
+	/* deal with old setting first */
+	switch (ced->mode) {
+	case CLOCK_EVT_MODE_ONESHOT:
+		em_sti_stop(p, USER_CLOCKEVENT);
+		break;
+	default:
+		break;
+	}
+
+	switch (mode) {
+	case CLOCK_EVT_MODE_ONESHOT:
+		dev_info(&p->pdev->dev, "used for oneshot clock events\n");
+		em_sti_start(p, USER_CLOCKEVENT);
+		clockevents_config(&p->ced, p->rate);
+		break;
+	case CLOCK_EVT_MODE_SHUTDOWN:
+	case CLOCK_EVT_MODE_UNUSED:
+		em_sti_stop(p, USER_CLOCKEVENT);
+		break;
+	default:
+		break;
+	}
 }
 
 static int em_sti_clock_event_next(unsigned long delta,
 				   struct clock_event_device *ced)
 {
 	struct em_sti_priv *p = ced_to_em_sti(ced);
-	u64 next;
+	cycle_t next;
 	int safe;
 
 	next = em_sti_set_next(p, em_sti_count(p) + delta);
@@ -284,17 +297,17 @@ static void em_sti_register_clockevent(struct em_sti_priv *p)
 {
 	struct clock_event_device *ced = &p->ced;
 
+	memset(ced, 0, sizeof(*ced));
 	ced->name = dev_name(&p->pdev->dev);
 	ced->features = CLOCK_EVT_FEAT_ONESHOT;
 	ced->rating = 200;
 	ced->cpumask = cpu_possible_mask;
 	ced->set_next_event = em_sti_clock_event_next;
-	ced->set_state_shutdown = em_sti_clock_event_shutdown;
-	ced->set_state_oneshot = em_sti_clock_event_set_oneshot;
+	ced->set_mode = em_sti_clock_event_mode;
 
 	dev_info(&p->pdev->dev, "used for clock events\n");
 
-	/* Register with dummy 1 Hz value, gets updated in ->set_state_oneshot() */
+	/* Register with dummy 1 Hz value, gets updated in ->set_mode() */
 	clockevents_config_and_register(ced, 1, 2, 0xffffffff);
 }
 

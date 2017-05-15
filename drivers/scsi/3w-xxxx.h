@@ -1,7 +1,7 @@
 /* 
    3w-xxxx.h -- 3ware Storage Controller device driver for Linux.
    
-   Written By: Adam Radford <aradford@gmail.com>
+   Written By: Adam Radford <linuxraid@lsi.com>
    Modifications By: Joel Jacobson <linux@3ware.com>
    		     Arnaldo Carvalho de Melo <acme@conectiva.com.br>
                      Brad Strand <linux@3ware.com>
@@ -45,8 +45,7 @@
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 
    Bugs/Comments/Suggestions should be mailed to:                            
-
-   aradford@gmail.com
+   linuxraid@lsi.com
    
    For more information, goto:
    http://www.lsi.com
@@ -195,6 +194,11 @@ static unsigned char tw_sense_table[][4] =
 #define TW_AEN_DRIVE_ERROR       0x000A
 #define TW_AEN_SMART_FAIL        0x000F
 #define TW_AEN_SBUF_FAIL         0x0024
+
+/* Phase defines */
+#define TW_PHASE_INITIAL 0
+#define TW_PHASE_SINGLE 1
+#define TW_PHASE_SGLIST 2
 
 /* Misc defines */
 #define TW_ALIGNMENT_6000		      64 /* 64 bytes */
@@ -388,8 +392,6 @@ typedef struct TAG_TW_Passthru
 	unsigned char padding[12];
 } TW_Passthru;
 
-#pragma pack()
-
 typedef struct TAG_TW_Device_Extension {
 	u32			base_addr;
 	unsigned long		*alignment_virtual_address[TW_Q_LENGTH];
@@ -427,5 +429,7 @@ typedef struct TAG_TW_Device_Extension {
 	volatile int		chrdev_request_id;
 	wait_queue_head_t	ioctl_wqueue;
 } TW_Device_Extension;
+
+#pragma pack()
 
 #endif /* _3W_XXXX_H */

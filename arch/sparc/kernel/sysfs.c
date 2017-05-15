@@ -1,4 +1,4 @@
-/* sysfs.c: Topology sysfs support code for sparc64.
+/* sysfs.c: Toplogy sysfs support code for sparc64.
  *
  * Copyright (C) 2007 David S. Miller <davem@davemloft.net>
  */
@@ -221,7 +221,7 @@ static struct device_attribute cpu_core_attrs[] = {
 
 static DEFINE_PER_CPU(struct cpu, cpu_devices);
 
-static int register_cpu_online(unsigned int cpu)
+static void register_cpu_online(unsigned int cpu)
 {
 	struct cpu *c = &per_cpu(cpu_devices, cpu);
 	struct device *s = &c->dev;
@@ -231,12 +231,11 @@ static int register_cpu_online(unsigned int cpu)
 		device_create_file(s, &cpu_core_attrs[i]);
 
 	register_mmu_stats(s);
-	return 0;
 }
 
-static int unregister_cpu_online(unsigned int cpu)
-{
 #ifdef CONFIG_HOTPLUG_CPU
+static void unregister_cpu_online(unsigned int cpu)
+{
 	struct cpu *c = &per_cpu(cpu_devices, cpu);
 	struct device *s = &c->dev;
 	int i;
@@ -244,9 +243,32 @@ static int unregister_cpu_online(unsigned int cpu)
 	unregister_mmu_stats(s);
 	for (i = 0; i < ARRAY_SIZE(cpu_core_attrs); i++)
 		device_remove_file(s, &cpu_core_attrs[i]);
-#endif
-	return 0;
 }
+#endif
+
+static int sysfs_cpu_notify(struct notifier_block *self,
+				      unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (unsigned int)(long)hcpu;
+
+	switch (action) {
+	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
+		register_cpu_online(cpu);
+		break;
+#ifdef CONFIG_HOTPLUG_CPU
+	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
+		unregister_cpu_online(cpu);
+		break;
+#endif
+	}
+	return NOTIFY_OK;
+}
+
+static struct notifier_block sysfs_cpu_nb = {
+	.notifier_call	= sysfs_cpu_notify,
+};
 
 static void __init check_mmu_stats(void)
 {
@@ -272,21 +294,26 @@ static void register_nodes(void)
 
 static int __init topology_init(void)
 {
-	int cpu, ret;
+	int cpu;
 
 	register_nodes();
 
 	check_mmu_stats();
 
+	cpu_notifier_register_begin();
+
 	for_each_possible_cpu(cpu) {
 		struct cpu *c = &per_cpu(cpu_devices, cpu);
 
 		register_cpu(c, cpu);
+		if (cpu_online(cpu))
+			register_cpu_online(cpu);
 	}
 
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "sparc/topology:online",
-				register_cpu_online, unregister_cpu_online);
-	WARN_ON(ret < 0);
+	__register_cpu_notifier(&sysfs_cpu_nb);
+
+	cpu_notifier_register_done();
+
 	return 0;
 }
 

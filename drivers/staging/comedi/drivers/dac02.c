@@ -24,7 +24,7 @@
 /*
  * Driver: dac02
  * Description: Comedi driver for DAC02 compatible boards
- * Devices: [Keithley Metrabyte] DAC-02 (dac02)
+ * Devices: (Keithley Metrabyte) DAC-02 [dac02]
  * Author: H Hartley Sweeten <hsweeten@visionengravers.com>
  * Updated: Tue, 11 Mar 2014 11:27:19 -0700
  * Status: unknown
@@ -68,6 +68,10 @@ static const struct comedi_lrange das02_ao_ranges = {
 	}
 };
 
+struct dac02_private {
+	unsigned int ao_readback[2];
+};
+
 /*
  * Register I/O map
  */
@@ -79,6 +83,7 @@ static int dac02_ao_insn_write(struct comedi_device *dev,
 			       struct comedi_insn *insn,
 			       unsigned int *data)
 {
+	struct dac02_private *devpriv = dev->private;
 	unsigned int chan = CR_CHAN(insn->chanspec);
 	unsigned int range = CR_RANGE(insn->chanspec);
 	unsigned int val;
@@ -87,7 +92,7 @@ static int dac02_ao_insn_write(struct comedi_device *dev,
 	for (i = 0; i < insn->n; i++) {
 		val = data[i];
 
-		s->readback[chan] = val;
+		devpriv->ao_readback[chan] = val;
 
 		/*
 		 * Unipolar outputs are true binary encoding.
@@ -108,10 +113,30 @@ static int dac02_ao_insn_write(struct comedi_device *dev,
 	return insn->n;
 }
 
+static int dac02_ao_insn_read(struct comedi_device *dev,
+			      struct comedi_subdevice *s,
+			      struct comedi_insn *insn,
+			      unsigned int *data)
+{
+	struct dac02_private *devpriv = dev->private;
+	unsigned int chan = CR_CHAN(insn->chanspec);
+	int i;
+
+	for (i = 0; i < insn->n; i++)
+		data[i] = devpriv->ao_readback[chan];
+
+	return insn->n;
+}
+
 static int dac02_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 {
+	struct dac02_private *devpriv;
 	struct comedi_subdevice *s;
 	int ret;
+
+	devpriv = comedi_alloc_devpriv(dev, sizeof(*devpriv));
+	if (!devpriv)
+		return -ENOMEM;
 
 	ret = comedi_request_region(dev, it->options[0], 0x08);
 	if (ret)
@@ -129,8 +154,9 @@ static int dac02_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	s->maxdata	= 0x0fff;
 	s->range_table	= &das02_ao_ranges;
 	s->insn_write	= dac02_ao_insn_write;
+	s->insn_read	= dac02_ao_insn_read;
 
-	return comedi_alloc_subdev_readback(s);
+	return 0;
 }
 
 static struct comedi_driver dac02_driver = {

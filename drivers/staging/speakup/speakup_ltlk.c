@@ -15,6 +15,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  * specificly written as a driver for the speakup screenreview
  * s not a general device driver.
  */
@@ -137,7 +141,6 @@ static void synth_interrogate(struct spk_synth *synth)
 {
 	unsigned char *t, i;
 	unsigned char buf[50], rom_v[20];
-
 	spk_synth_immediate(synth, "\x18\x01?");
 	for (i = 0; i < 50; i++) {
 		buf[i] = spk_serial_in();
@@ -171,8 +174,18 @@ module_param_named(start, synth_ltlk.startup, short, S_IRUGO);
 MODULE_PARM_DESC(ser, "Set the serial port for the synthesizer (0-based).");
 MODULE_PARM_DESC(start, "Start the synthesizer once it is loaded.");
 
-module_spk_synth(synth_ltlk);
+static int __init ltlk_init(void)
+{
+	return synth_add(&synth_ltlk);
+}
 
+static void __exit ltlk_exit(void)
+{
+	synth_remove(&synth_ltlk);
+}
+
+module_init(ltlk_init);
+module_exit(ltlk_exit);
 MODULE_AUTHOR("Kirk Reiser <kirk@braille.uwo.ca>");
 MODULE_AUTHOR("David Borowski");
 MODULE_DESCRIPTION("Speakup support for DoubleTalk LT/LiteTalk synthesizers");

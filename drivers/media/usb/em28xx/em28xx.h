@@ -26,7 +26,7 @@
 #ifndef _EM28XX_H
 #define _EM28XX_H
 
-#define EM28XX_VERSION "0.2.2"
+#define EM28XX_VERSION "0.2.1"
 #define DRIVER_DESC    "Empia em28xx device driver"
 
 #include <linux/workqueue.h>
@@ -35,12 +35,11 @@
 #include <linux/kref.h>
 #include <linux/videodev2.h>
 
-#include <media/videobuf2-v4l2.h>
 #include <media/videobuf2-vmalloc.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-fh.h>
-#include <media/i2c/ir-kbd-i2c.h>
+#include <media/ir-kbd-i2c.h>
 #include <media/rc-core.h>
 #include "tuner-xc2028.h"
 #include "xc5000.h"
@@ -142,11 +141,6 @@
 #define EM28178_BOARD_PCTV_461E                   92
 #define EM2874_BOARD_KWORLD_UB435Q_V3		  93
 #define EM28178_BOARD_PCTV_292E                   94
-#define EM2861_BOARD_LEADTEK_VC100                95
-#define EM28178_BOARD_TERRATEC_T2_STICK_HD        96
-#define EM2884_BOARD_ELGATO_EYETV_HYBRID_2008     97
-#define EM28178_BOARD_PLEX_PX_BCUD                98
-#define EM28174_BOARD_HAUPPAUGE_WINTV_DUALHD_DVB  99
 
 /* Limits minimum and default number of buffers */
 #define EM28XX_MIN_BUF 4
@@ -221,6 +215,7 @@ enum em28xx_mode {
 	EM28XX_DIGITAL_MODE,
 };
 
+
 struct em28xx;
 
 struct em28xx_usb_bufs {
@@ -248,11 +243,11 @@ struct em28xx_usb_ctl {
 	struct em28xx_usb_bufs		digital_bufs;
 
 		/* Stores already requested buffers */
-	struct em28xx_buffer	*vid_buf;
-	struct em28xx_buffer	*vbi_buf;
+	struct em28xx_buffer    	*vid_buf;
+	struct em28xx_buffer    	*vbi_buf;
 
 		/* copy data from URB */
-	int (*urb_data_copy)(struct em28xx *dev, struct urb *urb);
+	int (*urb_data_copy) (struct em28xx *dev, struct urb *urb);
 
 };
 
@@ -267,7 +262,7 @@ struct em28xx_fmt {
 /* buffer for one video frame */
 struct em28xx_buffer {
 	/* common v4l buffer stuff -- must be first */
-	struct vb2_v4l2_buffer vb;
+	struct vb2_buffer vb;
 	struct list_head list;
 
 	void *mem;
@@ -293,9 +288,15 @@ struct em28xx_dmaqueue {
 
 #define MAX_EM28XX_INPUT 4
 enum enum28xx_itype {
-	EM28XX_VMUX_COMPOSITE = 1,
+	EM28XX_VMUX_COMPOSITE1 = 1,
+	EM28XX_VMUX_COMPOSITE2,
+	EM28XX_VMUX_COMPOSITE3,
+	EM28XX_VMUX_COMPOSITE4,
 	EM28XX_VMUX_SVIDEO,
 	EM28XX_VMUX_TELEVISION,
+	EM28XX_VMUX_CABLE,
+	EM28XX_VMUX_DVB,
+	EM28XX_VMUX_DEBUG,
 	EM28XX_RADIO,
 };
 
@@ -308,18 +309,13 @@ enum em28xx_ac97_mode {
 
 struct em28xx_audio_mode {
 	enum em28xx_ac97_mode ac97;
-};
 
-enum em28xx_int_audio_type {
-	EM28XX_INT_AUDIO_NONE = 0,
-	EM28XX_INT_AUDIO_AC97,
-	EM28XX_INT_AUDIO_I2S,
-};
+	u16 ac97_feat;
+	u32 ac97_vendor_id;
 
-enum em28xx_usb_audio_type {
-	EM28XX_USB_AUDIO_NONE = 0,
-	EM28XX_USB_AUDIO_CLASS,
-	EM28XX_USB_AUDIO_VENDOR,
+	unsigned int has_audio:1;
+
+	u8 i2s_samplerates;
 };
 
 /* em28xx has two audio inputs: tuner and line in.
@@ -408,7 +404,6 @@ enum em28xx_adecoder {
 enum em28xx_led_role {
 	EM28XX_LED_ANALOG_CAPTURING = 0,
 	EM28XX_LED_DIGITAL_CAPTURING,
-	EM28XX_LED_DIGITAL_CAPTURING_TS2,
 	EM28XX_LED_ILLUMINATION,
 	EM28XX_NUM_LED_ROLES, /* must be the last */
 };
@@ -511,9 +506,9 @@ struct em28xx_v4l2 {
 	struct v4l2_ctrl_handler ctrl_handler;
 	struct v4l2_clk *clk;
 
-	struct video_device vdev;
-	struct video_device vbi_dev;
-	struct video_device radio_dev;
+	struct video_device *vdev;
+	struct video_device *vbi_dev;
+	struct video_device *radio_dev;
 
 	/* Videobuf2 */
 	struct vb2_queue vb_vidq;
@@ -555,11 +550,6 @@ struct em28xx_v4l2 {
 	bool top_field;
 	int vbi_read;
 	unsigned int field_count;
-
-#ifdef CONFIG_MEDIA_CONTROLLER
-	struct media_pad video_pad, vbi_pad;
-	struct media_entity *decoder;
-#endif
 };
 
 struct em28xx_audio {
@@ -586,6 +576,13 @@ struct em28xx_audio {
 
 struct em28xx;
 
+struct em28xx_fh {
+	struct v4l2_fh fh;
+	struct em28xx *dev;
+
+	enum v4l2_buf_type           type;
+};
+
 enum em28xx_i2c_algo_type {
 	EM28XX_I2C_ALGO_EM28XX = 0,
 	EM28XX_I2C_ALGO_EM2800,
@@ -610,6 +607,7 @@ struct em28xx {
 	struct em28xx_IR *ir;
 
 	/* generic device properties */
+	char name[30];		/* name (including minor) of the device */
 	int model;		/* index in the device_data struct */
 	int devno;		/* marks the number of this device */
 	enum em28xx_chip_id chip_id;
@@ -617,9 +615,9 @@ struct em28xx {
 	unsigned int is_em25xx:1;	/* em25xx/em276x/7x/8x family bridge */
 	unsigned char disconnected:1;	/* device has been diconnected */
 	unsigned int has_video:1;
+	unsigned int has_audio_class:1;
+	unsigned int has_alsa_audio:1;
 	unsigned int is_audio_only:1;
-	enum em28xx_int_audio_type int_audio_type;
-	enum em28xx_usb_audio_type usb_audio_type;
 
 	struct em28xx_board board;
 
@@ -677,7 +675,7 @@ struct em28xx {
 	spinlock_t slock;
 
 	/* usb transfer */
-	struct usb_interface *intf;	/* the usb interface */
+	struct usb_device *udev;	/* the usb device */
 	u8 ifnum;		/* number of the assigned usb interface */
 	u8 analog_ep_isoc;	/* address of isoc endpoint for analog */
 	u8 analog_ep_bulk;	/* address of bulk endpoint for analog */
@@ -699,14 +697,14 @@ struct em28xx {
 	char urb_buf[URB_MAX_CTRL_SIZE];	/* urb control msg buffer */
 
 	/* helper funcs that call usb_control_msg */
-	int (*em28xx_write_regs)(struct em28xx *dev, u16 reg,
-				 char *buf, int len);
-	int (*em28xx_read_reg)(struct em28xx *dev, u16 reg);
-	int (*em28xx_read_reg_req_len)(struct em28xx *dev, u8 req, u16 reg,
-				       char *buf, int len);
-	int (*em28xx_write_regs_req)(struct em28xx *dev, u8 req, u16 reg,
-				     char *buf, int len);
-	int (*em28xx_read_reg_req)(struct em28xx *dev, u8 req, u16 reg);
+	int (*em28xx_write_regs) (struct em28xx *dev, u16 reg,
+					char *buf, int len);
+	int (*em28xx_read_reg) (struct em28xx *dev, u16 reg);
+	int (*em28xx_read_reg_req_len) (struct em28xx *dev, u8 req, u16 reg,
+					char *buf, int len);
+	int (*em28xx_write_regs_req) (struct em28xx *dev, u8 req, u16 reg,
+				      char *buf, int len);
+	int (*em28xx_read_reg_req) (struct em28xx *dev, u8 req, u16 reg);
 
 	enum em28xx_mode mode;
 
@@ -719,12 +717,6 @@ struct em28xx {
 	/* Snapshot button input device */
 	char snapshot_button_path[30];	/* path of the input dev */
 	struct input_dev *sbutton_input_dev;
-
-#ifdef CONFIG_MEDIA_CONTROLLER
-	struct media_device *media_dev;
-	struct media_entity input_ent[MAX_EM28XX_INPUT];
-	struct media_pad input_pad[MAX_EM28XX_INPUT];
-#endif
 };
 
 #define kref_to_dev(d) container_of(d, struct em28xx, ref)
@@ -755,7 +747,7 @@ int em28xx_write_regs_req(struct em28xx *dev, u8 req, u16 reg, char *buf,
 int em28xx_write_regs(struct em28xx *dev, u16 reg, char *buf, int len);
 int em28xx_write_reg(struct em28xx *dev, u16 reg, u8 val);
 int em28xx_write_reg_bits(struct em28xx *dev, u16 reg, u8 val,
-			  u8 bitmask);
+				 u8 bitmask);
 int em28xx_toggle_reg_bits(struct em28xx *dev, u16 reg, u8 bitmask);
 
 int em28xx_read_ac97(struct em28xx *dev, u8 reg);
@@ -795,5 +787,21 @@ void em28xx_free_device(struct kref *ref);
 /* Provided by em28xx-camera.c */
 int em28xx_detect_sensor(struct em28xx *dev);
 int em28xx_init_camera(struct em28xx *dev);
+
+/* printk macros */
+
+#define em28xx_err(fmt, arg...) do {\
+	printk(KERN_ERR fmt , ##arg); } while (0)
+
+#define em28xx_errdev(fmt, arg...) do {\
+	printk(KERN_ERR "%s: "fmt,\
+			dev->name , ##arg); } while (0)
+
+#define em28xx_info(fmt, arg...) do {\
+	printk(KERN_INFO "%s: "fmt,\
+			dev->name , ##arg); } while (0)
+#define em28xx_warn(fmt, arg...) do {\
+	printk(KERN_WARNING "%s: "fmt,\
+			dev->name , ##arg); } while (0)
 
 #endif

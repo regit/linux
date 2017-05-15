@@ -107,7 +107,10 @@ static struct shash_alg alg = {
 
 static int __init crct10dif_mod_init(void)
 {
-	return crypto_register_shash(&alg);
+	int ret;
+
+	ret = crypto_register_shash(&alg);
+	return ret;
 }
 
 static void __exit crct10dif_mod_fini(void)
@@ -121,5 +124,4 @@ module_exit(crct10dif_mod_fini);
 MODULE_AUTHOR("Tim Chen <tim.c.chen@linux.intel.com>");
 MODULE_DESCRIPTION("T10 DIF CRC calculation.");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_CRYPTO("crct10dif");
-MODULE_ALIAS_CRYPTO("crct10dif-generic");
+MODULE_ALIAS("crct10dif");

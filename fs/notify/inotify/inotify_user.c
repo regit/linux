@@ -26,7 +26,7 @@
 #include <linux/fs.h> /* struct inode */
 #include <linux/fsnotify_backend.h>
 #include <linux/idr.h>
-#include <linux/init.h> /* fs_initcall */
+#include <linux/init.h> /* module_init */
 #include <linux/inotify.h>
 #include <linux/kernel.h> /* roundup() */
 #include <linux/namei.h> /* LOOKUP_FOLLOW */
@@ -115,10 +115,10 @@ static unsigned int inotify_poll(struct file *file, poll_table *wait)
 	int ret = 0;
 
 	poll_wait(file, &group->notification_waitq, wait);
-	spin_lock(&group->notification_lock);
+	mutex_lock(&group->notification_mutex);
 	if (!fsnotify_notify_queue_is_empty(group))
 		ret = POLLIN | POLLRDNORM;
-	spin_unlock(&group->notification_lock);
+	mutex_unlock(&group->notification_mutex);
 
 	return ret;
 }
@@ -138,7 +138,7 @@ static int round_event_name_len(struct fsnotify_event *fsn_event)
  * enough to fit in "count". Return an error pointer if
  * not large enough.
  *
- * Called with the group->notification_lock held.
+ * Called with the group->notification_mutex held.
  */
 static struct fsnotify_event *get_one_event(struct fsnotify_group *group,
 					    size_t count)
@@ -149,7 +149,7 @@ static struct fsnotify_event *get_one_event(struct fsnotify_group *group,
 	if (fsnotify_notify_queue_is_empty(group))
 		return NULL;
 
-	event = fsnotify_peek_first_event(group);
+	event = fsnotify_peek_notify_event(group);
 
 	pr_debug("%s: group=%p event=%p\n", __func__, group, event);
 
@@ -157,9 +157,9 @@ static struct fsnotify_event *get_one_event(struct fsnotify_group *group,
 	if (event_size > count)
 		return ERR_PTR(-EINVAL);
 
-	/* held the notification_lock the whole time, so this is the
+	/* held the notification_mutex the whole time, so this is the
 	 * same event we peeked above */
-	fsnotify_remove_first_event(group);
+	fsnotify_remove_notify_event(group);
 
 	return event;
 }
@@ -227,16 +227,17 @@ static ssize_t inotify_read(struct file *file, char __user *buf,
 	struct fsnotify_event *kevent;
 	char __user *start;
 	int ret;
-	DEFINE_WAIT_FUNC(wait, woken_wake_function);
+	DEFINE_WAIT(wait);
 
 	start = buf;
 	group = file->private_data;
 
-	add_wait_queue(&group->notification_waitq, &wait);
 	while (1) {
-		spin_lock(&group->notification_lock);
+		prepare_to_wait(&group->notification_waitq, &wait, TASK_INTERRUPTIBLE);
+
+		mutex_lock(&group->notification_mutex);
 		kevent = get_one_event(group, count);
-		spin_unlock(&group->notification_lock);
+		mutex_unlock(&group->notification_mutex);
 
 		pr_debug("%s: group=%p kevent=%p\n", __func__, group, kevent);
 
@@ -263,10 +264,10 @@ static ssize_t inotify_read(struct file *file, char __user *buf,
 		if (start != buf)
 			break;
 
-		wait_woken(&wait, TASK_INTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
+		schedule();
 	}
-	remove_wait_queue(&group->notification_waitq, &wait);
 
+	finish_wait(&group->notification_waitq, &wait);
 	if (start != buf && ret != -EFAULT)
 		ret = buf - start;
 	return ret;
@@ -300,13 +301,13 @@ static long inotify_ioctl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case FIONREAD:
-		spin_lock(&group->notification_lock);
+		mutex_lock(&group->notification_mutex);
 		list_for_each_entry(fsn_event, &group->notification_list,
 				    list) {
 			send_len += sizeof(struct inotify_event);
 			send_len += round_event_name_len(fsn_event);
 		}
-		spin_unlock(&group->notification_lock);
+		mutex_unlock(&group->notification_mutex);
 		ret = put_user(send_len, (int __user *) p);
 		break;
 	}
@@ -433,7 +434,7 @@ static void inotify_remove_from_idr(struct fsnotify_group *group,
 	if (wd == -1) {
 		WARN_ONCE(1, "%s: i_mark=%p i_mark->wd=%d i_mark->group=%p"
 			" i_mark->inode=%p\n", __func__, i_mark, i_mark->wd,
-			i_mark->fsn_mark.group, i_mark->fsn_mark.inode);
+			i_mark->fsn_mark.group, i_mark->fsn_mark.i.inode);
 		goto out;
 	}
 
@@ -442,7 +443,7 @@ static void inotify_remove_from_idr(struct fsnotify_group *group,
 	if (unlikely(!found_i_mark)) {
 		WARN_ONCE(1, "%s: i_mark=%p i_mark->wd=%d i_mark->group=%p"
 			" i_mark->inode=%p\n", __func__, i_mark, i_mark->wd,
-			i_mark->fsn_mark.group, i_mark->fsn_mark.inode);
+			i_mark->fsn_mark.group, i_mark->fsn_mark.i.inode);
 		goto out;
 	}
 
@@ -456,9 +457,9 @@ static void inotify_remove_from_idr(struct fsnotify_group *group,
 			"mark->inode=%p found_i_mark=%p found_i_mark->wd=%d "
 			"found_i_mark->group=%p found_i_mark->inode=%p\n",
 			__func__, i_mark, i_mark->wd, i_mark->fsn_mark.group,
-			i_mark->fsn_mark.inode, found_i_mark, found_i_mark->wd,
+			i_mark->fsn_mark.i.inode, found_i_mark, found_i_mark->wd,
 			found_i_mark->fsn_mark.group,
-			found_i_mark->fsn_mark.inode);
+			found_i_mark->fsn_mark.i.inode);
 		goto out;
 	}
 
@@ -470,7 +471,7 @@ static void inotify_remove_from_idr(struct fsnotify_group *group,
 	if (unlikely(atomic_read(&i_mark->fsn_mark.refcnt) < 3)) {
 		printk(KERN_ERR "%s: i_mark=%p i_mark->wd=%d i_mark->group=%p"
 			" i_mark->inode=%p\n", __func__, i_mark, i_mark->wd,
-			i_mark->fsn_mark.group, i_mark->fsn_mark.inode);
+			i_mark->fsn_mark.group, i_mark->fsn_mark.i.inode);
 		/* we can't really recover with bad ref cnting.. */
 		BUG();
 	}
@@ -706,19 +707,7 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 	int ret;
 	unsigned flags = 0;
 
-	/*
-	 * We share a lot of code with fs/dnotify.  We also share
-	 * the bit layout between inotify's IN_* and the fsnotify
-	 * FS_*.  This check ensures that only the inotify IN_*
-	 * bits get passed in and set in watches/events.
-	 */
-	if (unlikely(mask & ~ALL_INOTIFY_BITS))
-		return -EINVAL;
-	/*
-	 * Require at least one valid bit set in the mask.
-	 * Without _something_ set, we would have no events to
-	 * watch for.
-	 */
+	/* don't allow invalid bits: we don't want flags set */
 	if (unlikely(!(mask & ALL_INOTIFY_BITS)))
 		return -EINVAL;
 
@@ -824,4 +813,4 @@ static int __init inotify_user_setup(void)
 
 	return 0;
 }
-fs_initcall(inotify_user_setup);
+module_init(inotify_user_setup);

@@ -20,16 +20,17 @@
 void pci_add_resource_offset(struct list_head *resources, struct resource *res,
 			     resource_size_t offset)
 {
-	struct resource_entry *entry;
+	struct pci_host_bridge_window *window;
 
-	entry = resource_list_create_entry(res, 0);
-	if (!entry) {
+	window = kzalloc(sizeof(struct pci_host_bridge_window), GFP_KERNEL);
+	if (!window) {
 		printk(KERN_ERR "PCI: can't add host bridge window %pR\n", res);
 		return;
 	}
 
-	entry->offset = offset;
-	resource_list_add_tail(entry, resources);
+	window->res = res;
+	window->offset = offset;
+	list_add_tail(&window->list, resources);
 }
 EXPORT_SYMBOL(pci_add_resource_offset);
 
@@ -41,7 +42,12 @@ EXPORT_SYMBOL(pci_add_resource);
 
 void pci_free_resource_list(struct list_head *resources)
 {
-	resource_list_free(resources);
+	struct pci_host_bridge_window *window, *tmp;
+
+	list_for_each_entry_safe(window, tmp, resources, list) {
+		list_del(&window->list);
+		kfree(window);
+	}
 }
 EXPORT_SYMBOL(pci_free_resource_list);
 
@@ -91,41 +97,12 @@ void pci_bus_remove_resources(struct pci_bus *bus)
 	}
 }
 
-int devm_request_pci_bus_resources(struct device *dev,
-				   struct list_head *resources)
-{
-	struct resource_entry *win;
-	struct resource *parent, *res;
-	int err;
-
-	resource_list_for_each_entry(win, resources) {
-		res = win->res;
-		switch (resource_type(res)) {
-		case IORESOURCE_IO:
-			parent = &ioport_resource;
-			break;
-		case IORESOURCE_MEM:
-			parent = &iomem_resource;
-			break;
-		default:
-			continue;
-		}
-
-		err = devm_request_resource(dev, parent, res);
-		if (err)
-			return err;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(devm_request_pci_bus_resources);
-
 static struct pci_bus_region pci_32_bit = {0, 0xffffffffULL};
-#ifdef CONFIG_PCI_BUS_ADDR_T_64BIT
+#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
 static struct pci_bus_region pci_64_bit = {0,
-				(pci_bus_addr_t) 0xffffffffffffffffULL};
-static struct pci_bus_region pci_high = {(pci_bus_addr_t) 0x100000000ULL,
-				(pci_bus_addr_t) 0xffffffffffffffffULL};
+				(dma_addr_t) 0xffffffffffffffffULL};
+static struct pci_bus_region pci_high = {(dma_addr_t) 0x100000000ULL,
+				(dma_addr_t) 0xffffffffffffffffULL};
 #endif
 
 /*
@@ -169,8 +146,6 @@ static int pci_bus_alloc_from_region(struct pci_bus *bus, struct resource *res,
 	type_mask |= IORESOURCE_TYPE_BITS;
 
 	pci_bus_for_each_resource(bus, r, i) {
-		resource_size_t min_used = min;
-
 		if (!r)
 			continue;
 
@@ -194,12 +169,12 @@ static int pci_bus_alloc_from_region(struct pci_bus *bus, struct resource *res,
 		 * overrides "min".
 		 */
 		if (avail.start)
-			min_used = avail.start;
+			min = avail.start;
 
 		max = avail.end;
 
 		/* Ok, try it out.. */
-		ret = allocate_resource(r, res, size, min_used, max,
+		ret = allocate_resource(r, res, size, min, max,
 					align, alignf, alignf_data);
 		if (ret == 0)
 			return 0;
@@ -231,7 +206,7 @@ int pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
 					  resource_size_t),
 		void *alignf_data)
 {
-#ifdef CONFIG_PCI_BUS_ADDR_T_64BIT
+#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
 	int rc;
 
 	if (res->flags & IORESOURCE_MEM_64) {
@@ -253,54 +228,7 @@ int pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
 }
 EXPORT_SYMBOL(pci_bus_alloc_resource);
 
-/*
- * The @idx resource of @dev should be a PCI-PCI bridge window.  If this
- * resource fits inside a window of an upstream bridge, do nothing.  If it
- * overlaps an upstream window but extends outside it, clip the resource so
- * it fits completely inside.
- */
-bool pci_bus_clip_resource(struct pci_dev *dev, int idx)
-{
-	struct pci_bus *bus = dev->bus;
-	struct resource *res = &dev->resource[idx];
-	struct resource orig_res = *res;
-	struct resource *r;
-	int i;
-
-	pci_bus_for_each_resource(bus, r, i) {
-		resource_size_t start, end;
-
-		if (!r)
-			continue;
-
-		if (resource_type(res) != resource_type(r))
-			continue;
-
-		start = max(r->start, res->start);
-		end = min(r->end, res->end);
-
-		if (start > end)
-			continue;	/* no overlap */
-
-		if (res->start == start && res->end == end)
-			return false;	/* no change */
-
-		res->start = start;
-		res->end = end;
-		res->flags &= ~IORESOURCE_UNSET;
-		orig_res.flags &= ~IORESOURCE_UNSET;
-		dev_printk(KERN_DEBUG, &dev->dev, "%pR clipped to %pR\n",
-				 &orig_res, res);
-
-		return true;
-	}
-
-	return false;
-}
-
 void __weak pcibios_resource_survey_bus(struct pci_bus *bus) { }
-
-void __weak pcibios_bus_add_device(struct pci_dev *pdev) { }
 
 /**
  * pci_bus_add_device - start driver for a single device
@@ -316,20 +244,13 @@ void pci_bus_add_device(struct pci_dev *dev)
 	 * Can not put in pci_device_add yet because resources
 	 * are not assigned yet for some devices.
 	 */
-	pcibios_bus_add_device(dev);
 	pci_fixup_device(pci_fixup_final, dev);
 	pci_create_sysfs_dev_files(dev);
 	pci_proc_attach_device(dev);
-	pci_bridge_d3_update(dev);
 
 	dev->match_driver = true;
 	retval = device_attach(&dev->dev);
-	if (retval < 0 && retval != -EPROBE_DEFER) {
-		dev_warn(&dev->dev, "device attach failed (%d)\n", retval);
-		pci_proc_detach_device(dev);
-		pci_remove_sysfs_dev_files(dev);
-		return;
-	}
+	WARN_ON(retval < 0);
 
 	dev->is_added = 1;
 }
@@ -354,9 +275,7 @@ void pci_bus_add_devices(const struct pci_bus *bus)
 	}
 
 	list_for_each_entry(dev, &bus->devices, bus_list) {
-		/* Skip if device attach failed */
-		if (!dev->is_added)
-			continue;
+		BUG_ON(!dev->is_added);
 		child = dev->subordinate;
 		if (child)
 			pci_bus_add_devices(child);
@@ -427,3 +346,4 @@ void pci_bus_put(struct pci_bus *bus)
 		put_device(&bus->dev);
 }
 EXPORT_SYMBOL(pci_bus_put);
+

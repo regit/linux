@@ -127,7 +127,7 @@ struct u300_gpio_confdata {
 }
 
 /* Initial configuration */
-static const struct u300_gpio_confdata __initconst
+static const struct __initconst u300_gpio_confdata
 bs335_gpio_config[U300_GPIO_NUM_PORTS][U300_GPIO_PINS_PER_PORT] = {
 	/* Port 0, pins 0-7 */
 	{
@@ -208,16 +208,43 @@ bs335_gpio_config[U300_GPIO_NUM_PORTS][U300_GPIO_PINS_PER_PORT] = {
 	}
 };
 
+/**
+ * to_u300_gpio() - get the pointer to u300_gpio
+ * @chip: the gpio chip member of the structure u300_gpio
+ */
+static inline struct u300_gpio *to_u300_gpio(struct gpio_chip *chip)
+{
+	return container_of(chip, struct u300_gpio, chip);
+}
+
+static int u300_gpio_request(struct gpio_chip *chip, unsigned offset)
+{
+	/*
+	 * Map back to global GPIO space and request muxing, the direction
+	 * parameter does not matter for this controller.
+	 */
+	int gpio = chip->base + offset;
+
+	return pinctrl_request_gpio(gpio);
+}
+
+static void u300_gpio_free(struct gpio_chip *chip, unsigned offset)
+{
+	int gpio = chip->base + offset;
+
+	pinctrl_free_gpio(gpio);
+}
+
 static int u300_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 
-	return !!(readl(U300_PIN_REG(offset, dir)) & U300_PIN_BIT(offset));
+	return readl(U300_PIN_REG(offset, dir)) & U300_PIN_BIT(offset);
 }
 
 static void u300_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	unsigned long flags;
 	u32 val;
 
@@ -234,7 +261,7 @@ static void u300_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 
 static int u300_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	unsigned long flags;
 	u32 val;
 
@@ -250,7 +277,7 @@ static int u300_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 static int u300_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 				      int value)
 {
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	unsigned long flags;
 	u32 oldmode;
 	u32 val;
@@ -281,7 +308,7 @@ int u300_gpio_config_get(struct gpio_chip *chip,
 			 unsigned offset,
 			 unsigned long *config)
 {
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	enum pin_config_param param = (enum pin_config_param) *config;
 	bool biasmode;
 	u32 drmode;
@@ -339,7 +366,7 @@ int u300_gpio_config_get(struct gpio_chip *chip,
 int u300_gpio_config_set(struct gpio_chip *chip, unsigned offset,
 			 enum pin_config_param param)
 {
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	unsigned long flags;
 	u32 val;
 
@@ -390,8 +417,8 @@ int u300_gpio_config_set(struct gpio_chip *chip, unsigned offset,
 static struct gpio_chip u300_gpio_chip = {
 	.label			= "u300-gpio-chip",
 	.owner			= THIS_MODULE,
-	.request		= gpiochip_generic_request,
-	.free			= gpiochip_generic_free,
+	.request		= u300_gpio_request,
+	.free			= u300_gpio_free,
 	.get			= u300_gpio_get,
 	.set			= u300_gpio_set,
 	.direction_input	= u300_gpio_direction_input,
@@ -420,7 +447,7 @@ static void u300_toggle_trigger(struct u300_gpio *gpio, unsigned offset)
 static int u300_gpio_irq_type(struct irq_data *d, unsigned trigger)
 {
 	struct gpio_chip *chip = irq_data_get_irq_chip_data(d);
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	struct u300_gpio_port *port = &gpio->ports[d->hwirq >> 3];
 	int offset = d->hwirq;
 	u32 val;
@@ -457,7 +484,7 @@ static int u300_gpio_irq_type(struct irq_data *d, unsigned trigger)
 static void u300_gpio_irq_enable(struct irq_data *d)
 {
 	struct gpio_chip *chip = irq_data_get_irq_chip_data(d);
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	struct u300_gpio_port *port = &gpio->ports[d->hwirq >> 3];
 	int offset = d->hwirq;
 	u32 val;
@@ -474,7 +501,7 @@ static void u300_gpio_irq_enable(struct irq_data *d)
 static void u300_gpio_irq_disable(struct irq_data *d)
 {
 	struct gpio_chip *chip = irq_data_get_irq_chip_data(d);
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	int offset = d->hwirq;
 	u32 val;
 	unsigned long flags;
@@ -492,12 +519,11 @@ static struct irq_chip u300_gpio_irqchip = {
 	.irq_set_type		= u300_gpio_irq_type,
 };
 
-static void u300_gpio_irq_handler(struct irq_desc *desc)
+static void u300_gpio_irq_handler(unsigned irq, struct irq_desc *desc)
 {
-	unsigned int irq = irq_desc_get_irq(desc);
-	struct irq_chip *parent_chip = irq_desc_get_chip(desc);
-	struct gpio_chip *chip = irq_desc_get_handler_data(desc);
-	struct u300_gpio *gpio = gpiochip_get_data(chip);
+	struct irq_chip *parent_chip = irq_get_chip(irq);
+	struct gpio_chip *chip = irq_get_handler_data(irq);
+	struct u300_gpio *gpio = to_u300_gpio(chip);
 	struct u300_gpio_port *port = &gpio->ports[irq - chip->base];
 	int pinoffset = port->number << 3; /* get the right stride */
 	unsigned long val;
@@ -628,7 +654,7 @@ static int __init u300_gpio_probe(struct platform_device *pdev)
 
 	gpio->chip = u300_gpio_chip;
 	gpio->chip.ngpio = U300_GPIO_NUM_PORTS * U300_GPIO_PINS_PER_PORT;
-	gpio->chip.parent = &pdev->dev;
+	gpio->chip.dev = &pdev->dev;
 	gpio->chip.base = 0;
 	gpio->dev = &pdev->dev;
 
@@ -675,7 +701,7 @@ static int __init u300_gpio_probe(struct platform_device *pdev)
 #ifdef CONFIG_OF_GPIO
 	gpio->chip.of_node = pdev->dev.of_node;
 #endif
-	err = gpiochip_add_data(&gpio->chip, gpio);
+	err = gpiochip_add(&gpio->chip);
 	if (err) {
 		dev_err(gpio->dev, "unable to add gpiochip: %d\n", err);
 		goto err_no_chip;
@@ -730,7 +756,8 @@ static int __init u300_gpio_probe(struct platform_device *pdev)
 
 err_no_range:
 err_no_irqchip:
-	gpiochip_remove(&gpio->chip);
+	if (gpiochip_remove(&gpio->chip))
+		dev_err(&pdev->dev, "failed to remove gpio chip\n");
 err_no_chip:
 	clk_disable_unprepare(gpio->clk);
 	dev_err(&pdev->dev, "module ERROR:%d\n", err);
@@ -740,11 +767,16 @@ err_no_chip:
 static int __exit u300_gpio_remove(struct platform_device *pdev)
 {
 	struct u300_gpio *gpio = platform_get_drvdata(pdev);
+	int err;
 
 	/* Turn off the GPIO block */
 	writel(0x00000000U, gpio->base + U300_GPIO_CR);
 
-	gpiochip_remove(&gpio->chip);
+	err = gpiochip_remove(&gpio->chip);
+	if (err < 0) {
+		dev_err(gpio->dev, "unable to remove gpiochip: %d\n", err);
+		return err;
+	}
 	clk_disable_unprepare(gpio->clk);
 	return 0;
 }

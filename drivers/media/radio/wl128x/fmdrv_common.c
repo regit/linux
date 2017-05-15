@@ -68,7 +68,7 @@ MODULE_PARM_DESC(default_radio_region, "Region: 0=Europe/US, 1=Japan");
 /* RDS buffer blocks */
 static u32 default_rds_buf = 300;
 module_param(default_rds_buf, uint, 0444);
-MODULE_PARM_DESC(default_rds_buf, "RDS buffer entries");
+MODULE_PARM_DESC(rds_buf, "RDS buffer entries");
 
 /* Radio Nr */
 static u32 radio_nr = -1;
@@ -212,14 +212,14 @@ inline void dump_tx_skb_data(struct sk_buff *skb)
 
 	len_org = skb->len - FM_CMD_MSG_HDR_SIZE;
 	if (len_org > 0) {
-		printk(KERN_CONT "\n   data(%d): ", cmd_hdr->dlen);
+		printk("\n   data(%d): ", cmd_hdr->dlen);
 		len = min(len_org, 14);
 		for (index = 0; index < len; index++)
-			printk(KERN_CONT "%x ",
+			printk("%x ",
 			       skb->data[FM_CMD_MSG_HDR_SIZE + index]);
-		printk(KERN_CONT "%s", (len_org > 14) ? ".." : "");
+		printk("%s", (len_org > 14) ? ".." : "");
 	}
-	printk(KERN_CONT "\n");
+	printk("\n");
 }
 
  /* To dump incoming FM Channel-8 packets */
@@ -230,21 +230,21 @@ inline void dump_rx_skb_data(struct sk_buff *skb)
 	struct fm_event_msg_hdr *evt_hdr;
 
 	evt_hdr = (struct fm_event_msg_hdr *)skb->data;
-	printk(KERN_INFO ">> hdr:%02x len:%02x sts:%02x numhci:%02x opcode:%02x type:%s dlen:%02x",
-	       evt_hdr->hdr, evt_hdr->len,
-	       evt_hdr->status, evt_hdr->num_fm_hci_cmds, evt_hdr->op,
-	       (evt_hdr->rd_wr) ? "RD" : "WR", evt_hdr->dlen);
+	printk(KERN_INFO ">> hdr:%02x len:%02x sts:%02x numhci:%02x "
+	    "opcode:%02x type:%s dlen:%02x", evt_hdr->hdr, evt_hdr->len,
+	    evt_hdr->status, evt_hdr->num_fm_hci_cmds, evt_hdr->op,
+	    (evt_hdr->rd_wr) ? "RD" : "WR", evt_hdr->dlen);
 
 	len_org = skb->len - FM_EVT_MSG_HDR_SIZE;
 	if (len_org > 0) {
-		printk(KERN_CONT "\n   data(%d): ", evt_hdr->dlen);
+		printk("\n   data(%d): ", evt_hdr->dlen);
 		len = min(len_org, 14);
 		for (index = 0; index < len; index++)
-			printk(KERN_CONT "%x ",
+			printk("%x ",
 			       skb->data[FM_EVT_MSG_HDR_SIZE + index]);
-		printk(KERN_CONT "%s", (len_org > 14) ? ".." : "");
+		printk("%s", (len_org > 14) ? ".." : "");
 	}
-	printk(KERN_CONT "\n");
+	printk("\n");
 }
 #endif
 
@@ -271,9 +271,9 @@ static void recv_tasklet(unsigned long arg)
 	/* Process all packets in the RX queue */
 	while ((skb = skb_dequeue(&fmdev->rx_q))) {
 		if (skb->len < sizeof(struct fm_event_msg_hdr)) {
-			fmerr("skb(%p) has only %d bytes, at least need %zu bytes to decode\n",
-			      skb,
-			      skb->len, sizeof(struct fm_event_msg_hdr));
+			fmerr("skb(%p) has only %d bytes, "
+				"at least need %zu bytes to decode\n", skb,
+				skb->len, sizeof(struct fm_event_msg_hdr));
 			kfree_skb(skb);
 			continue;
 		}
@@ -440,7 +440,7 @@ static int fm_send_cmd(struct fmdev *fmdev, u8 fm_op, u16 type,	void *payload,
 		 * command with u16 payload - convert to be16
 		 */
 		if (payload != NULL)
-			*(__be16 *)payload = cpu_to_be16(*(u16 *)payload);
+			*(u16 *)payload = cpu_to_be16(*(u16 *)payload);
 
 	} else if (payload != NULL) {
 		fm_cb(skb)->fm_op = *((u8 *)payload + 2);
@@ -472,7 +472,8 @@ int fmc_send_cmd(struct fmdev *fmdev, u8 fm_op, u16 type, void *payload,
 
 	if (!wait_for_completion_timeout(&fmdev->maintask_comp,
 					 FM_DRV_TX_TIMEOUT)) {
-		fmerr("Timeout(%d sec),didn't get regcompletion signal from RX tasklet\n",
+		fmerr("Timeout(%d sec),didn't get reg"
+			   "completion signal from RX tasklet\n",
 			   jiffies_to_msecs(FM_DRV_TX_TIMEOUT) / 1000);
 		return -ETIMEDOUT;
 	}
@@ -522,7 +523,8 @@ static inline int check_cmdresp_status(struct fmdev *fmdev,
 
 	fm_evt_hdr = (void *)(*skb)->data;
 	if (fm_evt_hdr->status != 0) {
-		fmerr("irq: opcode %x response status is not zero Initiating irq recovery process\n",
+		fmerr("irq: opcode %x response status is not zero "
+				"Initiating irq recovery process\n",
 				fm_evt_hdr->op);
 
 		mod_timer(&fmdev->irq_info.timer, jiffies + FM_DRV_TX_TIMEOUT);
@@ -562,7 +564,8 @@ static void int_timeout_handler(unsigned long data)
 		 * reset stage index & retry count values */
 		fmirq->stage = 0;
 		fmirq->retry = 0;
-		fmerr("Recovery action failed duringirq processing, max retry reached\n");
+		fmerr("Recovery action failed during"
+				"irq processing, max retry reached\n");
 		return;
 	}
 	fm_irq_call_stage(fmdev, FM_SEND_INTMSK_CMD_IDX);
@@ -592,7 +595,7 @@ static void fm_irq_handle_flag_getcmd_resp(struct fmdev *fmdev)
 	skb_pull(skb, sizeof(struct fm_event_msg_hdr));
 	memcpy(&fmdev->irq_info.flag, skb->data, fm_evt_hdr->dlen);
 
-	fmdev->irq_info.flag = be16_to_cpu((__force __be16)fmdev->irq_info.flag);
+	fmdev->irq_info.flag = be16_to_cpu(fmdev->irq_info.flag);
 	fmdbg("irq: flag register(0x%x)\n", fmdev->irq_info.flag);
 
 	/* Continue next function in interrupt handler table */
@@ -686,6 +689,7 @@ static void fm_rx_update_af_cache(struct fmdev *fmdev, u8 af)
 static void fm_rdsparse_swapbytes(struct fmdev *fmdev,
 		struct fm_rdsdata_format *rds_format)
 {
+	u8 byte1;
 	u8 index = 0;
 	u8 *rds_buff;
 
@@ -697,7 +701,9 @@ static void fm_rdsparse_swapbytes(struct fmdev *fmdev,
 	if (fmdev->asci_id != 0x6350) {
 		rds_buff = &rds_format->data.groupdatabuff.buff[0];
 		while (index + 1 < FM_RX_RDS_INFO_FIELD_MAX) {
-			swap(rds_buff[index], rds_buff[index + 1]);
+			byte1 = rds_buff[index];
+			rds_buff[index] = rds_buff[index + 1];
+			rds_buff[index + 1] = byte1;
 			index += 2;
 		}
 	}
@@ -758,7 +764,7 @@ static void fm_irq_handle_rdsdata_getcmd_resp(struct fmdev *fmdev)
 			 * Extract PI code and store in local cache.
 			 * We need this during AF switch processing.
 			 */
-			cur_picode = be16_to_cpu((__force __be16)rds_fmt.data.groupgeneral.pidata);
+			cur_picode = be16_to_cpu(rds_fmt.data.groupgeneral.pidata);
 			if (fmdev->rx.stat_info.picode != cur_picode)
 				fmdev->rx.stat_info.picode = cur_picode;
 
@@ -983,7 +989,7 @@ static void fm_irq_afjump_rd_freq_resp(struct fmdev *fmdev)
 	/* Skip header info and copy only response data */
 	skb_pull(skb, sizeof(struct fm_event_msg_hdr));
 	memcpy(&read_freq, skb->data, sizeof(read_freq));
-	read_freq = be16_to_cpu((__force __be16)read_freq);
+	read_freq = be16_to_cpu(read_freq);
 	curr_freq = fmdev->rx.region.bot_freq + ((u32)read_freq * FM_FREQ_MUL);
 
 	jumped_freq = fmdev->rx.stat_info.af_cache[fmdev->rx.afjump_idx];
@@ -1250,7 +1256,7 @@ static int fm_download_firmware(struct fmdev *fmdev, const u8 *fw_name)
 		fmerr("Unable to read firmware(%s) content\n", fw_name);
 		return ret;
 	}
-	fmdbg("Firmware(%s) length : %zu bytes\n", fw_name, fw_entry->size);
+	fmdbg("Firmware(%s) length : %d bytes\n", fw_name, fw_entry->size);
 
 	fw_data = (void *)fw_entry->data;
 	fw_len = fw_entry->size;
@@ -1311,8 +1317,7 @@ static int load_default_rx_configuration(struct fmdev *fmdev)
 /* Does FM power on sequence */
 static int fm_power_up(struct fmdev *fmdev, u8 mode)
 {
-	u16 payload;
-	__be16 asic_id, asic_ver;
+	u16 payload, asic_id, asic_ver;
 	int resp_len, ret;
 	u8 fw_name[50];
 
@@ -1469,7 +1474,7 @@ static long fm_st_receive(void *arg, struct sk_buff *skb)
  * Called by ST layer to indicate protocol registration completion
  * status.
  */
-static void fm_st_reg_comp_cb(void *arg, int data)
+static void fm_st_reg_comp_cb(void *arg, char data)
 {
 	struct fmdev *fmdev;
 
@@ -1513,13 +1518,14 @@ int fmc_prepare(struct fmdev *fmdev)
 
 		if (!wait_for_completion_timeout(&wait_for_fmdrv_reg_comp,
 						 FM_ST_REG_TIMEOUT)) {
-			fmerr("Timeout(%d sec), didn't get reg completion signal from ST\n",
+			fmerr("Timeout(%d sec), didn't get reg "
+					"completion signal from ST\n",
 					jiffies_to_msecs(FM_ST_REG_TIMEOUT) / 1000);
 			return -ETIMEDOUT;
 		}
 		if (fmdev->streg_cbdata != 0) {
-			fmerr("ST reg comp CB called with error status %d\n",
-			      fmdev->streg_cbdata);
+			fmerr("ST reg comp CB called with error "
+					"status %d\n", fmdev->streg_cbdata);
 			return -EAGAIN;
 		}
 

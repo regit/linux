@@ -16,7 +16,7 @@
 #include <linux/of_device.h>
 #include <linux/slab.h>
 #include <asm/prom.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 
 #include <linux/mtd/mtd.h>
@@ -150,6 +150,7 @@ MODULE_DEVICE_TABLE(of, uflash_match);
 static struct platform_driver uflash_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
+		.owner = THIS_MODULE,
 		.of_match_table = uflash_match,
 	},
 	.probe		= uflash_probe,

@@ -160,6 +160,7 @@ struct gpmi_nand_data {
 
 	/* MTD / NAND */
 	struct nand_chip	nand;
+	struct mtd_info		mtd;
 
 	/* General-use Variables */
 	int			current_chip;
@@ -187,8 +188,6 @@ struct gpmi_nand_data {
 
 	void			*auxiliary_virt;
 	dma_addr_t		auxiliary_phys;
-
-	void			*raw_buffer;
 
 	/* DMA channels */
 #define DMA_CHANS		8
@@ -290,10 +289,6 @@ extern int gpmi_send_page(struct gpmi_nand_data *,
 			dma_addr_t payload, dma_addr_t auxiliary);
 extern int gpmi_read_page(struct gpmi_nand_data *,
 			dma_addr_t payload, dma_addr_t auxiliary);
-
-void gpmi_copy_bits(u8 *dst, size_t dst_bit_off,
-		    const u8 *src, size_t src_bit_off,
-		    size_t nbits);
 
 /* BCH : Status Block Completion Codes */
 #define STATUS_GOOD		0x00

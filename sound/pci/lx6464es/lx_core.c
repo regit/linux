@@ -332,25 +332,27 @@ polling_successful:
 int lx_dsp_get_version(struct lx6464es *chip, u32 *rdsp_version)
 {
 	u16 ret;
+	unsigned long flags;
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 
 	lx_message_init(&chip->rmh, CMD_01_GET_SYS_CFG);
 	ret = lx_message_send_atomic(chip, &chip->rmh);
 
 	*rdsp_version = chip->rmh.stat[1];
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return ret;
 }
 
 int lx_dsp_get_clock_frequency(struct lx6464es *chip, u32 *rfreq)
 {
 	u16 ret = 0;
+	unsigned long flags;
 	u32 freq_raw = 0;
 	u32 freq = 0;
 	u32 frequency = 0;
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 
 	lx_message_init(&chip->rmh, CMD_01_GET_SYS_CFG);
 	ret = lx_message_send_atomic(chip, &chip->rmh);
@@ -368,7 +370,7 @@ int lx_dsp_get_clock_frequency(struct lx6464es *chip, u32 *rfreq)
 			frequency = 48000;
 	}
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 
 	*rfreq = frequency * chip->freq_ratio;
 
@@ -396,23 +398,25 @@ int lx_dsp_get_mac(struct lx6464es *chip)
 
 int lx_dsp_set_granularity(struct lx6464es *chip, u32 gran)
 {
+	unsigned long flags;
 	int ret;
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 
 	lx_message_init(&chip->rmh, CMD_02_SET_GRANULARITY);
 	chip->rmh.cmd[0] |= gran;
 
 	ret = lx_message_send_atomic(chip, &chip->rmh);
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return ret;
 }
 
 int lx_dsp_read_async_events(struct lx6464es *chip, u32 *data)
 {
+	unsigned long flags;
 	int ret;
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 
 	lx_message_init(&chip->rmh, CMD_04_GET_EVENT);
 	chip->rmh.stat_len = 9;	/* we don't necessarily need the full length */
@@ -422,7 +426,7 @@ int lx_dsp_read_async_events(struct lx6464es *chip, u32 *data)
 	if (!ret)
 		memcpy(data, chip->rmh.stat, chip->rmh.stat_len * sizeof(u32));
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return ret;
 }
 
@@ -436,16 +440,18 @@ int lx_pipe_allocate(struct lx6464es *chip, u32 pipe, int is_capture,
 		     int channels)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_06_ALLOCATE_PIPE);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
 	chip->rmh.cmd[0] |= channels;
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 
 	if (err != 0)
 		dev_err(chip->card->dev, "could not allocate pipe\n");
@@ -456,15 +462,17 @@ int lx_pipe_allocate(struct lx6464es *chip, u32 pipe, int is_capture,
 int lx_pipe_release(struct lx6464es *chip, u32 pipe, int is_capture)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_07_RELEASE_PIPE);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 
 	return err;
 }
@@ -473,6 +481,8 @@ int lx_buffer_ask(struct lx6464es *chip, u32 pipe, int is_capture,
 		  u32 *r_needed, u32 *r_freed, u32 *size_array)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
 #ifdef CONFIG_SND_DEBUG
@@ -483,7 +493,7 @@ int lx_buffer_ask(struct lx6464es *chip, u32 pipe, int is_capture,
 	*r_needed = 0;
 	*r_freed = 0;
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_08_ASK_BUFFERS);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -517,7 +527,7 @@ int lx_buffer_ask(struct lx6464es *chip, u32 pipe, int is_capture,
 		}
 	}
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -525,32 +535,36 @@ int lx_buffer_ask(struct lx6464es *chip, u32 pipe, int is_capture,
 int lx_pipe_stop(struct lx6464es *chip, u32 pipe, int is_capture)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_09_STOP_PIPE);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
 static int lx_pipe_toggle_state(struct lx6464es *chip, u32 pipe, int is_capture)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0B_TOGGLE_PIPE_STATE);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -586,9 +600,11 @@ int lx_pipe_sample_count(struct lx6464es *chip, u32 pipe, int is_capture,
 			 u64 *rsample_count)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0A_GET_PIPE_SPL_COUNT);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -605,16 +621,18 @@ int lx_pipe_sample_count(struct lx6464es *chip, u32 pipe, int is_capture,
 			+ chip->rmh.stat[1]; /* lo part */
 	}
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
 int lx_pipe_state(struct lx6464es *chip, u32 pipe, int is_capture, u16 *rstate)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0A_GET_PIPE_SPL_COUNT);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -626,7 +644,7 @@ int lx_pipe_state(struct lx6464es *chip, u32 pipe, int is_capture, u16 *rstate)
 	else
 		*rstate = (chip->rmh.stat[0] >> PSTATE_OFFSET) & 0x0F;
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -644,7 +662,7 @@ static int lx_pipe_wait_for_state(struct lx6464es *chip, u32 pipe,
 		if (err < 0)
 			return err;
 
-		if (!err && current_state == state)
+		if (current_state == state)
 			return 0;
 
 		mdelay(1);
@@ -668,16 +686,18 @@ int lx_stream_set_state(struct lx6464es *chip, u32 pipe,
 			       int is_capture, enum stream_state_t state)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_13_SET_STREAM_STATE);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
 	chip->rmh.cmd[0] |= state;
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 
 	return err;
 }
@@ -686,14 +706,17 @@ int lx_stream_set_format(struct lx6464es *chip, struct snd_pcm_runtime *runtime,
 			 u32 pipe, int is_capture)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
+
 	u32 channels = runtime->channels;
 
 	if (runtime->channels != channels)
 		dev_err(chip->card->dev, "channel count mismatch: %d vs %d",
 			   runtime->channels, channels);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0C_DEF_STREAM);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -709,7 +732,7 @@ int lx_stream_set_format(struct lx6464es *chip, struct snd_pcm_runtime *runtime,
 	chip->rmh.cmd[0] |= channels-1;
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 
 	return err;
 }
@@ -718,9 +741,11 @@ int lx_stream_state(struct lx6464es *chip, u32 pipe, int is_capture,
 		    int *rstate)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0E_GET_STREAM_SPL_COUNT);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -729,7 +754,7 @@ int lx_stream_state(struct lx6464es *chip, u32 pipe, int is_capture,
 
 	*rstate = (chip->rmh.stat[0] & SF_START) ? START_STATE : PAUSE_STATE;
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -737,9 +762,11 @@ int lx_stream_sample_position(struct lx6464es *chip, u32 pipe, int is_capture,
 			      u64 *r_bytepos)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0E_GET_STREAM_SPL_COUNT);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -750,7 +777,7 @@ int lx_stream_sample_position(struct lx6464es *chip, u32 pipe, int is_capture,
 		      << 32)	     /* hi part */
 		+ chip->rmh.stat[1]; /* lo part */
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -760,9 +787,11 @@ int lx_buffer_give(struct lx6464es *chip, u32 pipe, int is_capture,
 		   u32 *r_buffer_index)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0F_UPDATE_BUFFER);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -799,7 +828,7 @@ int lx_buffer_give(struct lx6464es *chip, u32 pipe, int is_capture,
 			"lx_buffer_give EB_CMD_REFUSED\n");
 
  done:
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -807,9 +836,11 @@ int lx_buffer_free(struct lx6464es *chip, u32 pipe, int is_capture,
 		   u32 *r_buffer_size)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_11_CANCEL_BUFFER);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -821,7 +852,7 @@ int lx_buffer_free(struct lx6464es *chip, u32 pipe, int is_capture,
 	if (err == 0)
 		*r_buffer_size = chip->rmh.stat[0]  & MASK_DATA_SIZE;
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -829,9 +860,11 @@ int lx_buffer_cancel(struct lx6464es *chip, u32 pipe, int is_capture,
 		     u32 buffer_index)
 {
 	int err;
+	unsigned long flags;
+
 	u32 pipe_cmd = PIPE_INFO_TO_CMD(is_capture, pipe);
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_11_CANCEL_BUFFER);
 
 	chip->rmh.cmd[0] |= pipe_cmd;
@@ -839,7 +872,7 @@ int lx_buffer_cancel(struct lx6464es *chip, u32 pipe, int is_capture,
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -852,10 +885,12 @@ int lx_buffer_cancel(struct lx6464es *chip, u32 pipe, int is_capture,
 int lx_level_unmute(struct lx6464es *chip, int is_capture, int unmute)
 {
 	int err;
+	unsigned long flags;
+
 	/* bit set to 1: channel muted */
 	u64 mute_mask = unmute ? 0 : 0xFFFFFFFFFFFFFFFFLLU;
 
-	mutex_lock(&chip->msg_lock);
+	spin_lock_irqsave(&chip->msg_lock, flags);
 	lx_message_init(&chip->rmh, CMD_0D_SET_MUTE);
 
 	chip->rmh.cmd[0] |= PIPE_INFO_TO_CMD(is_capture, 0);
@@ -869,7 +904,7 @@ int lx_level_unmute(struct lx6464es *chip, int is_capture, int unmute)
 
 	err = lx_message_send_atomic(chip, &chip->rmh);
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -896,9 +931,10 @@ int lx_level_peaks(struct lx6464es *chip, int is_capture, int channels,
 		   u32 *r_levels)
 {
 	int err = 0;
+	unsigned long flags;
 	int i;
+	spin_lock_irqsave(&chip->msg_lock, flags);
 
-	mutex_lock(&chip->msg_lock);
 	for (i = 0; i < channels; i += 4) {
 		u32 s0, s1, s2, s3;
 
@@ -923,7 +959,7 @@ int lx_level_peaks(struct lx6464es *chip, int is_capture, int channels,
 		r_levels += 4;
 	}
 
-	mutex_unlock(&chip->msg_lock);
+	spin_unlock_irqrestore(&chip->msg_lock, flags);
 	return err;
 }
 
@@ -1039,6 +1075,7 @@ static int lx_interrupt_request_new_buffer(struct lx6464es *chip,
 	struct snd_pcm_substream *substream = lx_stream->stream;
 	const unsigned int is_capture = lx_stream->is_capture;
 	int err;
+	unsigned long flags;
 
 	const u32 channels = substream->runtime->channels;
 	const u32 bytes_per_frame = channels * 3;
@@ -1058,7 +1095,7 @@ static int lx_interrupt_request_new_buffer(struct lx6464es *chip,
 
 	dev_dbg(chip->card->dev, "->lx_interrupt_request_new_buffer\n");
 
-	mutex_lock(&chip->lock);
+	spin_lock_irqsave(&chip->lock, flags);
 
 	err = lx_buffer_ask(chip, 0, is_capture, &needed, &freed, size_array);
 	dev_dbg(chip->card->dev,
@@ -1072,28 +1109,85 @@ static int lx_interrupt_request_new_buffer(struct lx6464es *chip,
 		    buffer_index, (unsigned long)buf, period_bytes);
 
 	lx_stream->frame_pos = next_pos;
-	mutex_unlock(&chip->lock);
+	spin_unlock_irqrestore(&chip->lock, flags);
 
 	return err;
 }
+
+void lx_tasklet_playback(unsigned long data)
+{
+	struct lx6464es *chip = (struct lx6464es *)data;
+	struct lx_stream *lx_stream = &chip->playback_stream;
+	int err;
+
+	dev_dbg(chip->card->dev, "->lx_tasklet_playback\n");
+
+	err = lx_interrupt_request_new_buffer(chip, lx_stream);
+	if (err < 0)
+		dev_err(chip->card->dev,
+			   "cannot request new buffer for playback\n");
+
+	snd_pcm_period_elapsed(lx_stream->stream);
+}
+
+void lx_tasklet_capture(unsigned long data)
+{
+	struct lx6464es *chip = (struct lx6464es *)data;
+	struct lx_stream *lx_stream = &chip->capture_stream;
+	int err;
+
+	dev_dbg(chip->card->dev, "->lx_tasklet_capture\n");
+	err = lx_interrupt_request_new_buffer(chip, lx_stream);
+	if (err < 0)
+		dev_err(chip->card->dev,
+			   "cannot request new buffer for capture\n");
+
+	snd_pcm_period_elapsed(lx_stream->stream);
+}
+
+
+
+static int lx_interrupt_handle_audio_transfer(struct lx6464es *chip,
+					      u64 notified_in_pipe_mask,
+					      u64 notified_out_pipe_mask)
+{
+	int err = 0;
+
+	if (notified_in_pipe_mask) {
+		dev_dbg(chip->card->dev,
+			"requesting audio transfer for capture\n");
+		tasklet_hi_schedule(&chip->tasklet_capture);
+	}
+
+	if (notified_out_pipe_mask) {
+		dev_dbg(chip->card->dev,
+			"requesting audio transfer for playback\n");
+		tasklet_hi_schedule(&chip->tasklet_playback);
+	}
+
+	return err;
+}
+
 
 irqreturn_t lx_interrupt(int irq, void *dev_id)
 {
 	struct lx6464es *chip = dev_id;
 	int async_pending, async_escmd;
 	u32 irqsrc;
-	bool wake_thread = false;
+
+	spin_lock(&chip->lock);
 
 	dev_dbg(chip->card->dev,
 		"**************************************************\n");
 
 	if (!lx_interrupt_ack(chip, &irqsrc, &async_pending, &async_escmd)) {
+		spin_unlock(&chip->lock);
 		dev_dbg(chip->card->dev, "IRQ_NONE\n");
 		return IRQ_NONE; /* this device did not cause the interrupt */
 	}
 
 	if (irqsrc & MASK_SYS_STATUS_CMD_DONE)
-		return IRQ_HANDLED;
+		goto exit;
 
 	if (irqsrc & MASK_SYS_STATUS_EOBI)
 		dev_dbg(chip->card->dev, "interrupt: EOBI\n");
@@ -1108,8 +1202,27 @@ irqreturn_t lx_interrupt(int irq, void *dev_id)
 		dev_dbg(chip->card->dev, "interrupt: ORUN\n");
 
 	if (async_pending) {
-		wake_thread = true;
-		chip->irqsrc = irqsrc;
+		u64 notified_in_pipe_mask = 0;
+		u64 notified_out_pipe_mask = 0;
+		int freq_changed;
+		int err;
+
+		/* handle async events */
+		err = lx_interrupt_handle_async_events(chip, irqsrc,
+						       &freq_changed,
+						       &notified_in_pipe_mask,
+						       &notified_out_pipe_mask);
+		if (err)
+			dev_err(chip->card->dev,
+				   "error handling async events\n");
+
+		err = lx_interrupt_handle_audio_transfer(chip,
+							 notified_in_pipe_mask,
+							 notified_out_pipe_mask
+			);
+		if (err)
+			dev_err(chip->card->dev,
+				   "error during audio transfer\n");
 	}
 
 	if (async_escmd) {
@@ -1122,50 +1235,9 @@ irqreturn_t lx_interrupt(int irq, void *dev_id)
 		dev_dbg(chip->card->dev, "interrupt requests escmd handling\n");
 	}
 
-	return wake_thread ? IRQ_WAKE_THREAD : IRQ_HANDLED;
-}
-
-irqreturn_t lx_threaded_irq(int irq, void *dev_id)
-{
-	struct lx6464es *chip = dev_id;
-	u64 notified_in_pipe_mask = 0;
-	u64 notified_out_pipe_mask = 0;
-	int freq_changed;
-	int err;
-
-	/* handle async events */
-	err = lx_interrupt_handle_async_events(chip, chip->irqsrc,
-					       &freq_changed,
-					       &notified_in_pipe_mask,
-					       &notified_out_pipe_mask);
-	if (err)
-		dev_err(chip->card->dev, "error handling async events\n");
-
-	if (notified_in_pipe_mask) {
-		struct lx_stream *lx_stream = &chip->capture_stream;
-
-		dev_dbg(chip->card->dev,
-			"requesting audio transfer for capture\n");
-		err = lx_interrupt_request_new_buffer(chip, lx_stream);
-		if (err < 0)
-			dev_err(chip->card->dev,
-				"cannot request new buffer for capture\n");
-		snd_pcm_period_elapsed(lx_stream->stream);
-	}
-
-	if (notified_out_pipe_mask) {
-		struct lx_stream *lx_stream = &chip->playback_stream;
-
-		dev_dbg(chip->card->dev,
-			"requesting audio transfer for playback\n");
-		err = lx_interrupt_request_new_buffer(chip, lx_stream);
-		if (err < 0)
-			dev_err(chip->card->dev,
-				"cannot request new buffer for playback\n");
-		snd_pcm_period_elapsed(lx_stream->stream);
-	}
-
-	return IRQ_HANDLED;
+exit:
+	spin_unlock(&chip->lock);
+	return IRQ_HANDLED;	/* this device caused the interrupt */
 }
 
 

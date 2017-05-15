@@ -36,7 +36,7 @@
 #include <linux/mqueue.h>
 #include <linux/fs.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/processor.h>
@@ -173,19 +173,6 @@ copy_thread(unsigned long clone_flags, unsigned long usp,
 
 		if (usp)
 			userregs->sp = usp;
-
-		/*
-		 * For CLONE_SETTLS set "tp" (r10) to the TLS pointer passed to sys_clone.
-		 *
-		 * The kernel entry is:
-		 *	int clone (long flags, void *child_stack, int *parent_tid,
-		 *		int *child_tid, struct void *tls)
-		 *
-		 * This makes the source r7 in the kernel registers.
-		 */
-		if (clone_flags & CLONE_SETTLS)
-			userregs->gpr[10] = userregs->gpr[7];
-
 		userregs->gpr[11] = 0;	/* Result from fork() */
 
 		kregs->gpr[20] = 0;	/* Userspace thread */
@@ -210,6 +197,7 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 {
 	unsigned long sr = mfspr(SPR_SR) & ~SPR_SR_SM;
 
+	set_fs(USER_DS);
 	memset(regs, 0, sizeof(struct pt_regs));
 
 	regs->pc = pc;

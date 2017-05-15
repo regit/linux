@@ -26,16 +26,10 @@ static int ssm2602_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
-static const struct of_device_id ssm2602_of_match[] = {
-	{ .compatible = "adi,ssm2602", },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, ssm2602_of_match);
-
 static struct spi_driver ssm2602_spi_driver = {
 	.driver = {
 		.name	= "ssm2602",
-		.of_match_table = ssm2602_of_match,
+		.owner	= THIS_MODULE,
 	},
 	.probe		= ssm2602_spi_probe,
 	.remove		= ssm2602_spi_remove,

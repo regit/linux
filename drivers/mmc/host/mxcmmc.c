@@ -281,7 +281,7 @@ static inline void buffer_swap32(u32 *buf, int len)
 	int i;
 
 	for (i = 0; i < ((len + 3) / 4); i++) {
-		*buf = swab32(*buf);
+		st_le32(buf, *buf);
 		buf++;
 	}
 }
@@ -306,6 +306,9 @@ static int mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data)
 	struct scatterlist *sg;
 	enum dma_transfer_direction slave_dirn;
 	int i, nents;
+
+	if (data->flags & MMC_DATA_STREAM)
+		nob = 0xffff;
 
 	host->data = data;
 	data->bytes_xfered = 0;
@@ -370,8 +373,12 @@ static void mxcmci_dma_callback(void *data)
 	del_timer(&host->watchdog);
 
 	stat = mxcmci_readl(host, MMC_REG_STATUS);
+	mxcmci_writel(host, stat & ~STATUS_DATA_TRANS_DONE, MMC_REG_STATUS);
 
 	dev_dbg(mmc_dev(host->mmc), "%s: 0x%08x\n", __func__, stat);
+
+	if (stat & STATUS_READ_OP_DONE)
+		mxcmci_writel(host, STATUS_READ_OP_DONE, MMC_REG_STATUS);
 
 	mxcmci_data_done(host, stat);
 }
@@ -602,7 +609,11 @@ static int mxcmci_push(struct mxcmci_host *host, void *_buf, int bytes)
 		mxcmci_writel(host, cpu_to_le32(tmp), MMC_REG_BUFFER_ACCESS);
 	}
 
-	return mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
+	stat = mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
+	if (stat)
+		return stat;
+
+	return 0;
 }
 
 static int mxcmci_transfer_data(struct mxcmci_host *host)
@@ -732,8 +743,10 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 	sdio_irq = (stat & STATUS_SDIO_INT_ACTIVE) && host->use_sdio;
 	spin_unlock_irqrestore(&host->lock, flags);
 
-	if (mxcmci_use_dma(host) && (stat & (STATUS_WRITE_OP_DONE)))
-		mxcmci_writel(host, STATUS_WRITE_OP_DONE, MMC_REG_STATUS);
+	if (mxcmci_use_dma(host) &&
+	    (stat & (STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE)))
+		mxcmci_writel(host, STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE,
+			MMC_REG_STATUS);
 
 	if (sdio_irq) {
 		mxcmci_writel(host, STATUS_SDIO_INT_ACTIVE, MMC_REG_STATUS);
@@ -743,7 +756,8 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 	if (stat & STATUS_END_CMD_RESP)
 		mxcmci_cmd_done(host, stat);
 
-	if (mxcmci_use_dma(host) && (stat & STATUS_WRITE_OP_DONE)) {
+	if (mxcmci_use_dma(host) &&
+		  (stat & (STATUS_DATA_TRANS_DONE | STATUS_WRITE_OP_DONE))) {
 		del_timer(&host->watchdog);
 		mxcmci_data_done(host, stat);
 	}
@@ -1065,19 +1079,17 @@ static int mxcmci_probe(struct platform_device *pdev)
 
 	if (pdata)
 		dat3_card_detect = pdata->dat3_card_detect;
-	else if (mmc_card_is_removable(mmc)
+	else if (!(mmc->caps & MMC_CAP_NONREMOVABLE)
 			&& !of_property_read_bool(pdev->dev.of_node, "cd-gpios"))
 		dat3_card_detect = true;
 
 	ret = mmc_regulator_get_supply(mmc);
-	if (ret == -EPROBE_DEFER)
-		goto out_free;
-
-	if (!mmc->ocr_avail) {
-		if (pdata && pdata->ocr_avail)
-			mmc->ocr_avail = pdata->ocr_avail;
+	if (ret) {
+		if (pdata && ret != -EPROBE_DEFER)
+			mmc->ocr_avail = pdata->ocr_avail ? :
+				MMC_VDD_32_33 | MMC_VDD_33_34;
 		else
-			mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
+			goto out_free;
 	}
 
 	if (dat3_card_detect)
@@ -1226,6 +1238,7 @@ static struct platform_driver mxcmci_driver = {
 	.id_table	= mxcmci_devtype,
 	.driver		= {
 		.name		= DRIVER_NAME,
+		.owner		= THIS_MODULE,
 		.pm	= &mxcmci_pm_ops,
 		.of_match_table	= mxcmci_of_match,
 	}

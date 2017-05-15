@@ -164,18 +164,11 @@ static void tca8418_read_keypad(struct tca8418_keypad *keypad_data)
 	int error, col, row;
 	u8 reg, state, code;
 
-	do {
-		error = tca8418_read_byte(keypad_data, REG_KEY_EVENT_A, &reg);
-		if (error < 0) {
-			dev_err(&keypad_data->client->dev,
-				"unable to read REG_KEY_EVENT_A\n");
-			break;
-		}
+	/* Initial read of the key event FIFO */
+	error = tca8418_read_byte(keypad_data, REG_KEY_EVENT_A, &reg);
 
-		/* Assume that key code 0 signifies empty FIFO */
-		if (reg <= 0)
-			break;
-
+	/* Assume that key code 0 signifies empty FIFO */
+	while (error >= 0 && reg > 0) {
 		state = reg & KEY_EVENT_VALUE;
 		code  = reg & KEY_EVENT_CODE;
 
@@ -191,7 +184,11 @@ static void tca8418_read_keypad(struct tca8418_keypad *keypad_data)
 
 		/* Read for next loop */
 		error = tca8418_read_byte(keypad_data, REG_KEY_EVENT_A, &reg);
-	} while (1);
+	}
+
+	if (error < 0)
+		dev_err(&keypad_data->client->dev,
+			"unable to read REG_KEY_EVENT_A\n");
 
 	input_sync(input);
 }
@@ -407,6 +404,7 @@ MODULE_ALIAS("i2c:tca8418");
 static struct i2c_driver tca8418_keypad_driver = {
 	.driver = {
 		.name	= TCA8418_NAME,
+		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(tca8418_dt_ids),
 	},
 	.probe		= tca8418_keypad_probe,

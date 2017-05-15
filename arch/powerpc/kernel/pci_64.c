@@ -17,6 +17,7 @@
 #include <linux/pci.h>
 #include <linux/string.h>
 #include <linux/init.h>
+#include <linux/bootmem.h>
 #include <linux/export.h>
 #include <linux/mm.h>
 #include <linux/list.h>
@@ -38,7 +39,7 @@
  * ISA drivers use hard coded offsets.  If no ISA bus exists nothing
  * is mapped on the first 64K of IO space
  */
-unsigned long pci_io_base;
+unsigned long pci_io_base = ISA_IO_BASE;
 EXPORT_SYMBOL(pci_io_base);
 
 static int __init pcibios_init(void)
@@ -81,7 +82,7 @@ int pcibios_unmap_io_space(struct pci_bus *bus)
 
 	/* If this is not a PHB, we only flush the hash table over
 	 * the area mapped by this bridge. We don't play with the PTE
-	 * mappings since we might have to deal with sub-page alignments
+	 * mappings since we might have to deal with sub-page alignemnts
 	 * so flushing the hash table is the only sane way to make sure
 	 * that no hash entries are covering that removed bridge area
 	 * while still allowing other busses overlapping those pages
@@ -159,7 +160,7 @@ static int pcibios_map_phb_io_space(struct pci_controller *hose)
 
 	/* Establish the mapping */
 	if (__ioremap_at(phys_page, area->addr, size_page,
-			 pgprot_val(pgprot_noncached(__pgprot(0)))) == NULL)
+			 _PAGE_NO_CACHE | _PAGE_GUARDED) == NULL)
 		return -ENOMEM;
 
 	/* Fixup hose IO resource */
@@ -265,3 +266,13 @@ int pcibus_to_node(struct pci_bus *bus)
 }
 EXPORT_SYMBOL(pcibus_to_node);
 #endif
+
+static void quirk_radeon_32bit_msi(struct pci_dev *dev)
+{
+	struct pci_dn *pdn = pci_get_pdn(dev);
+
+	if (pdn)
+		pdn->force_32bit_msi = true;
+}
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_ATI, 0x68f2, quirk_radeon_32bit_msi);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_ATI, 0xaa68, quirk_radeon_32bit_msi);

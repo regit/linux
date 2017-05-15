@@ -12,7 +12,7 @@
  *   more details.
  */
 
-#include <linux/extable.h>
+#include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
 

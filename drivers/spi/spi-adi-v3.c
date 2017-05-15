@@ -660,9 +660,10 @@ static int adi_spi_setup(struct spi_device *spi)
 		struct adi_spi3_chip *chip_info = spi->controller_data;
 
 		chip = kzalloc(sizeof(*chip), GFP_KERNEL);
-		if (!chip)
+		if (!chip) {
+			dev_err(&spi->dev, "can not allocate chip data\n");
 			return -ENOMEM;
-
+		}
 		if (chip_info) {
 			if (chip_info->control & ~ctl_reg) {
 				dev_err(&spi->dev,
@@ -972,6 +973,7 @@ MODULE_ALIAS("platform:adi-spi3");
 static struct platform_driver adi_spi_driver = {
 	.driver	= {
 		.name	= "adi-spi3",
+		.owner	= THIS_MODULE,
 		.pm     = &adi_spi_pm_ops,
 	},
 	.remove		= adi_spi_remove,

@@ -28,7 +28,7 @@
 #include <linux/ptrace.h>
 #include <linux/gfp.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 static int compat_get_timex(struct timex *txc, struct compat_timex __user *utp)
 {
@@ -226,7 +226,7 @@ static long compat_nanosleep_restart(struct restart_block *restart)
 	ret = hrtimer_nanosleep_restart(restart);
 	set_fs(oldfs);
 
-	if (ret == -ERESTART_RESTARTBLOCK) {
+	if (ret) {
 		rmtp = restart->nanosleep.compat_rmtp;
 
 		if (rmtp && compat_put_timespec(&rmt, rmtp))
@@ -256,27 +256,9 @@ COMPAT_SYSCALL_DEFINE2(nanosleep, struct compat_timespec __user *, rqtp,
 				HRTIMER_MODE_REL, CLOCK_MONOTONIC);
 	set_fs(oldfs);
 
-	/*
-	 * hrtimer_nanosleep() can only return 0 or
-	 * -ERESTART_RESTARTBLOCK here because:
-	 *
-	 * - we call it with HRTIMER_MODE_REL and therefor exclude the
-	 *   -ERESTARTNOHAND return path.
-	 *
-	 * - we supply the rmtp argument from the task stack (due to
-	 *   the necessary compat conversion. So the update cannot
-	 *   fail, which excludes the -EFAULT return path as well. If
-	 *   it fails nevertheless we have a bigger problem and wont
-	 *   reach this place anymore.
-	 *
-	 * - if the return value is 0, we do not have to update rmtp
-	 *    because there is no remaining time.
-	 *
-	 * We check for -ERESTART_RESTARTBLOCK nevertheless if the
-	 * core implementation decides to return random nonsense.
-	 */
-	if (ret == -ERESTART_RESTARTBLOCK) {
-		struct restart_block *restart = &current->restart_block;
+	if (ret) {
+		struct restart_block *restart
+			= &current_thread_info()->restart_block;
 
 		restart->fn = compat_nanosleep_restart;
 		restart->nanosleep.compat_rmtp = rmtp;
@@ -284,6 +266,7 @@ COMPAT_SYSCALL_DEFINE2(nanosleep, struct compat_timespec __user *, rqtp,
 		if (rmtp && compat_put_timespec(&rmt, rmtp))
 			return -EFAULT;
 	}
+
 	return ret;
 }
 
@@ -307,16 +290,11 @@ static inline long put_compat_itimerval(struct compat_itimerval __user *o,
 		 __put_user(i->it_value.tv_usec, &o->it_value.tv_usec)));
 }
 
-asmlinkage long sys_ni_posix_timers(void);
-
 COMPAT_SYSCALL_DEFINE2(getitimer, int, which,
 		struct compat_itimerval __user *, it)
 {
 	struct itimerval kit;
 	int error;
-
-	if (!IS_ENABLED(CONFIG_POSIX_TIMERS))
-		return sys_ni_posix_timers();
 
 	error = do_getitimer(which, &kit);
 	if (!error && put_compat_itimerval(it, &kit))
@@ -330,9 +308,6 @@ COMPAT_SYSCALL_DEFINE3(setitimer, int, which,
 {
 	struct itimerval kin, kout;
 	int error;
-
-	if (!IS_ENABLED(CONFIG_POSIX_TIMERS))
-		return sys_ni_posix_timers();
 
 	if (in) {
 		if (get_compat_itimerval(&kin, in))
@@ -867,7 +842,7 @@ COMPAT_SYSCALL_DEFINE4(clock_nanosleep, clockid_t, which_clock, int, flags,
 		return -EFAULT;
 
 	if (err == -ERESTART_RESTARTBLOCK) {
-		restart = &current->restart_block;
+		restart = &current_thread_info()->restart_block;
 		restart->fn = compat_clock_nanosleep_restart;
 		restart->nanosleep.compat_rmtp = rmtp;
 	}
@@ -920,8 +895,7 @@ long compat_get_bitmap(unsigned long *mask, const compat_ulong_t __user *umask,
 			 * bitmap. We must however ensure the end of the
 			 * kernel bitmap is zeroed.
 			 */
-			if (nr_compat_longs) {
-				nr_compat_longs--;
+			if (nr_compat_longs-- > 0) {
 				if (__get_user(um, umask))
 					return -EFAULT;
 			} else {
@@ -963,8 +937,7 @@ long compat_put_bitmap(compat_ulong_t __user *umask, unsigned long *mask,
 			 * We dont want to write past the end of the userspace
 			 * bitmap.
 			 */
-			if (nr_compat_longs) {
-				nr_compat_longs--;
+			if (nr_compat_longs-- > 0) {
 				if (__put_user(um, umask))
 					return -EFAULT;
 			}

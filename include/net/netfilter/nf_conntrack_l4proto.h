@@ -23,13 +23,10 @@ struct nf_conntrack_l4proto {
 	/* L4 Protocol number. */
 	u_int8_t l4proto;
 
-	/* Resolve clashes on insertion races. */
-	bool allow_clash;
-
 	/* Try to fill in the third arg: dataoff is offset past network protocol
            hdr.  Return true if possible. */
 	bool (*pkt_to_tuple)(const struct sk_buff *skb, unsigned int dataoff,
-			     struct net *net, struct nf_conntrack_tuple *tuple);
+			     struct nf_conntrack_tuple *tuple);
 
 	/* Invert the per-proto part of the tuple: ie. turn xmit into reply.
 	 * Some packets can't be inverted: return 0 in that case.
@@ -59,11 +56,11 @@ struct nf_conntrack_l4proto {
 		     u_int8_t pf, unsigned int hooknum);
 
 	/* Print out the per-protocol part of the tuple. Return like seq_* */
-	void (*print_tuple)(struct seq_file *s,
-			    const struct nf_conntrack_tuple *);
+	int (*print_tuple)(struct seq_file *s,
+			   const struct nf_conntrack_tuple *);
 
 	/* Print out the private part of the conntrack. */
-	void (*print_conntrack)(struct seq_file *s, struct nf_conn *);
+	int (*print_conntrack)(struct seq_file *s, struct nf_conn *);
 
 	/* Return the array of timeouts for this protocol. */
 	unsigned int *(*get_timeouts)(struct net *net);
@@ -98,7 +95,7 @@ struct nf_conntrack_l4proto {
 		const struct nla_policy *nla_policy;
 	} ctnl_timeout;
 #endif
-	unsigned int	*net_id;
+	int	*net_id;
 	/* Init l4proto pernet data */
 	int (*init_net)(struct net *net, u_int16_t proto);
 
@@ -125,24 +122,22 @@ struct nf_conntrack_l4proto *nf_ct_l4proto_find_get(u_int16_t l3proto,
 void nf_ct_l4proto_put(struct nf_conntrack_l4proto *p);
 
 /* Protocol pernet registration. */
-int nf_ct_l4proto_pernet_register_one(struct net *net,
-				      struct nf_conntrack_l4proto *proto);
-void nf_ct_l4proto_pernet_unregister_one(struct net *net,
-					 struct nf_conntrack_l4proto *proto);
 int nf_ct_l4proto_pernet_register(struct net *net,
-				  struct nf_conntrack_l4proto *proto[],
-				  unsigned int num_proto);
+				  struct nf_conntrack_l4proto *proto);
 void nf_ct_l4proto_pernet_unregister(struct net *net,
-				     struct nf_conntrack_l4proto *proto[],
-				     unsigned int num_proto);
+				     struct nf_conntrack_l4proto *proto);
 
 /* Protocol global registration. */
-int nf_ct_l4proto_register_one(struct nf_conntrack_l4proto *proto);
-void nf_ct_l4proto_unregister_one(struct nf_conntrack_l4proto *proto);
-int nf_ct_l4proto_register(struct nf_conntrack_l4proto *proto[],
-			   unsigned int num_proto);
-void nf_ct_l4proto_unregister(struct nf_conntrack_l4proto *proto[],
-			      unsigned int num_proto);
+int nf_ct_l4proto_register(struct nf_conntrack_l4proto *proto);
+void nf_ct_l4proto_unregister(struct nf_conntrack_l4proto *proto);
+
+static inline void nf_ct_kfree_compat_sysctl_table(struct nf_proto_net *pn)
+{
+#if defined(CONFIG_SYSCTL) && defined(CONFIG_NF_CONNTRACK_PROC_COMPAT)
+	kfree(pn->ctl_compat_table);
+	pn->ctl_compat_table = NULL;
+#endif
+}
 
 /* Generic netlink helpers */
 int nf_ct_port_tuple_to_nlattr(struct sk_buff *skb,

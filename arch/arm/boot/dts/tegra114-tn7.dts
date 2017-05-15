@@ -15,10 +15,6 @@
 		linux,initrd-end = <0x82800000>;
 	};
 
-	aliases {
-		serial0 = &uartd;
-	};
-
 	firmware {
 		trusted-foundations {
 			compatible = "tlm,trusted-foundations";
@@ -63,7 +59,7 @@
 		palmas: pmic@58 {
 			compatible = "ti,palmas";
 			reg = <0x58>;
-			interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_LOW>;
 
 			#interrupt-cells = <2>;
 			interrupt-controller;
@@ -244,6 +240,7 @@
 	sdhci@78000600 {
 		status = "okay";
 		bus-width = <8>;
+		vmmc-supply = <&vdd_1v8>;
 		non-removable;
 	};
 
@@ -277,7 +274,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		clk32k_in: clock@0 {
+		clk32k_in: clock {
 			compatible = "fixed-clock";
 			reg = <0>;
 			#clock-cells = <0>;
@@ -292,7 +289,7 @@
 			label = "Power";
 			gpios = <&gpio TEGRA_GPIO(Q, 0) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 
 		volume_down {

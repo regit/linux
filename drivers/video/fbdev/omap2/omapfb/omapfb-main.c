@@ -30,7 +30,7 @@
 #include <linux/platform_device.h>
 #include <linux/omapfb.h>
 
-#include <video/omapfb_dss.h>
+#include <video/omapdss.h>
 #include <video/omapvrfb.h>
 
 #include "omapfb.h"
@@ -273,16 +273,16 @@ static struct omapfb_colormode omapfb_colormodes[] = {
 	},
 };
 
-static bool cmp_component(struct fb_bitfield *f1, struct fb_bitfield *f2)
-{
-	return f1->length == f2->length &&
-		f1->offset == f2->offset &&
-		f1->msb_right == f2->msb_right;
-}
-
 static bool cmp_var_to_colormode(struct fb_var_screeninfo *var,
 		struct omapfb_colormode *color)
 {
+	bool cmp_component(struct fb_bitfield *f1, struct fb_bitfield *f2)
+	{
+		return f1->length == f2->length &&
+			f1->offset == f2->offset &&
+			f1->msb_right == f2->msb_right;
+	}
+
 	if (var->bits_per_pixel == 0 ||
 			var->red.length == 0 ||
 			var->blue.length == 0 ||
@@ -1091,7 +1091,7 @@ static void mmap_user_close(struct vm_area_struct *vma)
 	omapfb_put_mem_region(rg);
 }
 
-static const struct vm_operations_struct mmap_user_ops = {
+static struct vm_operations_struct mmap_user_ops = {
 	.open = mmap_user_open,
 	.close = mmap_user_close,
 };
@@ -1332,7 +1332,7 @@ static void omapfb_free_fbmem(struct fb_info *fbi)
 	}
 
 	dma_free_attrs(fbdev->dev, rg->size, rg->token, rg->dma_handle,
-			rg->attrs);
+			&rg->attrs);
 
 	rg->token = NULL;
 	rg->vaddr = NULL;
@@ -1370,7 +1370,7 @@ static int omapfb_alloc_fbmem(struct fb_info *fbi, unsigned long size,
 	struct omapfb2_device *fbdev = ofbi->fbdev;
 	struct omapfb2_mem_region *rg;
 	void *token;
-	unsigned long attrs;
+	DEFINE_DMA_ATTRS(attrs);
 	dma_addr_t dma_handle;
 	int r;
 
@@ -1386,15 +1386,15 @@ static int omapfb_alloc_fbmem(struct fb_info *fbi, unsigned long size,
 
 	size = PAGE_ALIGN(size);
 
-	attrs = DMA_ATTR_WRITE_COMBINE;
+	dma_set_attr(DMA_ATTR_WRITE_COMBINE, &attrs);
 
 	if (ofbi->rotation_type == OMAP_DSS_ROT_VRFB)
-		attrs |= DMA_ATTR_NO_KERNEL_MAPPING;
+		dma_set_attr(DMA_ATTR_NO_KERNEL_MAPPING, &attrs);
 
 	DBG("allocating %lu bytes for fb %d\n", size, ofbi->id);
 
 	token = dma_alloc_attrs(fbdev->dev, size, &dma_handle,
-			GFP_KERNEL, attrs);
+			GFP_KERNEL, &attrs);
 
 	if (token == NULL) {
 		dev_err(fbdev->dev, "failed to allocate framebuffer\n");
@@ -1408,7 +1408,7 @@ static int omapfb_alloc_fbmem(struct fb_info *fbi, unsigned long size,
 		r = omap_vrfb_request_ctx(&rg->vrfb);
 		if (r) {
 			dma_free_attrs(fbdev->dev, size, token, dma_handle,
-					attrs);
+					&attrs);
 			dev_err(fbdev->dev, "vrfb create ctx failed\n");
 			return r;
 		}
@@ -1833,13 +1833,14 @@ static void omapfb_free_resources(struct omapfb2_device *fbdev)
 	if (fbdev == NULL)
 		return;
 
-	for (i = 0; i < fbdev->num_overlays; i++) {
-		struct omap_overlay *ovl = fbdev->overlays[i];
+	for (i = 0; i < fbdev->num_fbs; i++) {
+		struct omapfb_info *ofbi = FB2OFB(fbdev->fbs[i]);
+		int j;
 
-		ovl->disable(ovl);
-
-		if (ovl->manager)
-			ovl->unset_manager(ovl);
+		for (j = 0; j < ofbi->num_overlays; j++) {
+			struct omap_overlay *ovl = ofbi->overlays[j];
+			ovl->disable(ovl);
+		}
 	}
 
 	for (i = 0; i < fbdev->num_fbs; i++)
@@ -2073,7 +2074,7 @@ static int omapfb_mode_to_timings(const char *mode_str,
 	} else {
 		timings->data_pclk_edge = OMAPDSS_DRIVE_SIG_RISING_EDGE;
 		timings->de_level = OMAPDSS_SIG_ACTIVE_HIGH;
-		timings->sync_pclk_edge = OMAPDSS_DRIVE_SIG_FALLING_EDGE;
+		timings->sync_pclk_edge = OMAPDSS_DRIVE_SIG_OPPOSITE_EDGES;
 	}
 
 	timings->pixelclock = PICOS2KHZ(var->pixclock) * 1000;
@@ -2223,7 +2224,7 @@ static void fb_videomode_to_omap_timings(struct fb_videomode *m,
 	} else {
 		t->data_pclk_edge = OMAPDSS_DRIVE_SIG_RISING_EDGE;
 		t->de_level = OMAPDSS_SIG_ACTIVE_HIGH;
-		t->sync_pclk_edge = OMAPDSS_DRIVE_SIG_FALLING_EDGE;
+		t->sync_pclk_edge = OMAPDSS_DRIVE_SIG_OPPOSITE_EDGES;
 	}
 
 	t->x_res = m->xres;
@@ -2618,7 +2619,7 @@ err0:
 	return r;
 }
 
-static int omapfb_remove(struct platform_device *pdev)
+static int __exit omapfb_remove(struct platform_device *pdev)
 {
 	struct omapfb2_device *fbdev = platform_get_drvdata(pdev);
 
@@ -2635,9 +2636,10 @@ static int omapfb_remove(struct platform_device *pdev)
 
 static struct platform_driver omapfb_driver = {
 	.probe		= omapfb_probe,
-	.remove         = omapfb_remove,
+	.remove         = __exit_p(omapfb_remove),
 	.driver         = {
 		.name   = "omapfb",
+		.owner  = THIS_MODULE,
 	},
 };
 
@@ -2649,7 +2651,6 @@ module_param_named(mirror, def_mirror, bool, 0);
 
 module_platform_driver(omapfb_driver);
 
-MODULE_ALIAS("platform:omapfb");
 MODULE_AUTHOR("Tomi Valkeinen <tomi.valkeinen@nokia.com>");
 MODULE_DESCRIPTION("OMAP2/3 Framebuffer");
 MODULE_LICENSE("GPL v2");

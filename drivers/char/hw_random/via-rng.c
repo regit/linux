@@ -33,7 +33,7 @@
 #include <asm/io.h>
 #include <asm/msr.h>
 #include <asm/cpufeature.h>
-#include <asm/fpu/api.h>
+#include <asm/i387.h>
 
 
 
@@ -70,17 +70,21 @@ enum {
  * until we have 4 bytes, thus returning a u32 at a time,
  * instead of the current u8-at-a-time.
  *
- * Padlock instructions can generate a spurious DNA fault, but the
- * kernel doesn't use CR0.TS, so this doesn't matter.
+ * Padlock instructions can generate a spurious DNA fault, so
+ * we have to call them in the context of irq_ts_save/restore()
  */
 
 static inline u32 xstore(u32 *addr, u32 edx_in)
 {
 	u32 eax_out;
+	int ts_state;
+
+	ts_state = irq_ts_save();
 
 	asm(".byte 0x0F,0xA7,0xC0 /* xstore %%edi (addr=%0) */"
 		: "=m" (*addr), "=a" (eax_out), "+d" (edx_in), "+D" (addr));
 
+	irq_ts_restore(ts_state);
 	return eax_out;
 }
 
@@ -136,8 +140,8 @@ static int via_rng_init(struct hwrng *rng)
 	 * RNG configuration like it used to be the case in this
 	 * register */
 	if ((c->x86 == 6) && (c->x86_model >= 0x0f)) {
-		if (!boot_cpu_has(X86_FEATURE_XSTORE_EN)) {
-			pr_err(PFX "can't enable hardware RNG "
+		if (!cpu_has_xstore_enabled) {
+			printk(KERN_ERR PFX "can't enable hardware RNG "
 				"if XSTORE is not enabled\n");
 			return -ENODEV;
 		}
@@ -176,7 +180,7 @@ static int via_rng_init(struct hwrng *rng)
 	   unneeded */
 	rdmsr(MSR_VIA_RNG, lo, hi);
 	if ((lo & VIA_RNG_ENABLE) == 0) {
-		pr_err(PFX "cannot enable VIA C3 RNG, aborting\n");
+		printk(KERN_ERR PFX "cannot enable VIA C3 RNG, aborting\n");
 		return -ENODEV;
 	}
 
@@ -196,13 +200,12 @@ static int __init mod_init(void)
 {
 	int err;
 
-	if (!boot_cpu_has(X86_FEATURE_XSTORE))
+	if (!cpu_has_xstore)
 		return -ENODEV;
-
-	pr_info("VIA RNG detected\n");
+	printk(KERN_INFO "VIA RNG detected\n");
 	err = hwrng_register(&via_rng);
 	if (err) {
-		pr_err(PFX "RNG registering failed (%d)\n",
+		printk(KERN_ERR PFX "RNG registering failed (%d)\n",
 		       err);
 		goto out;
 	}

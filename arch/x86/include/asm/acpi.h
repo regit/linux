@@ -32,10 +32,6 @@
 #include <asm/mpspec.h>
 #include <asm/realmode.h>
 
-#ifdef CONFIG_ACPI_APEI
-# include <asm/pgtable_types.h>
-#endif
-
 #ifdef CONFIG_ACPI
 extern int acpi_lapic;
 extern int acpi_ioapic;
@@ -54,7 +50,6 @@ void acpi_pic_sci_set_trigger(unsigned int, u16);
 
 extern int (*__acpi_register_gsi)(struct device *dev, u32 gsi,
 				  int trigger, int polarity);
-extern void (*__acpi_unregister_gsi)(u32 gsi);
 
 static inline void disable_acpi(void)
 {
@@ -94,7 +89,7 @@ static inline unsigned int acpi_processor_cstate_check(unsigned int max_cstate)
 	    boot_cpu_data.x86_model <= 0x05 &&
 	    boot_cpu_data.x86_mask < 0x0A)
 		return 1;
-	else if (boot_cpu_has(X86_BUG_AMD_APIC_C1E))
+	else if (amd_e400_c1e_detected)
 		return 1;
 	else
 		return max_cstate;
@@ -126,11 +121,6 @@ static inline void arch_acpi_set_pdc_bits(u32 *buf)
 		buf[2] &= ~(ACPI_PDC_C_C2C3_FFH);
 }
 
-static inline bool acpi_has_cpu_in_madt(void)
-{
-	return !!acpi_lapic;
-}
-
 #else /* !CONFIG_ACPI */
 
 #define acpi_lapic 0
@@ -145,30 +135,10 @@ static inline void disable_acpi(void) { }
 #define ARCH_HAS_POWER_INIT	1
 
 #ifdef CONFIG_ACPI_NUMA
+extern int acpi_numa;
 extern int x86_acpi_numa_init(void);
 #endif /* CONFIG_ACPI_NUMA */
 
 #define acpi_unlazy_tlb(x)	leave_mm(x)
-
-#ifdef CONFIG_ACPI_APEI
-static inline pgprot_t arch_apei_get_mem_attribute(phys_addr_t addr)
-{
-	/*
-	 * We currently have no way to look up the EFI memory map
-	 * attributes for a region in a consistent way, because the
-	 * memmap is discarded after efi_free_boot_services(). So if
-	 * you call efi_mem_attributes() during boot and at runtime,
-	 * you could theoretically see different attributes.
-	 *
-	 * Since we are yet to see any x86 platforms that require
-	 * anything other than PAGE_KERNEL (some arm64 platforms
-	 * require the equivalent of PAGE_KERNEL_NOCACHE), return that
-	 * until we know differently.
-	 */
-	 return PAGE_KERNEL;
-}
-#endif
-
-#define ACPI_TABLE_UPGRADE_MAX_PHYS (max_low_pfn_mapped << PAGE_SHIFT)
 
 #endif /* _ASM_X86_ACPI_H */

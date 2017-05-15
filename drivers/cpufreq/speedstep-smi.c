@@ -12,8 +12,6 @@
  *                        SPEEDSTEP - DEFINITIONS                    *
  *********************************************************************/
 
-#define pr_fmt(fmt) "cpufreq: " fmt
-
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -158,7 +156,6 @@ static void speedstep_set_state(unsigned int state)
 		return;
 
 	/* Disable IRQs */
-	preempt_disable();
 	local_irq_save(flags);
 
 	command = (smi_sig & 0xffffff00) | (smi_cmd & 0xff);
@@ -169,19 +166,9 @@ static void speedstep_set_state(unsigned int state)
 
 	do {
 		if (retry) {
-			/*
-			 * We need to enable interrupts, otherwise the blockage
-			 * won't resolve.
-			 *
-			 * We disable preemption so that other processes don't
-			 * run. If other processes were running, they could
-			 * submit more DMA requests, making the blockage worse.
-			 */
 			pr_debug("retry %u, previous result %u, waiting...\n",
 					retry, result);
-			local_irq_enable();
 			mdelay(retry * 50);
-			local_irq_disable();
 		}
 		retry++;
 		__asm__ __volatile__(
@@ -198,7 +185,6 @@ static void speedstep_set_state(unsigned int state)
 
 	/* enable IRQs */
 	local_irq_restore(flags);
-	preempt_enable();
 
 	if (new_state == state)
 		pr_debug("change to %u MHz succeeded after %u tries "
@@ -206,8 +192,9 @@ static void speedstep_set_state(unsigned int state)
 			(speedstep_freqs[new_state].frequency / 1000),
 			retry, result);
 	else
-		pr_err("change to state %u failed with new_state %u and result %u\n",
-		       state, new_state, result);
+		printk(KERN_ERR "cpufreq: change to state %u "
+			"failed with new_state %u and result %u\n",
+			state, new_state, result);
 
 	return;
 }
@@ -337,8 +324,8 @@ static int __init speedstep_init(void)
 		return -ENODEV;
 	}
 
-	pr_debug("signature:0x%.8x, command:0x%.8x, "
-		"event:0x%.8x, perf_level:0x%.8x.\n",
+	pr_debug("signature:0x%.8ulx, command:0x%.8ulx, "
+		"event:0x%.8ulx, perf_level:0x%.8ulx.\n",
 		ist_info.signature, ist_info.command,
 		ist_info.event, ist_info.perf_level);
 

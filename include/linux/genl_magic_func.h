@@ -178,12 +178,12 @@ static int s_name ## _from_attrs_for_change(struct s_name *s,		\
 #define __assign(attr_nr, attr_flag, name, nla_type, type, assignment...)	\
 		nla = ntb[attr_nr];						\
 		if (nla) {						\
-			if (exclude_invariants && !!((attr_flag) & DRBD_F_INVARIANT)) {		\
+			if (exclude_invariants && ((attr_flag) & DRBD_F_INVARIANT)) {		\
 				pr_info("<< must not change invariant attr: %s\n", #name);	\
 				return -EEXIST;				\
 			}						\
 			assignment;					\
-		} else if (exclude_invariants && !!((attr_flag) & DRBD_F_INVARIANT)) {		\
+		} else if (exclude_invariants && ((attr_flag) & DRBD_F_INVARIANT)) {		\
 			/* attribute missing from payload, */		\
 			/* which was expected */			\
 		} else if ((attr_flag) & DRBD_F_REQUIRED) {		\
@@ -259,7 +259,16 @@ static struct genl_ops ZZZ_genl_ops[] __read_mostly = {
  *									{{{2
  */
 #define ZZZ_genl_family		CONCAT_(GENL_MAGIC_FAMILY, _genl_family)
-static struct genl_family ZZZ_genl_family;
+static struct genl_family ZZZ_genl_family __read_mostly = {
+	.id = GENL_ID_GENERATE,
+	.name = __stringify(GENL_MAGIC_FAMILY),
+	.version = GENL_MAGIC_VERSION,
+#ifdef GENL_MAGIC_FAMILY_HDRSZ
+	.hdrsize = NLA_ALIGN(GENL_MAGIC_FAMILY_HDRSZ),
+#endif
+	.maxattr = ARRAY_SIZE(drbd_tla_nl_policy)-1,
+};
+
 /*
  * Magic: define multicast groups
  * Magic: define multicast group registration helper
@@ -293,23 +302,11 @@ static int CONCAT_(GENL_MAGIC_FAMILY, _genl_multicast_ ## group)(	\
 #undef GENL_mc_group
 #define GENL_mc_group(group)
 
-static struct genl_family ZZZ_genl_family __ro_after_init = {
-	.name = __stringify(GENL_MAGIC_FAMILY),
-	.version = GENL_MAGIC_VERSION,
-#ifdef GENL_MAGIC_FAMILY_HDRSZ
-	.hdrsize = NLA_ALIGN(GENL_MAGIC_FAMILY_HDRSZ),
-#endif
-	.maxattr = ARRAY_SIZE(drbd_tla_nl_policy)-1,
-	.ops = ZZZ_genl_ops,
-	.n_ops = ARRAY_SIZE(ZZZ_genl_ops),
-	.mcgrps = ZZZ_genl_mcgrps,
-	.n_mcgrps = ARRAY_SIZE(ZZZ_genl_mcgrps),
-	.module = THIS_MODULE,
-};
-
 int CONCAT_(GENL_MAGIC_FAMILY, _genl_register)(void)
 {
-	return genl_register_family(&ZZZ_genl_family);
+	return genl_register_family_with_ops_groups(&ZZZ_genl_family,	\
+						    ZZZ_genl_ops,	\
+						    ZZZ_genl_mcgrps);
 }
 
 void CONCAT_(GENL_MAGIC_FAMILY, _genl_unregister)(void)

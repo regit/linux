@@ -32,12 +32,26 @@
 #include "dwmac100.h"
 #include "dwmac_dma.h"
 
-static void dwmac100_dma_init(void __iomem *ioaddr,
-			      struct stmmac_dma_cfg *dma_cfg,
-			      u32 dma_tx, u32 dma_rx, int atds)
+static int dwmac100_dma_init(void __iomem *ioaddr, int pbl, int fb, int mb,
+			     int burst_len, u32 dma_tx, u32 dma_rx, int atds)
 {
+	u32 value = readl(ioaddr + DMA_BUS_MODE);
+	int limit;
+
+	/* DMA SW reset */
+	value |= DMA_BUS_MODE_SFT_RESET;
+	writel(value, ioaddr + DMA_BUS_MODE);
+	limit = 10;
+	while (limit--) {
+		if (!(readl(ioaddr + DMA_BUS_MODE) & DMA_BUS_MODE_SFT_RESET))
+			break;
+		mdelay(10);
+	}
+	if (limit < 0)
+		return -EBUSY;
+
 	/* Enable Application Access by writing to DMA CSR0 */
-	writel(DMA_BUS_MODE_DEFAULT | (dma_cfg->pbl << DMA_BUS_MODE_PBL_SHIFT),
+	writel(DMA_BUS_MODE_DEFAULT | (pbl << DMA_BUS_MODE_PBL_SHIFT),
 	       ioaddr + DMA_BUS_MODE);
 
 	/* Mask interrupts by writing to CSR7 */
@@ -48,6 +62,8 @@ static void dwmac100_dma_init(void __iomem *ioaddr,
 	 */
 	writel(dma_tx, ioaddr + DMA_TX_BASE_ADDR);
 	writel(dma_rx, ioaddr + DMA_RCV_BASE_ADDR);
+
+	return 0;
 }
 
 /* Store and Forward capability is not used at all.
@@ -56,7 +72,7 @@ static void dwmac100_dma_init(void __iomem *ioaddr,
  * control register.
  */
 static void dwmac100_dma_operation_mode(void __iomem *ioaddr, int txmode,
-					int rxmode, int rxfifosz)
+					int rxmode)
 {
 	u32 csr6 = readl(ioaddr + DMA_CONTROL);
 
@@ -115,7 +131,6 @@ static void dwmac100_dma_diagnostic_fr(void *data, struct stmmac_extra_stats *x,
 }
 
 const struct stmmac_dma_ops dwmac100_dma_ops = {
-	.reset = dwmac_dma_reset,
 	.init = dwmac100_dma_init,
 	.dump_regs = dwmac100_dump_dma_regs,
 	.dma_mode = dwmac100_dma_operation_mode,

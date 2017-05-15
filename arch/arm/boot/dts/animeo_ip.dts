@@ -32,11 +32,12 @@
 	};
 
 	clocks {
-		slow_xtal {
-			clock-frequency = <32768>;
-		};
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
 
-		main_xtal {
+		main_clock: clock@0 {
+			compatible = "atmel,osc", "fixed-clock";
 			clock-frequency = <18432000>;
 		};
 	};
@@ -105,7 +106,7 @@
 			};
 		};
 
-		usb0: ohci@500000 {
+		usb0: ohci@00500000 {
 			num-ports = <2>;
 			atmel,vbus-gpio = <&pioB 15 GPIO_ACTIVE_LOW>;
 			status = "okay";
@@ -146,21 +147,21 @@
 			label = "keyswitch_in";
 			gpios = <&pioB 1 GPIO_ACTIVE_HIGH>;
 			linux,code = <28>;
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 
 		error_in {
 			label = "error_in";
 			gpios = <&pioB 2 GPIO_ACTIVE_HIGH>;
 			linux,code = <29>;
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 
 		btn {
 			label = "btn";
 			gpios = <&pioC 23 GPIO_ACTIVE_HIGH>;
 			linux,code = <31>;
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 	};
 };

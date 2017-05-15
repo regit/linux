@@ -80,9 +80,6 @@ int clk_enable(struct clk *clk)
 {
 	unsigned long flags;
 
-	if (!clk)
-		return 0;
-
 	spin_lock_irqsave(&clk_lock, flags);
 	__clk_enable(clk);
 	spin_unlock_irqrestore(&clk_lock, flags);
@@ -109,9 +106,6 @@ void clk_disable(struct clk *clk)
 {
 	unsigned long flags;
 
-	if (IS_ERR_OR_NULL(clk))
-		return;
-
 	spin_lock_irqsave(&clk_lock, flags);
 	__clk_disable(clk);
 	spin_unlock_irqrestore(&clk_lock, flags);
@@ -122,9 +116,6 @@ unsigned long clk_get_rate(struct clk *clk)
 {
 	unsigned long flags;
 	unsigned long rate;
-
-	if (!clk)
-		return 0;
 
 	spin_lock_irqsave(&clk_lock, flags);
 	rate = clk->get_rate(clk);
@@ -137,9 +128,6 @@ EXPORT_SYMBOL(clk_get_rate);
 long clk_round_rate(struct clk *clk, unsigned long rate)
 {
 	unsigned long flags, actual_rate;
-
-	if (!clk)
-		return 0;
 
 	if (!clk->set_rate)
 		return -ENOSYS;
@@ -157,9 +145,6 @@ int clk_set_rate(struct clk *clk, unsigned long rate)
 	unsigned long flags;
 	long ret;
 
-	if (!clk)
-		return 0;
-
 	if (!clk->set_rate)
 		return -ENOSYS;
 
@@ -176,9 +161,6 @@ int clk_set_parent(struct clk *clk, struct clk *parent)
 	unsigned long flags;
 	int ret;
 
-	if (!clk)
-		return 0;
-
 	if (!clk->set_parent)
 		return -ENOSYS;
 
@@ -192,7 +174,7 @@ EXPORT_SYMBOL(clk_set_parent);
 
 struct clk *clk_get_parent(struct clk *clk)
 {
-	return !clk ? NULL : clk->parent;
+	return clk->parent;
 }
 EXPORT_SYMBOL(clk_get_parent);
 
@@ -242,7 +224,7 @@ dump_clock(struct clk *parent, struct clkinf *r)
 		clk_get_rate(parent));
 	if (parent->dev)
 		seq_printf(r->s, ", for %s", dev_name(parent->dev));
-	seq_putc(r->s, '\n');
+	seq_printf(r->s, "\n");
 
 	/* cost of this scan is small, but not linear... */
 	r->nest = nest + NEST_DELTA;
@@ -261,32 +243,23 @@ static int clk_show(struct seq_file *s, void *unused)
 	struct clk 	*clk;
 
 	/* show all the power manager registers */
-	seq_printf(s,
-		   "MCCTRL  = %8x\n"
-		   "CKSEL   = %8x\n"
-		   "CPUMASK = %8x\n"
-		   "HSBMASK = %8x\n"
-		   "PBAMASK = %8x\n"
-		   "PBBMASK = %8x\n"
-		   "PLL0    = %8x\n"
-		   "PLL1    = %8x\n"
-		   "IMR     = %8x\n",
-		   pm_readl(MCCTRL),
-		   pm_readl(CKSEL),
-		   pm_readl(CPU_MASK),
-		   pm_readl(HSB_MASK),
-		   pm_readl(PBA_MASK),
-		   pm_readl(PBB_MASK),
-		   pm_readl(PLL0),
-		   pm_readl(PLL1),
-		   pm_readl(IMR));
+	seq_printf(s, "MCCTRL  = %8x\n", pm_readl(MCCTRL));
+	seq_printf(s, "CKSEL   = %8x\n", pm_readl(CKSEL));
+	seq_printf(s, "CPUMASK = %8x\n", pm_readl(CPU_MASK));
+	seq_printf(s, "HSBMASK = %8x\n", pm_readl(HSB_MASK));
+	seq_printf(s, "PBAMASK = %8x\n", pm_readl(PBA_MASK));
+	seq_printf(s, "PBBMASK = %8x\n", pm_readl(PBB_MASK));
+	seq_printf(s, "PLL0    = %8x\n", pm_readl(PLL0));
+	seq_printf(s, "PLL1    = %8x\n", pm_readl(PLL1));
+	seq_printf(s, "IMR     = %8x\n", pm_readl(IMR));
 	for (i = 0; i < 8; i++) {
 		if (i == 5)
 			continue;
 		seq_printf(s, "GCCTRL%d = %8x\n", i, pm_readl(GCCTRL(i)));
 	}
 
-	seq_putc(s, '\n');
+	seq_printf(s, "\n");
+
 	r.s = s;
 	r.nest = 0;
 	/* protected from changes on the list while dumping */

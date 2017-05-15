@@ -20,8 +20,6 @@
 #ifndef __ASM_KVM_BOOK3S_64_H__
 #define __ASM_KVM_BOOK3S_64_H__
 
-#include <asm/book3s/64/mmu-hash.h>
-
 #ifdef CONFIG_KVM_BOOK3S_PR_POSSIBLE
 static inline struct kvmppc_book3s_shadow_vcpu *svcpu_get(struct kvm_vcpu *vcpu)
 {
@@ -35,8 +33,11 @@ static inline void svcpu_put(struct kvmppc_book3s_shadow_vcpu *svcpu)
 }
 #endif
 
+#define SPAPR_TCE_SHIFT		12
+
 #ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
 #define KVM_DEFAULT_HPT_ORDER	24	/* 16MB HPT by default */
+extern unsigned long kvm_rma_pages;
 #endif
 
 #define VRMA_VSID	0x1ffffffUL	/* 1TB VSID reserved for VRMA */
@@ -58,61 +59,78 @@ static inline void svcpu_put(struct kvmppc_book3s_shadow_vcpu *svcpu)
 /* These bits are reserved in the guest view of the HPTE */
 #define HPTE_GR_RESERVED	HPTE_GR_MODIFIED
 
-static inline long try_lock_hpte(__be64 *hpte, unsigned long bits)
+static inline long try_lock_hpte(unsigned long *hpte, unsigned long bits)
 {
 	unsigned long tmp, old;
-	__be64 be_lockbit, be_bits;
-
-	/*
-	 * We load/store in native endian, but the HTAB is in big endian. If
-	 * we byte swap all data we apply on the PTE we're implicitly correct
-	 * again.
-	 */
-	be_lockbit = cpu_to_be64(HPTE_V_HVLOCK);
-	be_bits = cpu_to_be64(bits);
 
 	asm volatile("	ldarx	%0,0,%2\n"
 		     "	and.	%1,%0,%3\n"
 		     "	bne	2f\n"
-		     "	or	%0,%0,%4\n"
+		     "	ori	%0,%0,%4\n"
 		     "  stdcx.	%0,0,%2\n"
 		     "	beq+	2f\n"
 		     "	mr	%1,%3\n"
 		     "2:	isync"
 		     : "=&r" (tmp), "=&r" (old)
-		     : "r" (hpte), "r" (be_bits), "r" (be_lockbit)
+		     : "r" (hpte), "r" (bits), "i" (HPTE_V_HVLOCK)
 		     : "cc", "memory");
 	return old == 0;
 }
 
-static inline void unlock_hpte(__be64 *hpte, unsigned long hpte_v)
+static inline int __hpte_actual_psize(unsigned int lp, int psize)
 {
-	hpte_v &= ~HPTE_V_HVLOCK;
-	asm volatile(PPC_RELEASE_BARRIER "" : : : "memory");
-	hpte[0] = cpu_to_be64(hpte_v);
-}
+	int i, shift;
+	unsigned int mask;
 
-/* Without barrier */
-static inline void __unlock_hpte(__be64 *hpte, unsigned long hpte_v)
-{
-	hpte_v &= ~HPTE_V_HVLOCK;
-	hpte[0] = cpu_to_be64(hpte_v);
+	/* start from 1 ignoring MMU_PAGE_4K */
+	for (i = 1; i < MMU_PAGE_COUNT; i++) {
+
+		/* invalid penc */
+		if (mmu_psize_defs[psize].penc[i] == -1)
+			continue;
+		/*
+		 * encoding bits per actual page size
+		 *        PTE LP     actual page size
+		 *    rrrr rrrz		>=8KB
+		 *    rrrr rrzz		>=16KB
+		 *    rrrr rzzz		>=32KB
+		 *    rrrr zzzz		>=64KB
+		 * .......
+		 */
+		shift = mmu_psize_defs[i].shift - LP_SHIFT;
+		if (shift > LP_BITS)
+			shift = LP_BITS;
+		mask = (1 << shift) - 1;
+		if ((lp & mask) == mmu_psize_defs[psize].penc[i])
+			return i;
+	}
+	return -1;
 }
 
 static inline unsigned long compute_tlbie_rb(unsigned long v, unsigned long r,
 					     unsigned long pte_index)
 {
-	int i, b_psize = MMU_PAGE_4K, a_psize = MMU_PAGE_4K;
+	int b_psize, a_psize;
 	unsigned int penc;
 	unsigned long rb = 0, va_low, sllp;
 	unsigned int lp = (r >> LP_SHIFT) & ((1 << LP_BITS) - 1);
 
-	if (v & HPTE_V_LARGE) {
-		i = hpte_page_sizes[lp];
-		b_psize = i & 0xf;
-		a_psize = i >> 4;
-	}
+	if (!(v & HPTE_V_LARGE)) {
+		/* both base and actual psize is 4k */
+		b_psize = MMU_PAGE_4K;
+		a_psize = MMU_PAGE_4K;
+	} else {
+		for (b_psize = 0; b_psize < MMU_PAGE_COUNT; b_psize++) {
 
+			/* valid entries have a shift value */
+			if (!mmu_psize_defs[b_psize].shift)
+				continue;
+
+			a_psize = __hpte_actual_psize(lp, b_psize);
+			if (a_psize != -1)
+				break;
+		}
+	}
 	/*
 	 * Ignore the top 14 bits of va
 	 * v have top two bits covering segment size, hence move
@@ -124,7 +142,6 @@ static inline unsigned long compute_tlbie_rb(unsigned long v, unsigned long r,
 	 */
 	/* This covers 14..54 bits of va*/
 	rb = (v & ~0x7fUL) << 16;		/* AVA field */
-
 	/*
 	 * AVA in v had cleared lower 23 bits. We need to derive
 	 * that from pteg index
@@ -146,7 +163,8 @@ static inline unsigned long compute_tlbie_rb(unsigned long v, unsigned long r,
 
 	switch (b_psize) {
 	case MMU_PAGE_4K:
-		sllp = get_sllp_encoding(a_psize);
+		sllp = ((mmu_psize_defs[a_psize].sllp & SLB_VSID_L) >> 6) |
+			((mmu_psize_defs[a_psize].sllp & SLB_VSID_LP) >> 4);
 		rb |= sllp << 5;	/*  AP field */
 		rb |= (va_low & 0x7ff) << 12;	/* remaining 11 bits of AVA */
 		break;
@@ -154,10 +172,10 @@ static inline unsigned long compute_tlbie_rb(unsigned long v, unsigned long r,
 	{
 		int aval_shift;
 		/*
-		 * remaining bits of AVA/LP fields
+		 * remaining 7bits of AVA/LP fields
 		 * Also contain the rr bits of LP
 		 */
-		rb |= (va_low << mmu_psize_defs[b_psize].shift) & 0x7ff000;
+		rb |= (va_low & 0x7f) << 16;
 		/*
 		 * Now clear not needed LP bits based on actual psize
 		 */
@@ -176,8 +194,32 @@ static inline unsigned long compute_tlbie_rb(unsigned long v, unsigned long r,
 		break;
 	}
 	}
-	rb |= (v >> HPTE_V_SSIZE_SHIFT) << 8;	/* B field */
+	rb |= (v >> 54) & 0x300;		/* B field */
 	return rb;
+}
+
+static inline unsigned long hpte_page_size(unsigned long h, unsigned long l)
+{
+	int size, a_psize;
+	/* Look at the 8 bit LP value */
+	unsigned int lp = (l >> LP_SHIFT) & ((1 << LP_BITS) - 1);
+
+	/* only handle 4k, 64k and 16M pages for now */
+	if (!(h & HPTE_V_LARGE))
+		return 1ul << 12;
+	else {
+		for (size = 0; size < MMU_PAGE_COUNT; size++) {
+			/* valid entries have a shift value */
+			if (!mmu_psize_defs[size].shift)
+				continue;
+
+			a_psize = __hpte_actual_psize(lp, size);
+			if (a_psize != -1)
+				return 1ul << mmu_psize_defs[a_psize].shift;
+		}
+
+	}
+	return 0;
 }
 
 static inline unsigned long hpte_rpn(unsigned long ptel, unsigned long psize)
@@ -201,65 +243,78 @@ static inline unsigned long hpte_make_readonly(unsigned long ptel)
 	return ptel;
 }
 
-static inline bool hpte_cache_flags_ok(unsigned long hptel, bool is_ci)
+static inline int hpte_cache_flags_ok(unsigned long ptel, unsigned long io_type)
 {
-	unsigned int wimg = hptel & HPTE_R_WIMG;
+	unsigned int wimg = ptel & HPTE_R_WIMG;
 
 	/* Handle SAO */
 	if (wimg == (HPTE_R_W | HPTE_R_I | HPTE_R_M) &&
 	    cpu_has_feature(CPU_FTR_ARCH_206))
 		wimg = HPTE_R_M;
 
-	if (!is_ci)
+	if (!io_type)
 		return wimg == HPTE_R_M;
-	/*
-	 * if host is mapped cache inhibited, make sure hptel also have
-	 * cache inhibited.
-	 */
-	if (wimg & HPTE_R_W) /* FIXME!! is this ok for all guest. ? */
-		return false;
-	return !!(wimg & HPTE_R_I);
+
+	return (wimg & (HPTE_R_W | HPTE_R_I)) == io_type;
 }
 
 /*
  * If it's present and writable, atomically set dirty and referenced bits and
- * return the PTE, otherwise return 0.
+ * return the PTE, otherwise return 0. If we find a transparent hugepage
+ * and if it is marked splitting we return 0;
  */
-static inline pte_t kvmppc_read_update_linux_pte(pte_t *ptep, int writing)
+static inline pte_t kvmppc_read_update_linux_pte(pte_t *ptep, int writing,
+						 unsigned int hugepage)
 {
 	pte_t old_pte, new_pte = __pte(0);
 
 	while (1) {
+		old_pte = pte_val(*ptep);
 		/*
-		 * Make sure we don't reload from ptep
+		 * wait until _PAGE_BUSY is clear then set it atomically
 		 */
-		old_pte = READ_ONCE(*ptep);
-		/*
-		 * wait until H_PAGE_BUSY is clear then set it atomically
-		 */
-		if (unlikely(pte_val(old_pte) & H_PAGE_BUSY)) {
+		if (unlikely(old_pte & _PAGE_BUSY)) {
 			cpu_relax();
 			continue;
 		}
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+		/* If hugepage and is trans splitting return None */
+		if (unlikely(hugepage &&
+			     pmd_trans_splitting(pte_pmd(old_pte))))
+			return __pte(0);
+#endif
 		/* If pte is not present return None */
-		if (unlikely(!(pte_val(old_pte) & _PAGE_PRESENT)))
+		if (unlikely(!(old_pte & _PAGE_PRESENT)))
 			return __pte(0);
 
 		new_pte = pte_mkyoung(old_pte);
 		if (writing && pte_write(old_pte))
 			new_pte = pte_mkdirty(new_pte);
 
-		if (pte_xchg(ptep, old_pte, new_pte))
+		if (old_pte == __cmpxchg_u64((unsigned long *)ptep, old_pte,
+					     new_pte))
 			break;
 	}
 	return new_pte;
+}
+
+
+/* Return HPTE cache control bits corresponding to Linux pte bits */
+static inline unsigned long hpte_cache_bits(unsigned long pte_val)
+{
+#if _PAGE_NO_CACHE == HPTE_R_I && _PAGE_WRITETHRU == HPTE_R_W
+	return pte_val & (HPTE_R_W | HPTE_R_I);
+#else
+	return ((pte_val & _PAGE_NO_CACHE) ? HPTE_R_I : 0) +
+		((pte_val & _PAGE_WRITETHRU) ? HPTE_R_W : 0);
+#endif
 }
 
 static inline bool hpte_read_permission(unsigned long pp, unsigned long key)
 {
 	if (key)
 		return PP_RWRX <= pp && pp <= PP_RXRX;
-	return true;
+	return 1;
 }
 
 static inline bool hpte_write_permission(unsigned long pp, unsigned long key)
@@ -297,7 +352,7 @@ static inline bool slot_is_aligned(struct kvm_memory_slot *memslot,
 	unsigned long mask = (pagesize >> PAGE_SHIFT) - 1;
 
 	if (pagesize <= PAGE_SIZE)
-		return true;
+		return 1;
 	return !(memslot->base_gfn & mask) && !(memslot->npages & mask);
 }
 
@@ -343,12 +398,8 @@ static inline void note_hpte_modification(struct kvm *kvm,
  */
 static inline struct kvm_memslots *kvm_memslots_raw(struct kvm *kvm)
 {
-	return rcu_dereference_raw_notrace(kvm->memslots[0]);
+	return rcu_dereference_raw_notrace(kvm->memslots);
 }
-
-extern void kvmppc_mmu_debugfs_init(struct kvm *kvm);
-
-extern void kvmhv_rm_send_ipi(int cpu);
 
 #endif /* CONFIG_KVM_BOOK3S_HV_POSSIBLE */
 

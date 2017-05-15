@@ -34,9 +34,8 @@ Properties of the host controller node:
 - #size-cells    : Must be 2.
 
 - reg            : The Configuration Space base address and size, as accessed
-                   from the parent bus.  The base address corresponds to
-                   the first bus in the "bus-range" property.  If no
-                   "bus-range" is specified, this will be bus 0 (the default).
+                   from the parent bus.
+
 
 Properties of the /chosen node:
 
@@ -56,7 +55,7 @@ For CAM, this 24-bit offset is:
         cfg_offset(bus, device, function, register) =
                    bus << 16 | device << 11 | function << 8 | register
 
-Whilst ECAM extends this by 4 bits to accommodate 4k of function space:
+Whilst ECAM extends this by 4 bits to accomodate 4k of function space:
 
         cfg_offset(bus, device, function, register) =
                    bus << 20 | device << 15 | function << 12 | register

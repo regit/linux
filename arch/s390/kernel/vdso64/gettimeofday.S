@@ -19,7 +19,6 @@
 	.type  __kernel_gettimeofday,@function
 __kernel_gettimeofday:
 	.cfi_startproc
-	aghi	%r15,-16
 	larl	%r5,_vdso_data
 0:	ltgr	%r3,%r3				/* check if tz is NULL */
 	je	1f
@@ -29,18 +28,9 @@ __kernel_gettimeofday:
 	lg	%r4,__VDSO_UPD_COUNT(%r5)	/* load update counter */
 	tmll	%r4,0x0001			/* pending update ? loop */
 	jnz	0b
-	stcke	0(%r15)				/* Store TOD clock */
-	lg	%r1,1(%r15)
-	lg	%r0,__VDSO_TS_END(%r5)		/* TOD steering end time */
-	slgr	%r0,%r1				/* now - ts_steering_end */
-	ltgr	%r0,%r0				/* past end of steering ? */
-	jm	6f
-	srlg	%r0,%r0,15			/* 1 per 2^16 */
-	tm	__VDSO_TS_DIR+3(%r5),0x01	/* steering direction? */
-	jz	7f
-	lcgr	%r0,%r0				/* negative TOD offset */
-7:	algr	%r1,%r0				/* add steering offset */
-6:	sg	%r1,__VDSO_XTIME_STAMP(%r5)	/* TOD - cycle_last */
+	stck	48(%r15)			/* Store TOD clock */
+	lg	%r1,48(%r15)
+	sg	%r1,__VDSO_XTIME_STAMP(%r5)	/* TOD - cycle_last */
 	msgf	%r1,__VDSO_TK_MULT(%r5)		/*  * tk->mult */
 	alg	%r1,__VDSO_XTIME_NSEC(%r5)	/*  + tk->xtime_nsec */
 	lg	%r0,__VDSO_XTIME_SEC(%r5)	/* tk->xtime_sec */
@@ -60,7 +50,6 @@ __kernel_gettimeofday:
 	srlg	%r0,%r0,6
 	stg	%r0,8(%r2)			/* store tv->tv_usec */
 4:	lghi	%r2,0
-	aghi	%r15,16
 	br	%r14
 5:	.quad	1000000000
 	.long	274877907

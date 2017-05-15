@@ -49,10 +49,24 @@
 #include <linux/pagemap.h>
 #include <linux/aio.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/ioctls.h>
 #include "internal.h"
+
+int compat_log = 1;
+
+int compat_printk(const char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+	if (!compat_log)
+		return 0;
+	va_start(ap, fmt);
+	ret = vprintk(fmt, ap);
+	va_end(ap);
+	return ret;
+}
 
 /*
  * Not all architectures have sys_utime, so implement this in terms
@@ -253,9 +267,9 @@ COMPAT_SYSCALL_DEFINE2(fstatfs, unsigned int, fd, struct compat_statfs __user *,
 
 static int put_compat_statfs64(struct compat_statfs64 __user *ubuf, struct kstatfs *kbuf)
 {
-	if (sizeof(ubuf->f_bsize) == 4) {
-		if ((kbuf->f_type | kbuf->f_bsize | kbuf->f_namelen |
-		     kbuf->f_frsize | kbuf->f_flags) & 0xffffffff00000000ULL)
+	if (sizeof ubuf->f_blocks == 4) {
+		if ((kbuf->f_blocks | kbuf->f_bfree | kbuf->f_bavail |
+		     kbuf->f_bsize | kbuf->f_frsize) & 0xffffffff00000000ULL)
 			return -EOVERFLOW;
 		/* f_files and f_ffree may be -1; it's okay
 		 * to stuff that into 32 bits */
@@ -487,6 +501,45 @@ COMPAT_SYSCALL_DEFINE3(fcntl, unsigned int, fd, unsigned int, cmd,
 	return compat_sys_fcntl64(fd, cmd, arg);
 }
 
+COMPAT_SYSCALL_DEFINE2(io_setup, unsigned, nr_reqs, u32 __user *, ctx32p)
+{
+	long ret;
+	aio_context_t ctx64;
+
+	mm_segment_t oldfs = get_fs();
+	if (unlikely(get_user(ctx64, ctx32p)))
+		return -EFAULT;
+
+	set_fs(KERNEL_DS);
+	/* The __user pointer cast is valid because of the set_fs() */
+	ret = sys_io_setup(nr_reqs, (aio_context_t __user *) &ctx64);
+	set_fs(oldfs);
+	/* truncating is ok because it's a user address */
+	if (!ret)
+		ret = put_user((u32) ctx64, ctx32p);
+	return ret;
+}
+
+COMPAT_SYSCALL_DEFINE5(io_getevents, compat_aio_context_t, ctx_id,
+		       compat_long_t, min_nr,
+		       compat_long_t, nr,
+		       struct io_event __user *, events,
+		       struct compat_timespec __user *, timeout)
+{
+	struct timespec t;
+	struct timespec __user *ut = NULL;
+
+	if (timeout) {
+		if (compat_get_timespec(&t, timeout))
+			return -EFAULT;
+
+		ut = compat_alloc_user_space(sizeof(*ut));
+		if (copy_to_user(ut, &t, sizeof(t)) )
+			return -EFAULT;
+	} 
+	return sys_io_getevents(ctx_id, min_nr, nr, events, ut);
+}
+
 /* A write operation does a read from user space and vice versa */
 #define vrfy_dir(type) ((type) == READ ? VERIFY_WRITE : VERIFY_READ)
 
@@ -509,7 +562,7 @@ ssize_t compat_rw_copy_check_uvector(int type,
 		goto out;
 
 	ret = -EINVAL;
-	if (nr_segs > UIO_MAXIOV)
+	if (nr_segs > UIO_MAXIOV || nr_segs < 0)
 		goto out;
 	if (nr_segs > fast_segs) {
 		ret = -ENOMEM;
@@ -560,6 +613,42 @@ ssize_t compat_rw_copy_check_uvector(int type,
 	ret = tot_len;
 
 out:
+	return ret;
+}
+
+static inline long
+copy_iocb(long nr, u32 __user *ptr32, struct iocb __user * __user *ptr64)
+{
+	compat_uptr_t uptr;
+	int i;
+
+	for (i = 0; i < nr; ++i) {
+		if (get_user(uptr, ptr32 + i))
+			return -EFAULT;
+		if (put_user(compat_ptr(uptr), ptr64 + i))
+			return -EFAULT;
+	}
+	return 0;
+}
+
+#define MAX_AIO_SUBMITS 	(PAGE_SIZE/sizeof(struct iocb *))
+
+COMPAT_SYSCALL_DEFINE3(io_submit, compat_aio_context_t, ctx_id,
+		       int, nr, u32 __user *, iocb)
+{
+	struct iocb __user * __user *iocb64; 
+	long ret;
+
+	if (unlikely(nr < 0))
+		return -EINVAL;
+
+	if (nr > MAX_AIO_SUBMITS)
+		nr = MAX_AIO_SUBMITS;
+	
+	iocb64 = compat_alloc_user_space(nr * sizeof(*iocb64));
+	ret = copy_iocb(nr, iocb, iocb64);
+	if (!ret)
+		ret = do_io_submit(ctx_id, nr, iocb64, 1);
 	return ret;
 }
 
@@ -703,41 +792,48 @@ COMPAT_SYSCALL_DEFINE5(mount, const char __user *, dev_name,
 		       const void __user *, data)
 {
 	char *kernel_type;
-	void *options;
+	unsigned long data_page;
 	char *kernel_dev;
+	struct filename *dir;
 	int retval;
 
-	kernel_type = copy_mount_string(type);
-	retval = PTR_ERR(kernel_type);
-	if (IS_ERR(kernel_type))
+	retval = copy_mount_string(type, &kernel_type);
+	if (retval < 0)
 		goto out;
 
-	kernel_dev = copy_mount_string(dev_name);
-	retval = PTR_ERR(kernel_dev);
-	if (IS_ERR(kernel_dev))
+	dir = getname(dir_name);
+	retval = PTR_ERR(dir);
+	if (IS_ERR(dir))
 		goto out1;
 
-	options = copy_mount_options(data);
-	retval = PTR_ERR(options);
-	if (IS_ERR(options))
+	retval = copy_mount_string(dev_name, &kernel_dev);
+	if (retval < 0)
 		goto out2;
 
-	if (kernel_type && options) {
+	retval = copy_mount_options(data, &data_page);
+	if (retval < 0)
+		goto out3;
+
+	retval = -EINVAL;
+
+	if (kernel_type && data_page) {
 		if (!strcmp(kernel_type, NCPFS_NAME)) {
-			do_ncp_super_data_conv(options);
+			do_ncp_super_data_conv((void *)data_page);
 		} else if (!strcmp(kernel_type, NFS4_NAME)) {
-			retval = -EINVAL;
-			if (do_nfs4_super_data_conv(options))
-				goto out3;
+			if (do_nfs4_super_data_conv((void *) data_page))
+				goto out4;
 		}
 	}
 
-	retval = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
+	retval = do_mount(kernel_dev, dir->name, kernel_type,
+			flags, (void*)data_page);
 
+ out4:
+	free_page(data_page);
  out3:
-	kfree(options);
- out2:
 	kfree(kernel_dev);
+ out2:
+	putname(dir);
  out1:
 	kfree(kernel_type);
  out:
@@ -757,12 +853,10 @@ struct compat_readdir_callback {
 	int result;
 };
 
-static int compat_fillonedir(struct dir_context *ctx, const char *name,
-			     int namlen, loff_t offset, u64 ino,
-			     unsigned int d_type)
+static int compat_fillonedir(void *__buf, const char *name, int namlen,
+			loff_t offset, u64 ino, unsigned int d_type)
 {
-	struct compat_readdir_callback *buf =
-		container_of(ctx, struct compat_readdir_callback, ctx);
+	struct compat_readdir_callback *buf = __buf;
 	struct compat_old_linux_dirent __user *dirent;
 	compat_ulong_t d_ino;
 
@@ -795,7 +889,7 @@ COMPAT_SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 		struct compat_old_linux_dirent __user *, dirent, unsigned int, count)
 {
 	int error;
-	struct fd f = fdget_pos(fd);
+	struct fd f = fdget(fd);
 	struct compat_readdir_callback buf = {
 		.ctx.actor = compat_fillonedir,
 		.dirent = dirent
@@ -808,7 +902,7 @@ COMPAT_SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 	if (buf.result)
 		error = buf.result;
 
-	fdput_pos(f);
+	fdput(f);
 	return error;
 }
 
@@ -827,12 +921,11 @@ struct compat_getdents_callback {
 	int error;
 };
 
-static int compat_filldir(struct dir_context *ctx, const char *name, int namlen,
+static int compat_filldir(void *__buf, const char *name, int namlen,
 		loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct compat_linux_dirent __user * dirent;
-	struct compat_getdents_callback *buf =
-		container_of(ctx, struct compat_getdents_callback, ctx);
+	struct compat_getdents_callback *buf = __buf;
 	compat_ulong_t d_ino;
 	int reclen = ALIGN(offsetof(struct compat_linux_dirent, d_name) +
 		namlen + 2, sizeof(compat_long_t));
@@ -847,8 +940,6 @@ static int compat_filldir(struct dir_context *ctx, const char *name, int namlen,
 	}
 	dirent = buf->previous;
 	if (dirent) {
-		if (signal_pending(current))
-			return -EINTR;
 		if (__put_user(offset, &dirent->d_off))
 			goto efault;
 	}
@@ -888,7 +979,7 @@ COMPAT_SYSCALL_DEFINE3(getdents, unsigned int, fd,
 	if (!access_ok(VERIFY_WRITE, dirent, count))
 		return -EFAULT;
 
-	f = fdget_pos(fd);
+	f = fdget(fd);
 	if (!f.file)
 		return -EBADF;
 
@@ -902,7 +993,7 @@ COMPAT_SYSCALL_DEFINE3(getdents, unsigned int, fd,
 		else
 			error = count - buf.count;
 	}
-	fdput_pos(f);
+	fdput(f);
 	return error;
 }
 
@@ -916,13 +1007,11 @@ struct compat_getdents_callback64 {
 	int error;
 };
 
-static int compat_filldir64(struct dir_context *ctx, const char *name,
-			    int namlen, loff_t offset, u64 ino,
-			    unsigned int d_type)
+static int compat_filldir64(void * __buf, const char * name, int namlen, loff_t offset,
+		     u64 ino, unsigned int d_type)
 {
 	struct linux_dirent64 __user *dirent;
-	struct compat_getdents_callback64 *buf =
-		container_of(ctx, struct compat_getdents_callback64, ctx);
+	struct compat_getdents_callback64 *buf = __buf;
 	int reclen = ALIGN(offsetof(struct linux_dirent64, d_name) + namlen + 1,
 		sizeof(u64));
 	u64 off;
@@ -933,8 +1022,6 @@ static int compat_filldir64(struct dir_context *ctx, const char *name,
 	dirent = buf->previous;
 
 	if (dirent) {
-		if (signal_pending(current))
-			return -EINTR;
 		if (__put_user_unaligned(offset, &dirent->d_off))
 			goto efault;
 	}
@@ -977,7 +1064,7 @@ COMPAT_SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 	if (!access_ok(VERIFY_WRITE, dirent, count))
 		return -EFAULT;
 
-	f = fdget_pos(fd);
+	f = fdget(fd);
 	if (!f.file)
 		return -EBADF;
 
@@ -992,7 +1079,7 @@ COMPAT_SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 		else
 			error = count - buf.count;
 	}
-	fdput_pos(f);
+	fdput(f);
 	return error;
 }
 #endif /* __ARCH_WANT_COMPAT_SYS_GETDENTS64 */

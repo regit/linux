@@ -13,6 +13,16 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
  */
 
 #include <linux/slab.h>
@@ -297,6 +307,7 @@ int omap3isp_h3a_aewb_init(struct isp_device *isp)
 
 	aewb->ops = &h3a_aewb_ops;
 	aewb->priv = aewb_cfg;
+	aewb->dma_ch = -1;
 	aewb->event_type = V4L2_EVENT_OMAP3ISP_AEWB;
 	aewb->isp = isp;
 
@@ -304,8 +315,8 @@ int omap3isp_h3a_aewb_init(struct isp_device *isp)
 	aewb_recover_cfg = devm_kzalloc(isp->dev, sizeof(*aewb_recover_cfg),
 					GFP_KERNEL);
 	if (!aewb_recover_cfg) {
-		dev_err(aewb->isp->dev,
-			"AEWB: cannot allocate memory for recover configuration.\n");
+		dev_err(aewb->isp->dev, "AEWB: cannot allocate memory for "
+					"recover configuration.\n");
 		return -ENOMEM;
 	}
 
@@ -321,8 +332,8 @@ int omap3isp_h3a_aewb_init(struct isp_device *isp)
 	aewb_recover_cfg->subsample_hor_inc = OMAP3ISP_AEWB_MIN_SUB_INC;
 
 	if (h3a_aewb_validate_params(aewb, aewb_recover_cfg)) {
-		dev_err(aewb->isp->dev,
-			"AEWB: recover configuration is invalid.\n");
+		dev_err(aewb->isp->dev, "AEWB: recover configuration is "
+					"invalid.\n");
 		return -EINVAL;
 	}
 

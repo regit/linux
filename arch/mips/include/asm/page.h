@@ -37,7 +37,7 @@
 
 /*
  * This is used for calculating the real page sizes
- * for FTLB or VTLB + FTLB configurations.
+ * for FTLB or VTLB + FTLB confugrations.
  */
 static inline unsigned int page_size_ftlb(unsigned int mmuextdef)
 {
@@ -105,6 +105,8 @@ static inline void clear_user_page(void *addr, unsigned long vaddr,
 		flush_data_cache_page((unsigned long)addr);
 }
 
+extern void copy_user_page(void *vto, void *vfrom, unsigned long vaddr,
+	struct page *to);
 struct vm_area_struct;
 extern void copy_user_highpage(struct page *to, struct page *from,
 	unsigned long vaddr, struct vm_area_struct *vma);
@@ -114,7 +116,7 @@ extern void copy_user_highpage(struct page *to, struct page *from,
 /*
  * These are used to make use of C type-checking..
  */
-#ifdef CONFIG_PHYS_ADDR_T_64BIT
+#ifdef CONFIG_64BIT_PHYS_ADDR
   #ifdef CONFIG_CPU_MIPS32
     typedef struct { unsigned long pte_low, pte_high; } pte_t;
     #define pte_val(x)	  ((x).pte_low | ((unsigned long long)(x).pte_high << 32))
@@ -162,34 +164,16 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 /*
  * __pa()/__va() should be used only during mem init.
  */
-static inline unsigned long ___pa(unsigned long x)
-{
-	if (IS_ENABLED(CONFIG_64BIT)) {
-		/*
-		 * For MIPS64 the virtual address may either be in one of
-		 * the compatibility segements ckseg0 or ckseg1, or it may
-		 * be in xkphys.
-		 */
-		return x < CKSEG0 ? XPHYSADDR(x) : CPHYSADDR(x);
-	}
-
-	if (!IS_ENABLED(CONFIG_EVA)) {
-		/*
-		 * We're using the standard MIPS32 legacy memory map, ie.
-		 * the address x is going to be in kseg0 or kseg1. We can
-		 * handle either case by masking out the desired bits using
-		 * CPHYSADDR.
-		 */
-		return CPHYSADDR(x);
-	}
-
-	/*
-	 * EVA is in use so the memory map could be anything, making it not
-	 * safe to just mask out bits.
-	 */
-	return x - PAGE_OFFSET + PHYS_OFFSET;
-}
-#define __pa(x)		___pa((unsigned long)(x))
+#ifdef CONFIG_64BIT
+#define __pa(x)								\
+({									\
+    unsigned long __x = (unsigned long)(x);				\
+    __x < CKSEG0 ? XPHYSADDR(__x) : CPHYSADDR(__x);			\
+})
+#else
+#define __pa(x)								\
+    ((unsigned long)(x) - PAGE_OFFSET + PHYS_OFFSET)
+#endif
 #define __va(x)		((void *)((unsigned long)(x) + PAGE_OFFSET - PHYS_OFFSET))
 #include <asm/io.h>
 
@@ -218,9 +202,8 @@ static inline int pfn_valid(unsigned long pfn)
 {
 	/* avoid <linux/mm.h> include hell */
 	extern unsigned long max_mapnr;
-	unsigned long pfn_offset = ARCH_PFN_OFFSET;
 
-	return pfn >= pfn_offset && pfn < max_mapnr;
+	return pfn >= ARCH_PFN_OFFSET && pfn < max_mapnr;
 }
 
 #elif defined(CONFIG_SPARSEMEM)
@@ -240,17 +223,14 @@ static inline int pfn_valid(unsigned long pfn)
 
 #endif
 
-#define virt_to_page(kaddr)	pfn_to_page(PFN_DOWN(virt_to_phys((void *)     \
-								  (kaddr))))
+#define virt_to_page(kaddr)	pfn_to_page(PFN_DOWN(virt_to_phys(kaddr)))
 
 extern int __virt_addr_valid(const volatile void *kaddr);
 #define virt_addr_valid(kaddr)						\
 	__virt_addr_valid((const volatile void *) (kaddr))
 
-#define VM_DATA_DEFAULT_FLAGS \
-	(VM_READ | VM_WRITE | \
-	 ((current->personality & READ_IMPLIES_EXEC) ? VM_EXEC : 0) | \
-	 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+#define VM_DATA_DEFAULT_FLAGS	(VM_READ | VM_WRITE | VM_EXEC | \
+				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
 
 #define UNCAC_ADDR(addr)	((addr) - PAGE_OFFSET + UNCAC_BASE)
 #define CAC_ADDR(addr)		((addr) - UNCAC_BASE + PAGE_OFFSET)

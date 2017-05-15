@@ -65,7 +65,14 @@ int pciehp_configure_device(struct slot *p_slot)
 			pci_hp_add_bridge(dev);
 
 	pci_assign_unassigned_bridge_resources(bridge);
-	pcie_bus_configure_settings(parent);
+
+	list_for_each_entry(dev, &parent->devices, bus_list) {
+		if ((dev->class >> 16) == PCI_BASE_CLASS_DISPLAY)
+			continue;
+
+		pci_configure_slot(dev);
+	}
+
 	pci_bus_add_devices(parent);
 
  out:

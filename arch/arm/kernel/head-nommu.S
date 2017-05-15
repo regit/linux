@@ -46,7 +46,7 @@ ENTRY(stext)
 	.arm
 ENTRY(stext)
 
- THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
+ THUMB(	adr	r9, BSYM(1f)	)	@ Kernel is always entered in ARM.
  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
  THUMB(	.thumb			)	@ switch to Thumb now.
  THUMB(1:			)
@@ -77,13 +77,13 @@ ENTRY(stext)
 	orr	r6, r6, #(1 << MPU_RSR_EN)	@ Set region enabled bit
 	bl	__setup_mpu
 #endif
-
-	badr	lr, 1f				@ return (PIC) address
-	ldr	r12, [r10, #PROCINFO_INITFUNC]
-	add	r12, r12, r10
-	ret	r12
-1:	bl	__after_proc_init
-	b	__mmap_switched
+	ldr	r13, =__mmap_switched		@ address to jump to after
+						@ initialising sctlr
+	adr	lr, BSYM(1f)			@ return (PIC) address
+ ARM(	add	pc, r10, #PROCINFO_INITFUNC	)
+ THUMB(	add	r12, r10, #PROCINFO_INITFUNC	)
+ THUMB(	mov	pc, r12				)
+ 1:	b	__after_proc_init
 ENDPROC(stext)
 
 #ifdef CONFIG_SMP
@@ -106,7 +106,8 @@ ENTRY(secondary_startup)
 	movs	r10, r5				@ invalid processor?
 	beq	__error_p			@ yes, error 'p'
 
-	ldr	r7, __secondary_data
+	adr	r4, __secondary_data
+	ldmia	r4, {r7, r12}
 
 #ifdef CONFIG_ARM_MPU
 	/* Use MPU region info supplied by __cpu_up */
@@ -114,19 +115,23 @@ ENTRY(secondary_startup)
 	bl      __setup_mpu			@ Initialize the MPU
 #endif
 
-	badr	lr, 1f				@ return (PIC) address
-	ldr	r12, [r10, #PROCINFO_INITFUNC]
-	add	r12, r12, r10
-	ret	r12
-1:	bl	__after_proc_init
-	ldr	sp, [r7, #12]			@ set up the stack pointer
+	adr	lr, BSYM(__after_proc_init)	@ return address
+	mov	r13, r12			@ __secondary_switched address
+ ARM(	add	pc, r10, #PROCINFO_INITFUNC	)
+ THUMB(	add	r12, r10, #PROCINFO_INITFUNC	)
+ THUMB(	mov	pc, r12				)
+ENDPROC(secondary_startup)
+
+ENTRY(__secondary_switched)
+	ldr	sp, [r7, #8]			@ set up the stack pointer
 	mov	fp, #0
 	b	secondary_start_kernel
-ENDPROC(secondary_startup)
+ENDPROC(__secondary_switched)
 
 	.type	__secondary_data, %object
 __secondary_data:
 	.long	secondary_data
+	.long	__secondary_switched
 #endif /* CONFIG_SMP */
 
 /*
@@ -158,22 +163,8 @@ __after_proc_init:
 	bic	r0, r0, #CR_V
 #endif
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
-#elif defined (CONFIG_CPU_V7M)
-	/* For V7M systems we want to modify the CCR similarly to the SCTLR */
-#ifdef CONFIG_CPU_DCACHE_DISABLE
-	bic	r0, r0, #V7M_SCB_CCR_DC
-#endif
-#ifdef CONFIG_CPU_BPREDICT_DISABLE
-	bic	r0, r0, #V7M_SCB_CCR_BP
-#endif
-#ifdef CONFIG_CPU_ICACHE_DISABLE
-	bic	r0, r0, #V7M_SCB_CCR_IC
-#endif
-	movw	r3, #:lower16:(BASEADDR_V7M_SCB + V7M_SCB_CCR)
-	movt	r3, #:upper16:(BASEADDR_V7M_SCB + V7M_SCB_CCR)
-	str	r0, [r3]
-#endif /* CONFIG_CPU_CP15 elif CONFIG_CPU_V7M */
-	ret	lr
+#endif /* CONFIG_CPU_CP15 */
+	mov	pc, r13
 ENDPROC(__after_proc_init)
 	.ltorg
 
@@ -250,7 +241,7 @@ ENTRY(__setup_mpu)
 	mov	r0, #CONFIG_VECTORS_BASE	@ Cover from VECTORS_BASE
 	ldr	r5,=(MPU_AP_PL1RW_PL0NA | MPU_RGN_NORMAL)
 	/* Writing N to bits 5:1 (RSR_SZ) --> region size 2^N+1 */
-	mov	r6, #(((2 * PAGE_SHIFT - 1) << MPU_RSR_SZ) | 1 << MPU_RSR_EN)
+	mov	r6, #(((PAGE_SHIFT - 1) << MPU_RSR_SZ) | 1 << MPU_RSR_EN)
 
 	setup_region r0, r5, r6, MPU_DATA_SIDE	@ VECTORS_BASE, PL0 NA, enabled
 	beq	3f				@ Memory-map not unified
@@ -263,7 +254,7 @@ ENTRY(__setup_mpu)
 	orr	r0, r0, #CR_M			@ Set SCTRL.M (MPU on)
 	mcr	p15, 0, r0, c1, c0, 0		@ Enable MPU
 	isb
-	ret	lr
+	mov pc,lr
 ENDPROC(__setup_mpu)
 #endif
 #include "head-common.S"

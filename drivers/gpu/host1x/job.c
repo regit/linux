@@ -1,7 +1,7 @@
 /*
  * Tegra host1x Job
  *
- * Copyright (c) 2010-2015, NVIDIA Corporation.
+ * Copyright (c) 2010-2013, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -161,7 +161,7 @@ static int do_waitchks(struct host1x_job *job, struct host1x *host,
 
 		if (host1x_syncpt_is_expired(sp, wait->thresh)) {
 			dev_dbg(host->dev,
-				"drop WAIT id %u (%s) thresh 0x%x, min 0x%x\n",
+				"drop WAIT id %d (%s) thresh 0x%x, min 0x%x\n",
 				wait->syncpt_id, sp->name, wait->thresh,
 				host1x_syncpt_read_min(sp));
 
@@ -185,16 +185,16 @@ static unsigned int pin_job(struct host1x_job *job)
 		struct sg_table *sgt;
 		dma_addr_t phys_addr;
 
-		reloc->target.bo = host1x_bo_get(reloc->target.bo);
-		if (!reloc->target.bo)
+		reloc->target = host1x_bo_get(reloc->target);
+		if (!reloc->target)
 			goto unpin;
 
-		phys_addr = host1x_bo_pin(reloc->target.bo, &sgt);
+		phys_addr = host1x_bo_pin(reloc->target, &sgt);
 		if (!phys_addr)
 			goto unpin;
 
 		job->addr_phys[job->num_unpins] = phys_addr;
-		job->unpins[job->num_unpins].bo = reloc->target.bo;
+		job->unpins[job->num_unpins].bo = reloc->target;
 		job->unpins[job->num_unpins].sgt = sgt;
 		job->num_unpins++;
 	}
@@ -225,7 +225,7 @@ unpin:
 	return 0;
 }
 
-static int do_relocs(struct host1x_job *job, struct host1x_bo *cmdbuf)
+static unsigned int do_relocs(struct host1x_job *job, struct host1x_bo *cmdbuf)
 {
 	int i = 0;
 	u32 last_page = ~0;
@@ -235,21 +235,21 @@ static int do_relocs(struct host1x_job *job, struct host1x_bo *cmdbuf)
 	for (i = 0; i < job->num_relocs; i++) {
 		struct host1x_reloc *reloc = &job->relocarray[i];
 		u32 reloc_addr = (job->reloc_addr_phys[i] +
-				  reloc->target.offset) >> reloc->shift;
+			reloc->target_offset) >> reloc->shift;
 		u32 *target;
 
 		/* skip all other gathers */
-		if (cmdbuf != reloc->cmdbuf.bo)
+		if (cmdbuf != reloc->cmdbuf)
 			continue;
 
-		if (last_page != reloc->cmdbuf.offset >> PAGE_SHIFT) {
+		if (last_page != reloc->cmdbuf_offset >> PAGE_SHIFT) {
 			if (cmdbuf_page_addr)
 				host1x_bo_kunmap(cmdbuf, last_page,
 						 cmdbuf_page_addr);
 
 			cmdbuf_page_addr = host1x_bo_kmap(cmdbuf,
-					reloc->cmdbuf.offset >> PAGE_SHIFT);
-			last_page = reloc->cmdbuf.offset >> PAGE_SHIFT;
+					reloc->cmdbuf_offset >> PAGE_SHIFT);
+			last_page = reloc->cmdbuf_offset >> PAGE_SHIFT;
 
 			if (unlikely(!cmdbuf_page_addr)) {
 				pr_err("Could not map cmdbuf for relocation\n");
@@ -257,7 +257,7 @@ static int do_relocs(struct host1x_job *job, struct host1x_bo *cmdbuf)
 			}
 		}
 
-		target = cmdbuf_page_addr + (reloc->cmdbuf.offset & ~PAGE_MASK);
+		target = cmdbuf_page_addr + (reloc->cmdbuf_offset & ~PAGE_MASK);
 		*target = reloc_addr;
 	}
 
@@ -272,7 +272,7 @@ static bool check_reloc(struct host1x_reloc *reloc, struct host1x_bo *cmdbuf,
 {
 	offset *= sizeof(u32);
 
-	if (reloc->cmdbuf.bo != cmdbuf || reloc->cmdbuf.offset != offset)
+	if (reloc->cmdbuf != cmdbuf || reloc->cmdbuf_offset != offset)
 		return false;
 
 	return true;
@@ -464,12 +464,12 @@ static inline int copy_gathers(struct host1x_job *job, struct device *dev)
 
 	for (i = 0; i < job->num_gathers; i++) {
 		struct host1x_job_gather *g = &job->gathers[i];
-
 		size += g->words * sizeof(u32);
 	}
 
-	job->gather_copy_mapped = dma_alloc_wc(dev, size, &job->gather_copy,
-					       GFP_KERNEL);
+	job->gather_copy_mapped = dma_alloc_writecombine(dev, size,
+							 &job->gather_copy,
+							 GFP_KERNEL);
 	if (!job->gather_copy_mapped) {
 		job->gather_copy_mapped = NULL;
 		return -ENOMEM;
@@ -515,7 +515,6 @@ int host1x_job_pin(struct host1x_job *job, struct device *dev)
 	bitmap_zero(waitchk_mask, host1x_syncpt_nb_pts(host));
 	for (i = 0; i < job->num_waitchk; i++) {
 		u32 syncpt_id = job->waitchk[i].syncpt_id;
-
 		if (syncpt_id < host1x_syncpt_nb_pts(host))
 			set_bit(syncpt_id, waitchk_mask);
 	}
@@ -539,12 +538,9 @@ int host1x_job_pin(struct host1x_job *job, struct device *dev)
 
 		g->base = job->gather_addr_phys[i];
 
-		for (j = i + 1; j < job->num_gathers; j++) {
-			if (job->gathers[j].bo == g->bo) {
+		for (j = i + 1; j < job->num_gathers; j++)
+			if (job->gathers[j].bo == g->bo)
 				job->gathers[j].handled = true;
-				job->gathers[j].base = g->base;
-			}
-		}
 
 		err = do_relocs(job, g->bo);
 		if (err)
@@ -576,16 +572,15 @@ void host1x_job_unpin(struct host1x_job *job)
 
 	for (i = 0; i < job->num_unpins; i++) {
 		struct host1x_job_unpin_data *unpin = &job->unpins[i];
-
 		host1x_bo_unpin(unpin->bo, unpin->sgt);
 		host1x_bo_put(unpin->bo);
 	}
-
 	job->num_unpins = 0;
 
 	if (job->gather_copy_size)
-		dma_free_wc(job->channel->dev, job->gather_copy_size,
-			    job->gather_copy_mapped, job->gather_copy);
+		dma_free_writecombine(job->channel->dev, job->gather_copy_size,
+				      job->gather_copy_mapped,
+				      job->gather_copy);
 }
 EXPORT_SYMBOL(host1x_job_unpin);
 

@@ -205,6 +205,7 @@ static int via_cputemp_remove(struct platform_device *pdev)
 
 static struct platform_driver via_cputemp_driver = {
 	.driver = {
+		.owner = THIS_MODULE,
 		.name = DRVNAME,
 	},
 	.probe = via_cputemp_probe,
@@ -220,7 +221,7 @@ struct pdev_entry {
 static LIST_HEAD(pdev_list);
 static DEFINE_MUTEX(pdev_list_mutex);
 
-static int via_cputemp_online(unsigned int cpu)
+static int via_cputemp_device_add(unsigned int cpu)
 {
 	int err;
 	struct platform_device *pdev;
@@ -261,7 +262,7 @@ exit:
 	return err;
 }
 
-static int via_cputemp_down_prep(unsigned int cpu)
+static void via_cputemp_device_remove(unsigned int cpu)
 {
 	struct pdev_entry *p;
 
@@ -272,12 +273,32 @@ static int via_cputemp_down_prep(unsigned int cpu)
 			list_del(&p->list);
 			mutex_unlock(&pdev_list_mutex);
 			kfree(p);
-			return 0;
+			return;
 		}
 	}
 	mutex_unlock(&pdev_list_mutex);
-	return 0;
 }
+
+static int via_cputemp_cpu_callback(struct notifier_block *nfb,
+				    unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (unsigned long) hcpu;
+
+	switch (action) {
+	case CPU_ONLINE:
+	case CPU_DOWN_FAILED:
+		via_cputemp_device_add(cpu);
+		break;
+	case CPU_DOWN_PREPARE:
+		via_cputemp_device_remove(cpu);
+		break;
+	}
+	return NOTIFY_OK;
+}
+
+static struct notifier_block via_cputemp_cpu_notifier __refdata = {
+	.notifier_call = via_cputemp_cpu_callback,
+};
 
 static const struct x86_cpu_id __initconst cputemp_ids[] = {
 	{ X86_VENDOR_CENTAUR, 6, 0xa, }, /* C7 A */
@@ -287,11 +308,9 @@ static const struct x86_cpu_id __initconst cputemp_ids[] = {
 };
 MODULE_DEVICE_TABLE(x86cpu, cputemp_ids);
 
-static enum cpuhp_state via_temp_online;
-
 static int __init via_cputemp_init(void)
 {
-	int err;
+	int i, err;
 
 	if (!x86_match_cpu(cputemp_ids))
 		return -ENODEV;
@@ -300,33 +319,58 @@ static int __init via_cputemp_init(void)
 	if (err)
 		goto exit;
 
-	err = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "hwmon/via:online",
-				via_cputemp_online, via_cputemp_down_prep);
-	if (err < 0)
-		goto exit_driver_unreg;
-	via_temp_online = err;
+	cpu_notifier_register_begin();
+	for_each_online_cpu(i) {
+		struct cpuinfo_x86 *c = &cpu_data(i);
+
+		if (c->x86 != 6)
+			continue;
+
+		if (c->x86_model < 0x0a)
+			continue;
+
+		if (c->x86_model > 0x0f) {
+			pr_warn("Unknown CPU model 0x%x\n", c->x86_model);
+			continue;
+		}
+
+		via_cputemp_device_add(i);
+	}
 
 #ifndef CONFIG_HOTPLUG_CPU
 	if (list_empty(&pdev_list)) {
+		cpu_notifier_register_done();
 		err = -ENODEV;
-		goto exit_hp_unreg;
+		goto exit_driver_unreg;
 	}
 #endif
+
+	__register_hotcpu_notifier(&via_cputemp_cpu_notifier);
+	cpu_notifier_register_done();
 	return 0;
 
 #ifndef CONFIG_HOTPLUG_CPU
-exit_hp_unreg:
-	cpuhp_remove_state_nocalls(via_temp_online);
-#endif
 exit_driver_unreg:
 	platform_driver_unregister(&via_cputemp_driver);
+#endif
 exit:
 	return err;
 }
 
 static void __exit via_cputemp_exit(void)
 {
-	cpuhp_remove_state(via_temp_online);
+	struct pdev_entry *p, *n;
+
+	cpu_notifier_register_begin();
+	__unregister_hotcpu_notifier(&via_cputemp_cpu_notifier);
+	mutex_lock(&pdev_list_mutex);
+	list_for_each_entry_safe(p, n, &pdev_list, list) {
+		platform_device_unregister(p->pdev);
+		list_del(&p->list);
+		kfree(p);
+	}
+	mutex_unlock(&pdev_list_mutex);
+	cpu_notifier_register_done();
 	platform_driver_unregister(&via_cputemp_driver);
 }
 

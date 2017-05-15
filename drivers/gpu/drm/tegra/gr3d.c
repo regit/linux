@@ -12,8 +12,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
-
-#include <soc/tegra/pmc.h>
+#include <linux/tegra-powergate.h>
 
 #include "drm.h"
 #include "gem.h"
@@ -131,7 +130,6 @@ static const struct of_device_id tegra_gr3d_match[] = {
 	{ .compatible = "nvidia,tegra20-gr3d" },
 	{ }
 };
-MODULE_DEVICE_TABLE(of, tegra_gr3d_match);
 
 static const u32 gr3d_addr_regs[] = {
 	GR3D_IDX_ATTRIBUTE( 0),
@@ -268,9 +266,9 @@ static int gr3d_probe(struct platform_device *pdev)
 
 	if (of_device_is_compatible(np, "nvidia,tegra30-gr3d")) {
 		gr3d->clk_secondary = devm_clk_get(&pdev->dev, "3d2");
-		if (IS_ERR(gr3d->clk_secondary)) {
+		if (IS_ERR(gr3d->clk)) {
 			dev_err(&pdev->dev, "cannot get secondary clock\n");
-			return PTR_ERR(gr3d->clk_secondary);
+			return PTR_ERR(gr3d->clk);
 		}
 
 		gr3d->rst_secondary = devm_reset_control_get(&pdev->dev,

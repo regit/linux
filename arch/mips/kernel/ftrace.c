@@ -63,7 +63,7 @@ static inline int in_kernel_space(unsigned long ip)
 	((unsigned int)(JAL | (((addr) >> 2) & ADDR_MASK)))
 
 static unsigned int insn_jal_ftrace_caller __read_mostly;
-static unsigned int insn_la_mcount[2] __read_mostly;
+static unsigned int insn_lui_v1_hi16_mcount __read_mostly;
 static unsigned int insn_j_ftrace_graph_caller __maybe_unused __read_mostly;
 
 static inline void ftrace_dyn_arch_init_insns(void)
@@ -71,10 +71,10 @@ static inline void ftrace_dyn_arch_init_insns(void)
 	u32 *buf;
 	unsigned int v1;
 
-	/* la v1, _mcount */
+	/* lui v1, hi16_mcount */
 	v1 = 3;
-	buf = (u32 *)&insn_la_mcount[0];
-	UASM_i_LA(&buf, v1, MCOUNT_ADDR);
+	buf = (u32 *)&insn_lui_v1_hi16_mcount;
+	UASM_i_LA_mostly(&buf, v1, MCOUNT_ADDR);
 
 	/* jal (ftrace_caller + 8), jump over the first two instruction */
 	buf = (u32 *)&insn_jal_ftrace_caller;
@@ -111,47 +111,14 @@ static int ftrace_modify_code_2(unsigned long ip, unsigned int new_code1,
 				unsigned int new_code2)
 {
 	int faulted;
-	mm_segment_t old_fs;
 
 	safe_store_code(new_code1, ip, faulted);
 	if (unlikely(faulted))
 		return -EFAULT;
-
-	ip += 4;
-	safe_store_code(new_code2, ip, faulted);
+	safe_store_code(new_code2, ip + 4, faulted);
 	if (unlikely(faulted))
 		return -EFAULT;
-
-	ip -= 4;
-	old_fs = get_fs();
-	set_fs(get_ds());
 	flush_icache_range(ip, ip + 8);
-	set_fs(old_fs);
-
-	return 0;
-}
-
-static int ftrace_modify_code_2r(unsigned long ip, unsigned int new_code1,
-				 unsigned int new_code2)
-{
-	int faulted;
-	mm_segment_t old_fs;
-
-	ip += 4;
-	safe_store_code(new_code2, ip, faulted);
-	if (unlikely(faulted))
-		return -EFAULT;
-
-	ip -= 4;
-	safe_store_code(new_code1, ip, faulted);
-	if (unlikely(faulted))
-		return -EFAULT;
-
-	old_fs = get_fs();
-	set_fs(get_ds());
-	flush_icache_range(ip, ip + 8);
-	set_fs(old_fs);
-
 	return 0;
 }
 #endif
@@ -163,14 +130,13 @@ static int ftrace_modify_code_2r(unsigned long ip, unsigned int new_code1,
  *
  * move at, ra
  * jal _mcount		--> nop
- *  sub sp, sp, 8	--> nop  (CONFIG_32BIT)
  *
  * 2. For modules:
  *
  * 2.1 For KBUILD_MCOUNT_RA_ADDRESS and CONFIG_32BIT
  *
  * lui v1, hi_16bit_of_mcount	     --> b 1f (0x10000005)
- * addiu v1, v1, low_16bit_of_mcount --> nop  (CONFIG_32BIT)
+ * addiu v1, v1, low_16bit_of_mcount
  * move at, ra
  * move $12, ra_address
  * jalr v1
@@ -179,7 +145,7 @@ static int ftrace_modify_code_2r(unsigned long ip, unsigned int new_code1,
  * 2.2 For the Other situations
  *
  * lui v1, hi_16bit_of_mcount	     --> b 1f (0x10000004)
- * addiu v1, v1, low_16bit_of_mcount --> nop  (CONFIG_32BIT)
+ * addiu v1, v1, low_16bit_of_mcount
  * move at, ra
  * jalr v1
  *  nop | move $12, ra_address | sub sp, sp, 8
@@ -218,14 +184,10 @@ int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 	unsigned int new;
 	unsigned long ip = rec->ip;
 
-	new = in_kernel_space(ip) ? insn_jal_ftrace_caller : insn_la_mcount[0];
+	new = in_kernel_space(ip) ? insn_jal_ftrace_caller :
+		insn_lui_v1_hi16_mcount;
 
-#ifdef CONFIG_64BIT
 	return ftrace_modify_code(ip, new);
-#else
-	return ftrace_modify_code_2r(ip, new, in_kernel_space(ip) ?
-						INSN_NOP : insn_la_mcount[1]);
-#endif
 }
 
 #define FTRACE_CALL_IP ((unsigned long)(&ftrace_call))
@@ -340,9 +302,6 @@ void prepare_ftrace_return(unsigned long *parent_ra_addr, unsigned long self_ra,
 	    &return_to_handler;
 	int faulted, insns;
 
-	if (unlikely(ftrace_graph_is_dead()))
-		return;
-
 	if (unlikely(atomic_read(&current->tracing_graph_pause)))
 		return;
 
@@ -382,8 +341,8 @@ void prepare_ftrace_return(unsigned long *parent_ra_addr, unsigned long self_ra,
 	if (unlikely(faulted))
 		goto out;
 
-	if (ftrace_push_return_trace(old_parent_ra, self_ra, &trace.depth, fp,
-				     NULL) == -EBUSY) {
+	if (ftrace_push_return_trace(old_parent_ra, self_ra, &trace.depth, fp)
+	    == -EBUSY) {
 		*parent_ra_addr = old_parent_ra;
 		return;
 	}

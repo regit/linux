@@ -9,15 +9,12 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 
-#include <asm/fsl_pm.h>
-#include <soc/fsl/qe/qe.h>
+#include <asm/qe.h>
 #include <sysdev/cpm2_pic.h>
 
 #include "mpc85xx.h"
 
-const struct fsl_pm_ops *qoriq_pm_ops;
-
-static const struct of_device_id mpc85xx_common_ids[] __initconst = {
+static struct of_device_id __initdata mpc85xx_common_ids[] = {
 	{ .type = "soc", },
 	{ .compatible = "soc", },
 	{ .compatible = "simple-bus", },
@@ -43,7 +40,6 @@ static const struct of_device_id mpc85xx_common_ids[] __initconst = {
 	{ .compatible = "fsl,qoriq-pcie-v2.4", },
 	{ .compatible = "fsl,qoriq-pcie-v2.3", },
 	{ .compatible = "fsl,qoriq-pcie-v2.2", },
-	{ .compatible = "fsl,fman", },
 	{},
 };
 
@@ -52,7 +48,7 @@ int __init mpc85xx_common_publish_devices(void)
 	return of_platform_bus_probe(NULL, mpc85xx_common_ids, NULL);
 }
 #ifdef CONFIG_CPM2
-static void cpm2_cascade(struct irq_desc *desc)
+static void cpm2_cascade(unsigned int irq, struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	int cascade_irq;
@@ -76,7 +72,7 @@ void __init mpc85xx_cpm2_pic_init(void)
 		return;
 	}
 	irq = irq_of_parse_and_map(np, 0);
-	if (!irq) {
+	if (irq == NO_IRQ) {
 		of_node_put(np);
 		printk(KERN_ERR "PIC init: got no IRQ for cpm cascade\n");
 		return;
@@ -108,6 +104,7 @@ void __init mpc85xx_qe_init(void)
 		return;
 	}
 
+	qe_reset();
 	of_node_put(np);
 
 }

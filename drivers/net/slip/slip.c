@@ -64,7 +64,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/bitops.h>
 #include <linux/sched.h>
 #include <linux/string.h>
@@ -164,7 +164,7 @@ static int sl_alloc_bufs(struct slip *sl, int mtu)
 	if (cbuff == NULL)
 		goto err_exit;
 	slcomp = slhc_init(16, 16);
-	if (IS_ERR(slcomp))
+	if (slcomp == NULL)
 		goto err_exit;
 #endif
 	spin_lock_bh(&sl->lock);
@@ -407,7 +407,7 @@ static void sl_encaps(struct slip *sl, unsigned char *icp, int len)
 	set_bit(TTY_DO_WRITE_WAKEUP, &sl->tty->flags);
 	actual = sl->tty->ops->write(sl->tty, sl->xbuff, count);
 #ifdef SL_CHECK_TRANSMIT
-	netif_trans_update(sl->dev);
+	sl->dev->trans_start = jiffies;
 #endif
 	sl->xleft = count - actual;
 	sl->xhead = sl->xbuff + actual;
@@ -561,7 +561,12 @@ static int sl_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct slip *sl = netdev_priv(dev);
 
-	return sl_realloc_bufs(sl, new_mtu);
+	if (new_mtu < 68 || new_mtu > 65534)
+		return -EINVAL;
+
+	if (new_mtu != dev->mtu)
+		return sl_realloc_bufs(sl, new_mtu);
+	return 0;
 }
 
 /* Netdevice get statistics request */
@@ -658,10 +663,6 @@ static void sl_setup(struct net_device *dev)
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 10;
 
-	/* MTU range: 68 - 65534 */
-	dev->min_mtu = 68;
-	dev->max_mtu = 65534;
-
 	/* New-style flags. */
 	dev->flags		= IFF_NOARP|IFF_POINTOPOINT|IFF_MULTICAST;
 }
@@ -748,7 +749,7 @@ static struct slip *sl_alloc(dev_t line)
 		return NULL;
 
 	sprintf(name, "sl%d", i);
-	dev = alloc_netdev(sizeof(*sl), name, NET_NAME_UNKNOWN, sl_setup);
+	dev = alloc_netdev(sizeof(*sl), name, sl_setup);
 	if (!dev)
 		return NULL;
 

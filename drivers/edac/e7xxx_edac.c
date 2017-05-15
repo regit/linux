@@ -30,7 +30,7 @@
 #include <linux/pci.h>
 #include <linux/pci_ids.h>
 #include <linux/edac.h>
-#include "edac_module.h"
+#include "edac_core.h"
 
 #define	E7XXX_REVISION " Ver: 2.0.2"
 #define	EDAC_MOD_STR	"e7xxx_edac"
@@ -226,7 +226,7 @@ static void process_ce(struct mem_ctl_info *mci, struct e7xxx_error_info *info)
 static void process_ce_no_info(struct mem_ctl_info *mci)
 {
 	edac_dbg(3, "\n");
-	edac_mc_handle_error(HW_EVENT_ERR_CORRECTED, mci, 1, 0, 0, 0, -1, -1, -1,
+	edac_mc_handle_error(HW_EVENT_ERR_UNCORRECTED, mci, 1, 0, 0, 0, -1, -1, -1,
 			     "e7xxx CE log register overflow", "");
 }
 

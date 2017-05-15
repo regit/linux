@@ -16,8 +16,6 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
-#define I2C_MAX_RETRIES 3
-
 /**
  * struct ec_i2c_device - Driver data for I2C tunnel
  *
@@ -96,7 +94,7 @@ static int ec_i2c_construct_message(u8 *buf, const struct i2c_msg i2c_msgs[],
 		msg->addr_flags = i2c_msg->addr;
 
 		if (i2c_msg->flags & I2C_M_TEN)
-			return -EINVAL;
+			msg->addr_flags |= EC_I2C_FLAG_10BIT;
 
 		if (i2c_msg->flags & I2C_M_RD) {
 			msg->addr_flags |= EC_I2C_FLAG_READ;
@@ -182,55 +180,62 @@ static int ec_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg i2c_msgs[],
 	const u16 bus_num = bus->remote_bus;
 	int request_len;
 	int response_len;
-	int alloc_size;
+	u8 *request = NULL;
+	u8 *response = NULL;
 	int result;
-	struct cros_ec_command *msg;
 
 	request_len = ec_i2c_count_message(i2c_msgs, num);
 	if (request_len < 0) {
 		dev_warn(dev, "Error constructing message %d\n", request_len);
-		return request_len;
+		result = request_len;
+		goto exit;
 	}
-
 	response_len = ec_i2c_count_response(i2c_msgs, num);
 	if (response_len < 0) {
 		/* Unexpected; no errors should come when NULL response */
 		dev_warn(dev, "Error preparing response %d\n", response_len);
-		return response_len;
-	}
-
-	alloc_size = max(request_len, response_len);
-	msg = kmalloc(sizeof(*msg) + alloc_size, GFP_KERNEL);
-	if (!msg)
-		return -ENOMEM;
-
-	result = ec_i2c_construct_message(msg->data, i2c_msgs, num, bus_num);
-	if (result) {
-		dev_err(dev, "Error constructing EC i2c message %d\n", result);
+		result = response_len;
 		goto exit;
 	}
 
-	msg->version = 0;
-	msg->command = EC_CMD_I2C_PASSTHRU;
-	msg->outsize = request_len;
-	msg->insize = response_len;
-
-	result = cros_ec_cmd_xfer_status(bus->ec, msg);
-	if (result < 0) {
-		dev_err(dev, "Error transferring EC i2c message %d\n", result);
-		goto exit;
+	if (request_len <= ARRAY_SIZE(bus->request_buf)) {
+		request = bus->request_buf;
+	} else {
+		request = kzalloc(request_len, GFP_KERNEL);
+		if (request == NULL) {
+			result = -ENOMEM;
+			goto exit;
+		}
+	}
+	if (response_len <= ARRAY_SIZE(bus->response_buf)) {
+		response = bus->response_buf;
+	} else {
+		response = kzalloc(response_len, GFP_KERNEL);
+		if (response == NULL) {
+			result = -ENOMEM;
+			goto exit;
+		}
 	}
 
-	result = ec_i2c_parse_response(msg->data, i2c_msgs, &num);
-	if (result < 0) {
-		dev_err(dev, "Error parsing EC i2c message %d\n", result);
+	ec_i2c_construct_message(request, i2c_msgs, num, bus_num);
+	result = bus->ec->command_sendrecv(bus->ec, EC_CMD_I2C_PASSTHRU,
+					   request, request_len,
+					   response, response_len);
+	if (result)
 		goto exit;
-	}
+
+	result = ec_i2c_parse_response(response, i2c_msgs, &num);
+	if (result < 0)
+		goto exit;
 
 	/* Indicate success by saying how many messages were sent */
 	result = num;
 exit:
-	kfree(msg);
+	if (request != bus->request_buf)
+		kfree(request);
+	if (response != bus->response_buf)
+		kfree(response);
+
 	return result;
 }
 
@@ -253,7 +258,7 @@ static int ec_i2c_probe(struct platform_device *pdev)
 	u32 remote_bus;
 	int err;
 
-	if (!ec->cmd_xfer) {
+	if (!ec->command_sendrecv) {
 		dev_err(dev, "Missing sendrecv\n");
 		return -EINVAL;
 	}
@@ -278,11 +283,12 @@ static int ec_i2c_probe(struct platform_device *pdev)
 	bus->adap.algo_data = bus;
 	bus->adap.dev.parent = &pdev->dev;
 	bus->adap.dev.of_node = np;
-	bus->adap.retries = I2C_MAX_RETRIES;
 
 	err = i2c_add_adapter(&bus->adap);
-	if (err)
+	if (err) {
+		dev_err(dev, "cannot register i2c adapter\n");
 		return err;
+	}
 	platform_set_drvdata(pdev, bus);
 
 	return err;
@@ -297,20 +303,11 @@ static int ec_i2c_remove(struct platform_device *dev)
 	return 0;
 }
 
-#ifdef CONFIG_OF
-static const struct of_device_id cros_ec_i2c_of_match[] = {
-	{ .compatible = "google,cros-ec-i2c-tunnel" },
-	{},
-};
-MODULE_DEVICE_TABLE(of, cros_ec_i2c_of_match);
-#endif
-
 static struct platform_driver ec_i2c_tunnel_driver = {
 	.probe = ec_i2c_probe,
 	.remove = ec_i2c_remove,
 	.driver = {
 		.name = "cros-ec-i2c-tunnel",
-		.of_match_table = of_match_ptr(cros_ec_i2c_of_match),
 	},
 };
 

@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,7 +47,6 @@
 #include "amlcode.h"
 #include "acdispat.h"
 #include "acinterp.h"
-#include "acdebug.h"
 
 #define _COMPONENT          ACPI_DISPATCHER
 ACPI_MODULE_NAME("dscontrol")
@@ -163,8 +162,8 @@ acpi_ds_exec_begin_control_op(struct acpi_walk_state *walk_state,
  ******************************************************************************/
 
 acpi_status
-acpi_ds_exec_end_control_op(struct acpi_walk_state *walk_state,
-			    union acpi_parse_object *op)
+acpi_ds_exec_end_control_op(struct acpi_walk_state * walk_state,
+			    union acpi_parse_object * op)
 {
 	acpi_status status = AE_OK;
 	union acpi_generic_state *control_state;
@@ -213,7 +212,7 @@ acpi_ds_exec_end_control_op(struct acpi_walk_state *walk_state,
 			 */
 			control_state->control.loop_count++;
 			if (control_state->control.loop_count >
-			    acpi_gbl_max_loop_iterations) {
+			    ACPI_MAX_LOOP_ITERATIONS) {
 				status = AE_AML_INFINITE_LOOP;
 				break;
 			}
@@ -349,7 +348,14 @@ acpi_ds_exec_end_control_op(struct acpi_walk_state *walk_state,
 
 	case AML_BREAK_POINT_OP:
 
-		acpi_db_signal_break_point(walk_state);
+		/*
+		 * Set the single-step flag. This will cause the debugger (if present)
+		 * to break to the console within the AML debugger at the start of the
+		 * next AML instruction.
+		 */
+		ACPI_DEBUGGER_EXEC(acpi_gbl_cm_single_step = TRUE);
+		ACPI_DEBUGGER_EXEC(acpi_os_printf
+				   ("**break** Executed AML BreakPoint opcode\n"));
 
 		/* Call to the OSL in case OS wants a piece of the action */
 

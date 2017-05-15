@@ -114,7 +114,6 @@ static struct s3c2410_platform_nand __initdata at2440evb_nand_info = {
 	.twrph1		= 40,
 	.nr_sets	= ARRAY_SIZE(at2440evb_nand_sets),
 	.sets		= at2440evb_nand_sets,
-	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 /* DM9000AEP 10/100 ethernet controller */
@@ -219,4 +218,5 @@ MACHINE_START(AT2440EVB, "AT2440EVB")
 	.init_machine	= at2440evb_init,
 	.init_irq	= s3c2440_init_irq,
 	.init_time	= at2440evb_init_time,
+	.restart	= s3c244x_restart,
 MACHINE_END

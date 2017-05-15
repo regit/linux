@@ -85,7 +85,7 @@ static int mxs_spi_setup_transfer(struct spi_device *dev,
 		mxs_ssp_set_clk_rate(ssp, hz);
 		/*
 		 * Save requested rate, hz, rather than the actual rate,
-		 * ssp->clk_rate.  Otherwise we would set the rate every transfer
+		 * ssp->clk_rate.  Otherwise we would set the rate every trasfer
 		 * when the actual rate is not quite the same as requested rate.
 		 */
 		spi->sck = hz;
@@ -154,14 +154,12 @@ static int mxs_ssp_wait(struct mxs_spi *spi, int offset, int mask, bool set)
 static void mxs_ssp_dma_irq_callback(void *param)
 {
 	struct mxs_spi *spi = param;
-
 	complete(&spi->c);
 }
 
 static irqreturn_t mxs_ssp_irq_handler(int irq, void *dev_id)
 {
 	struct mxs_ssp *ssp = dev_id;
-
 	dev_err(ssp->dev, "%s[%i] CTRL1=%08x STATUS=%08x\n",
 		__func__, __LINE__,
 		readl(ssp->base + HW_SSP_CTRL1(ssp)),
@@ -182,6 +180,7 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	int min, ret;
 	u32 ctrl0;
 	struct page *vm_page;
+	void *sg_buf;
 	struct {
 		u32			pio[4];
 		struct scatterlist	sg;
@@ -190,7 +189,7 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	if (!len)
 		return -EINVAL;
 
-	dma_xfer = kcalloc(sgs, sizeof(*dma_xfer), GFP_KERNEL);
+	dma_xfer = kzalloc(sizeof(*dma_xfer) * sgs, GFP_KERNEL);
 	if (!dma_xfer)
 		return -ENOMEM;
 
@@ -231,14 +230,13 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 				ret = -ENOMEM;
 				goto err_vmalloc;
 			}
-
-			sg_init_table(&dma_xfer[sg_count].sg, 1);
-			sg_set_page(&dma_xfer[sg_count].sg, vm_page,
-				    min, offset_in_page(buf));
+			sg_buf = page_address(vm_page) +
+				((size_t)buf & ~PAGE_MASK);
 		} else {
-			sg_init_one(&dma_xfer[sg_count].sg, buf, min);
+			sg_buf = buf;
 		}
 
+		sg_init_one(&dma_xfer[sg_count].sg, sg_buf, min);
 		ret = dma_map_sg(ssp->dev, &dma_xfer[sg_count].sg, 1,
 			(flags & TXRX_WRITE) ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 
@@ -282,8 +280,9 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	dmaengine_submit(desc);
 	dma_async_issue_pending(ssp->dmach);
 
-	if (!wait_for_completion_timeout(&spi->c,
-					 msecs_to_jiffies(SSP_TIMEOUT))) {
+	ret = wait_for_completion_timeout(&spi->c,
+				msecs_to_jiffies(SSP_TIMEOUT));
+	if (!ret) {
 		dev_err(ssp->dev, "DMA transfer timeout\n");
 		ret = -ETIMEDOUT;
 		dmaengine_terminate_all(ssp->dmach);
@@ -510,7 +509,7 @@ static int mxs_spi_probe(struct platform_device *pdev)
 	init_completion(&spi->c);
 
 	ret = devm_request_irq(&pdev->dev, irq_err, mxs_ssp_irq_handler, 0,
-			       dev_name(&pdev->dev), ssp);
+			       DRIVER_NAME, ssp);
 	if (ret)
 		goto out_master_free;
 
@@ -571,6 +570,7 @@ static struct platform_driver mxs_spi_driver = {
 	.remove	= mxs_spi_remove,
 	.driver	= {
 		.name	= DRIVER_NAME,
+		.owner	= THIS_MODULE,
 		.of_match_table = mxs_spi_dt_ids,
 	},
 };

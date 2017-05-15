@@ -7,7 +7,7 @@
  * licenses.  You may choose to be licensed under the terms of the GNU
  * General Public License (GPL) Version 2, available from the file
  * COPYING in the main directory of this source tree, or the
- * BSD license below:
+ * OpenIB.org BSD license below:
  *
  *     Redistribution and use in source and binary forms, with or
  *     without modification, are permitted provided that the following
@@ -36,6 +36,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/sched.h>
 #include <linux/hugetlb.h>
+#include <linux/dma-attrs.h>
 #include <linux/iommu.h>
 #include <linux/workqueue.h>
 #include <linux/list.h>
@@ -111,7 +112,10 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 	int i;
 	int flags;
 	dma_addr_t pa;
-	unsigned int gup_flags;
+	DEFINE_DMA_ATTRS(attrs);
+
+	if (dmasync)
+		dma_set_attr(DMA_ATTR_WRITE_BARRIER, &attrs);
 
 	if (!can_do_mlock())
 		return -EPERM;
@@ -136,16 +140,14 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 
 	flags = IOMMU_READ | IOMMU_CACHE;
 	flags |= (writable) ? IOMMU_WRITE : 0;
-	gup_flags = FOLL_WRITE;
-	gup_flags |= (writable) ? 0 : FOLL_FORCE;
 	cur_base = addr & PAGE_MASK;
 	ret = 0;
 
 	while (npages) {
-		ret = get_user_pages(cur_base,
+		ret = get_user_pages(current, current->mm, cur_base,
 					min_t(unsigned long, npages,
 					PAGE_SIZE / sizeof(struct page *)),
-					gup_flags, page_list, NULL);
+					1, !writable, page_list, NULL);
 
 		if (ret < 0)
 			goto out;
@@ -470,10 +472,11 @@ struct usnic_uiom_pd *usnic_uiom_alloc_pd(void)
 		return ERR_PTR(-ENOMEM);
 
 	pd->domain = domain = iommu_domain_alloc(&pci_bus_type);
-	if (!domain) {
-		usnic_err("Failed to allocate IOMMU domain");
+	if (IS_ERR_OR_NULL(domain)) {
+		usnic_err("Failed to allocate IOMMU domain with err %ld\n",
+				PTR_ERR(pd->domain));
 		kfree(pd);
-		return ERR_PTR(-ENOMEM);
+		return ERR_PTR(domain ? PTR_ERR(domain) : -ENOMEM);
 	}
 
 	iommu_set_fault_handler(pd->domain, usnic_uiom_dma_fault, NULL);
@@ -504,7 +507,7 @@ int usnic_uiom_attach_dev_to_pd(struct usnic_uiom_pd *pd, struct device *dev)
 	if (err)
 		goto out_free_dev;
 
-	if (!iommu_capable(dev->bus, IOMMU_CAP_CACHE_COHERENCY)) {
+	if (!iommu_domain_has_cap(pd->domain, IOMMU_CAP_CACHE_COHERENCY)) {
 		usnic_err("IOMMU of %s does not support cache coherency\n",
 				dev_name(dev));
 		err = -EINVAL;

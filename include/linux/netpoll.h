@@ -78,11 +78,8 @@ static inline void *netpoll_poll_lock(struct napi_struct *napi)
 	struct net_device *dev = napi->dev;
 
 	if (dev && dev->npinfo) {
-		int owner = smp_processor_id();
-
-		while (cmpxchg(&napi->poll_owner, -1, owner) != -1)
-			cpu_relax();
-
+		spin_lock(&napi->poll_lock);
+		napi->poll_owner = smp_processor_id();
 		return napi;
 	}
 	return NULL;
@@ -92,8 +89,10 @@ static inline void netpoll_poll_unlock(void *have)
 {
 	struct napi_struct *napi = have;
 
-	if (napi)
-		smp_store_release(&napi->poll_owner, -1);
+	if (napi) {
+		napi->poll_owner = -1;
+		spin_unlock(&napi->poll_lock);
+	}
 }
 
 static inline bool netpoll_tx_running(struct net_device *dev)

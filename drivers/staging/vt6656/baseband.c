@@ -12,6 +12,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
  *
  * File: baseband.c
  *
@@ -22,106 +26,611 @@
  * Date: Jun. 5, 2002
  *
  * Functions:
- *	vnt_get_frame_time	- Calculate data frame transmitting time
- *	vnt_get_phy_field	- Calculate PhyLength, PhyService and Phy
- *				  Signal parameter for baseband Tx
- *	vnt_vt3184_init		- VIA VT3184 baseband chip init code
+ *      BBuGetFrameTime        - Calculate data frame transmitting time
+ *      BBvCalculateParameter   - Calculate PhyLength, PhyService and Phy Signal parameter for baseband Tx
+ *      BBbVT3184Init          - VIA VT3184 baseband chip init code
  *
  * Revision History:
  *
  *
  */
 
+#include "tmacro.h"
+#include "tether.h"
 #include "mac.h"
 #include "baseband.h"
 #include "rf.h"
 #include "usbpipe.h"
+#include "datarate.h"
 
-static u8 vnt_vt3184_agc[] = {
-	0x00, 0x00, 0x02, 0x02, 0x04, 0x04, 0x06, 0x06,
-	0x08, 0x08, 0x0a, 0x0a, 0x0c, 0x0c, 0x0e, 0x0e, /* 0x0f */
-	0x10, 0x10, 0x12, 0x12, 0x14, 0x14, 0x16, 0x16,
-	0x18, 0x18, 0x1a, 0x1a, 0x1c, 0x1c, 0x1e, 0x1e, /* 0x1f */
-	0x20, 0x20, 0x22, 0x22, 0x24, 0x24, 0x26, 0x26,
-	0x28, 0x28, 0x2a, 0x2a, 0x2c, 0x2c, 0x2e, 0x2e, /* 0x2f */
-	0x30, 0x30, 0x32, 0x32, 0x34, 0x34, 0x36, 0x36,
-	0x38, 0x38, 0x3a, 0x3a, 0x3c, 0x3c, 0x3e, 0x3e  /* 0x3f */
+static u8 abyVT3184_AGC[] = {
+    0x00,   //0
+    0x00,   //1
+    0x02,   //2
+    0x02,   //3  //RobertYu:20060505, 0x04,   //3
+    0x04,   //4
+    0x04,   //5  //RobertYu:20060505, 0x06,   //5
+    0x06,   //6
+    0x06,   //7
+    0x08,   //8
+    0x08,   //9
+    0x0A,   //A
+    0x0A,   //B
+    0x0C,   //C
+    0x0C,   //D
+    0x0E,   //E
+    0x0E,   //F
+    0x10,   //10
+    0x10,   //11
+    0x12,   //12
+    0x12,   //13
+    0x14,   //14
+    0x14,   //15
+    0x16,   //16
+    0x16,   //17
+    0x18,   //18
+    0x18,   //19
+    0x1A,   //1A
+    0x1A,   //1B
+    0x1C,   //1C
+    0x1C,   //1D
+    0x1E,   //1E
+    0x1E,   //1F
+    0x20,   //20
+    0x20,   //21
+    0x22,   //22
+    0x22,   //23
+    0x24,   //24
+    0x24,   //25
+    0x26,   //26
+    0x26,   //27
+    0x28,   //28
+    0x28,   //29
+    0x2A,   //2A
+    0x2A,   //2B
+    0x2C,   //2C
+    0x2C,   //2D
+    0x2E,   //2E
+    0x2E,   //2F
+    0x30,   //30
+    0x30,   //31
+    0x32,   //32
+    0x32,   //33
+    0x34,   //34
+    0x34,   //35
+    0x36,   //36
+    0x36,   //37
+    0x38,   //38
+    0x38,   //39
+    0x3A,   //3A
+    0x3A,   //3B
+    0x3C,   //3C
+    0x3C,   //3D
+    0x3E,   //3E
+    0x3E    //3F
 };
 
-static u8 vnt_vt3184_al2230[] = {
-	0x31, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
-	0x70, 0x45, 0x2a, 0x76, 0x00, 0x00, 0x80, 0x00, /* 0x0f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x8e, 0x0a, 0x00, 0x00, 0x00, /* 0x1f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x0c, /* 0x2f */
-	0x26, 0x5b, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xaa,
-	0xff, 0xff, 0x79, 0x00, 0x00, 0x0b, 0x48, 0x04, /* 0x3f */
-	0x00, 0x08, 0x00, 0x08, 0x08, 0x14, 0x05, 0x09,
-	0x00, 0x00, 0x00, 0x00, 0x09, 0x73, 0x00, 0xc5, /* 0x4f */
-	0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 0x5f */
-	0xe4, 0x80, 0x00, 0x00, 0x00, 0x00, 0x98, 0x0a,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x01, 0x00, /* 0x6f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 0x7f */
-	0x8c, 0x01, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x08, 0x00, 0x1f, 0xb7, 0x88, 0x47, 0xaa, 0x00, /* 0x8f */
-	0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xeb,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, /* 0x9f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
-	0x18, 0x00, 0x00, 0x00, 0x00, 0x15, 0x00, 0x18, /* 0xaf */
-	0x38, 0x30, 0x00, 0x00, 0xff, 0x0f, 0xe4, 0xe2,
-	0x00, 0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x00, /* 0xbf */
-	0x18, 0x20, 0x07, 0x18, 0xff, 0xff, 0x0e, 0x0a,
-	0x0e, 0x00, 0x82, 0xa7, 0x3c, 0x10, 0x30, 0x05, /* 0xcf */
-	0x40, 0x12, 0x00, 0x00, 0x10, 0x28, 0x80, 0x2a,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 0xdf */
-	0x00, 0xf3, 0x00, 0x00, 0x00, 0x10, 0x00, 0x12,
-	0x00, 0xf4, 0x00, 0xff, 0x79, 0x20, 0x30, 0x05, /* 0xef */
-	0x00, 0x3e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  /* 0xff */
+static u8 abyVT3184_AL2230[] = {
+        0x31,//00
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,
+        0x70,
+        0x45,//tx   //0x64 for FPGA
+        0x2A,
+        0x76,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,//10
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x8e,       //RobertYu:20060522, //0x8d,
+        0x0a,       //RobertYu:20060515, //0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x00,//20
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x4a,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x4a,
+        0x00,
+        0x0c,       //RobertYu:20060522, //0x10,
+        0x26,//30
+        0x5b,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xaa,
+        0xaa,
+        0xff,
+        0xff,
+        0x79,
+        0x00,
+        0x00,
+        0x0b,
+        0x48,
+        0x04,
+        0x00,//40
+        0x08,
+        0x00,
+        0x08,
+        0x08,
+        0x14,
+        0x05,
+        0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x09,
+        0x73,
+        0x00,
+        0xc5,
+        0x00,//50   //RobertYu:20060505, //0x15,//50
+        0x19,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xd0,       //RobertYu:20060505, //0xb0,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xe4,//60
+        0x80,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x98,
+        0x0a,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,       //0x80 for FPGA
+        0x03,
+        0x01,
+        0x00,
+        0x00,//70
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x8c,//80
+        0x01,
+        0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x08,
+        0x00,
+        0x1f,       //RobertYu:20060516, //0x0f,
+        0xb7,
+        0x88,
+        0x47,
+        0xaa,
+        0x00,       //RobertYu:20060505, //0x02,
+        0x20,//90   //RobertYu:20060505, //0x22,//90
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xeb,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x00,//a0
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x10,
+        0x00,
+        0x18,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x15,       //RobertYu:20060516, //0x00,
+        0x00,
+        0x18,
+        0x38,//b0
+        0x30,
+        0x00,
+        0x00,
+        0xff,
+        0x0f,
+        0xe4,
+        0xe2,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x18,//c0
+        0x20,
+        0x07,
+        0x18,
+        0xff,
+        0xff,       //RobertYu:20060509, //0x2c,
+        0x0e,       //RobertYu:20060530, //0x0c,
+        0x0a,
+        0x0e,
+        0x00,       //RobertYu:20060505, //0x01,
+        0x82,       //RobertYu:20060516, //0x8f,
+        0xa7,
+        0x3c,
+        0x10,
+        0x30,       //RobertYu:20060627, //0x0b,
+        0x05,       //RobertYu:20060516, //0x25,
+        0x40,//d0
+        0x12,
+        0x00,
+        0x00,
+        0x10,
+        0x28,
+        0x80,
+        0x2A,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,//e0
+        0xf3,       //RobertYu:20060516, //0xd3,
+        0x00,
+        0x00,
+        0x00,
+        0x10,
+        0x00,
+        0x12,       //RobertYu:20060627, //0x10,
+        0x00,
+        0xf4,
+        0x00,
+        0xff,
+        0x79,
+        0x20,
+        0x30,
+        0x05,       //RobertYu:20060516, //0x0c,
+        0x00,//f0
+        0x3e,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00
 };
 
-/* {{RobertYu:20060515, new BB setting for VT3226D0 */
-static u8 vnt_vt3184_vt3226d0[] = {
-	0x31, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
-	0x70, 0x45, 0x2a, 0x76, 0x00, 0x00, 0x80, 0x00, /* 0x0f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x8e, 0x0a, 0x00, 0x00, 0x00, /* 0x1f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x0c, /* 0x2f */
-	0x26, 0x5b, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xaa,
-	0xff, 0xff, 0x79, 0x00, 0x00, 0x0b, 0x48, 0x04, /* 0x3f */
-	0x00, 0x08, 0x00, 0x08, 0x08, 0x14, 0x05, 0x09,
-	0x00, 0x00, 0x00, 0x00, 0x09, 0x73, 0x00, 0xc5, /* 0x4f */
-	0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 0x5f */
-	0xe4, 0x80, 0x00, 0x00, 0x00, 0x00, 0x98, 0x0a,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x01, 0x00, /* 0x6f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 0x7f */
-	0x8c, 0x01, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x08, 0x00, 0x1f, 0xb7, 0x88, 0x47, 0xaa, 0x00, /* 0x8f */
-	0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xeb,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, /* 0x9f */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
-	0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, /* 0xaf */
-	0x38, 0x30, 0x00, 0x00, 0xff, 0x0f, 0xe4, 0xe2,
-	0x00, 0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x00, /* 0xbf */
-	0x18, 0x20, 0x07, 0x18, 0xff, 0xff, 0x10, 0x0a,
-	0x0e, 0x00, 0x84, 0xa7, 0x3c, 0x10, 0x24, 0x05, /* 0xcf */
-	0x40, 0x12, 0x00, 0x00, 0x10, 0x28, 0x80, 0x2a,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 0xdf */
-	0x00, 0xf3, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10,
-	0x00, 0xf4, 0x00, 0xff, 0x79, 0x20, 0x30, 0x08, /* 0xef */
-	0x00, 0x3e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  /* 0xff */
+//{{RobertYu:20060515, new BB setting for VT3226D0
+static u8 abyVT3184_VT3226D0[] = {
+        0x31,//00
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,
+        0x70,
+        0x45,//tx   //0x64 for FPGA
+        0x2A,
+        0x76,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,//10
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x8e,       //RobertYu:20060525, //0x8d,
+        0x0a,       //RobertYu:20060515, //0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x00,//20
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x4a,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x4a,
+        0x00,
+        0x0c,       //RobertYu:20060525, //0x10,
+        0x26,//30
+        0x5b,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xaa,
+        0xaa,
+        0xff,
+        0xff,
+        0x79,
+        0x00,
+        0x00,
+        0x0b,
+        0x48,
+        0x04,
+        0x00,//40
+        0x08,
+        0x00,
+        0x08,
+        0x08,
+        0x14,
+        0x05,
+        0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x09,
+        0x73,
+        0x00,
+        0xc5,
+        0x00,//50   //RobertYu:20060505, //0x15,//50
+        0x19,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xd0,       //RobertYu:20060505, //0xb0,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xe4,//60
+        0x80,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x98,
+        0x0a,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,       //0x80 for FPGA
+        0x03,
+        0x01,
+        0x00,
+        0x00,//70
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x8c,//80
+        0x01,
+        0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x08,
+        0x00,
+        0x1f,       //RobertYu:20060515, //0x0f,
+        0xb7,
+        0x88,
+        0x47,
+        0xaa,
+        0x00,       //RobertYu:20060505, //0x02,
+        0x20,//90   //RobertYu:20060505, //0x22,//90
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xeb,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x00,//a0
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x10,
+        0x00,
+        0x18,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x18,
+        0x38,//b0
+        0x30,
+        0x00,
+        0x00,
+        0xff,
+        0x0f,
+        0xe4,
+        0xe2,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x18,//c0
+        0x20,
+        0x07,
+        0x18,
+        0xff,
+        0xff,       //RobertYu:20060509, //0x2c,
+        0x10,       //RobertYu:20060525, //0x0c,
+        0x0a,
+        0x0e,
+        0x00,       //RobertYu:20060505, //0x01,
+        0x84,       //RobertYu:20060525, //0x8f,
+        0xa7,
+        0x3c,
+        0x10,
+        0x24,       //RobertYu:20060627, //0x18,
+        0x05,       //RobertYu:20060515, //0x25,
+        0x40,//d0
+        0x12,
+        0x00,
+        0x00,
+        0x10,
+        0x28,
+        0x80,
+        0x2A,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,//e0
+        0xf3,       //RobertYu:20060515, //0xd3,
+        0x00,
+        0x00,
+        0x00,
+        0x10,
+        0x00,
+        0x10,       //RobertYu:20060627, //0x0e,
+        0x00,
+        0xf4,
+        0x00,
+        0xff,
+        0x79,
+        0x20,
+        0x30,
+        0x08,       //RobertYu:20060515, //0x0c,
+        0x00,//f0
+        0x3e,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
 };
 
-static const u16 vnt_frame_time[MAX_RATE] = {
-	10, 20, 55, 110, 24, 36, 48, 72, 96, 144, 192, 216
-};
+static const u16 awcFrameTime[MAX_RATE] =
+{10, 20, 55, 110, 24, 36, 48, 72, 96, 144, 192, 216};
 
 /*
  * Description: Calculate data frame transmitting time
@@ -137,8 +646,8 @@ static const u16 vnt_frame_time[MAX_RATE] = {
  * Return Value: FrameTime
  *
  */
-unsigned int vnt_get_frame_time(u8 preamble_type, u8 pkt_type,
-				unsigned int frame_length, u16 tx_rate)
+unsigned int BBuGetFrameTime(u8 preamble_type, u8 pkt_type,
+	unsigned int frame_length, u16 tx_rate)
 {
 	unsigned int frame_time;
 	unsigned int preamble;
@@ -148,7 +657,7 @@ unsigned int vnt_get_frame_time(u8 preamble_type, u8 pkt_type,
 	if (tx_rate > RATE_54M)
 		return 0;
 
-	rate = (unsigned int)vnt_frame_time[tx_rate];
+	rate = (unsigned int)awcFrameTime[tx_rate];
 
 	if (tx_rate <= 3) {
 		if (preamble_type == 1)
@@ -163,18 +672,20 @@ unsigned int vnt_get_frame_time(u8 preamble_type, u8 pkt_type,
 			frame_time++;
 
 		return preamble + frame_time;
+	} else {
+		frame_time = (frame_length * 8 + 22) / rate;
+		tmp = ((frame_time * rate) - 22) / 8;
+
+		if (frame_length != tmp)
+			frame_time++;
+
+		frame_time = frame_time * 4;
+
+		if (pkt_type != PK_TYPE_11A)
+			frame_time += 6;
+
+		return 20 + frame_time;
 	}
-	frame_time = (frame_length * 8 + 22) / rate;
-	tmp = ((frame_time * rate) - 22) / 8;
-
-	if (frame_length != tmp)
-		frame_time++;
-
-	frame_time = frame_time * 4;
-
-	if (pkt_type != PK_TYPE_11A)
-		frame_time += 6;
-	return 20 + frame_time;
 }
 
 /*
@@ -187,21 +698,21 @@ unsigned int vnt_get_frame_time(u8 preamble_type, u8 pkt_type,
  *      tx_rate           - Tx Rate
  *  Out:
  *	struct vnt_phy_field *phy
- *		- pointer to Phy Length field
- *		- pointer to Phy Service field
- *		- pointer to Phy Signal field
+ * 			- pointer to Phy Length field
+ *			- pointer to Phy Service field
+ * 			- pointer to Phy Signal field
  *
  * Return Value: none
  *
  */
-void vnt_get_phy_field(struct vnt_private *priv, u32 frame_length,
-		       u16 tx_rate, u8 pkt_type, struct vnt_phy_field *phy)
+void BBvCalculateParameter(struct vnt_private *priv, u32 frame_length,
+	u16 tx_rate, u8 pkt_type, struct vnt_phy_field *phy)
 {
 	u32 bit_count;
 	u32 count = 0;
 	u32 tmp;
 	int ext_bit;
-	u8 preamble_type = priv->preamble_type;
+	u8 preamble_type = priv->byPreambleType;
 
 	bit_count = frame_length * 8;
 	ext_bit = false;
@@ -339,23 +850,23 @@ void vnt_get_phy_field(struct vnt_private *priv, u32 frame_length,
  * Return Value: none
  *
  */
-void vnt_set_antenna_mode(struct vnt_private *priv, u8 antenna_mode)
+void BBvSetAntennaMode(struct vnt_private *priv, u8 antenna_mode)
 {
 	switch (antenna_mode) {
 	case ANT_TXA:
 	case ANT_TXB:
 		break;
 	case ANT_RXA:
-		priv->bb_rx_conf &= 0xFC;
+		priv->byBBRxConf &= 0xFC;
 		break;
 	case ANT_RXB:
-		priv->bb_rx_conf &= 0xFE;
-		priv->bb_rx_conf |= 0x02;
+		priv->byBBRxConf &= 0xFE;
+		priv->byBBRxConf |= 0x02;
 		break;
 	}
 
 	vnt_control_out(priv, MESSAGE_TYPE_SET_ANTMD,
-			(u16)antenna_mode, 0, 0, NULL);
+		(u16)antenna_mode, 0, 0, NULL);
 }
 
 /*
@@ -372,7 +883,7 @@ void vnt_set_antenna_mode(struct vnt_private *priv, u8 antenna_mode)
  *
  */
 
-int vnt_vt3184_init(struct vnt_private *priv)
+int BBbVT3184Init(struct vnt_private *priv)
 {
 	int status;
 	u16 length;
@@ -383,73 +894,124 @@ int vnt_vt3184_init(struct vnt_private *priv)
 	u8 data;
 
 	status = vnt_control_in(priv, MESSAGE_TYPE_READ, 0,
-				MESSAGE_REQUEST_EEPROM, EEP_MAX_CONTEXT_SIZE,
-						priv->eeprom);
+		MESSAGE_REQUEST_EEPROM, EEP_MAX_CONTEXT_SIZE,
+						priv->abyEEPROM);
 	if (status != STATUS_SUCCESS)
 		return false;
 
-	priv->rf_type = priv->eeprom[EEP_OFS_RFTYPE];
+	/* zonetype initial */
+	priv->byOriginalZonetype = priv->abyEEPROM[EEP_OFS_ZONETYPE];
 
-	dev_dbg(&priv->usb->dev, "RF Type %d\n", priv->rf_type);
+	if (priv->config_file.ZoneType >= 0) {
+		if ((priv->config_file.ZoneType == 0) &&
+			(priv->abyEEPROM[EEP_OFS_ZONETYPE] != 0x00)) {
+			priv->abyEEPROM[EEP_OFS_ZONETYPE] = 0;
+			priv->abyEEPROM[EEP_OFS_MAXCHANNEL] = 0x0B;
 
-	if ((priv->rf_type == RF_AL2230) ||
-	    (priv->rf_type == RF_AL2230S)) {
-		priv->bb_rx_conf = vnt_vt3184_al2230[10];
-		length = sizeof(vnt_vt3184_al2230);
-		addr = vnt_vt3184_al2230;
-		agc = vnt_vt3184_agc;
-		length_agc = sizeof(vnt_vt3184_agc);
+			dev_dbg(&priv->usb->dev, "Init Zone Type :USA\n");
+		} else if ((priv->config_file.ZoneType == 1) &&
+			(priv->abyEEPROM[EEP_OFS_ZONETYPE] != 0x01)) {
+			priv->abyEEPROM[EEP_OFS_ZONETYPE] = 0x01;
+			priv->abyEEPROM[EEP_OFS_MAXCHANNEL] = 0x0D;
 
-		priv->bb_vga[0] = 0x1C;
-		priv->bb_vga[1] = 0x10;
-		priv->bb_vga[2] = 0x0;
-		priv->bb_vga[3] = 0x0;
+			dev_dbg(&priv->usb->dev, "Init Zone Type :Japan\n");
+		} else if ((priv->config_file.ZoneType == 2) &&
+			(priv->abyEEPROM[EEP_OFS_ZONETYPE] != 0x02)) {
+			priv->abyEEPROM[EEP_OFS_ZONETYPE] = 0x02;
+			priv->abyEEPROM[EEP_OFS_MAXCHANNEL] = 0x0D;
 
-	} else if (priv->rf_type == RF_AIROHA7230) {
-		priv->bb_rx_conf = vnt_vt3184_al2230[10];
-		length = sizeof(vnt_vt3184_al2230);
-		addr = vnt_vt3184_al2230;
-		agc = vnt_vt3184_agc;
-		length_agc = sizeof(vnt_vt3184_agc);
+			dev_dbg(&priv->usb->dev, "Init Zone Type :Europe\n");
+		} else {
+			if (priv->config_file.ZoneType !=
+					priv->abyEEPROM[EEP_OFS_ZONETYPE])
+				printk("zonetype in file[%02x]\
+					 mismatch with in EEPROM[%02x]\n",
+					priv->config_file.ZoneType,
+					priv->abyEEPROM[EEP_OFS_ZONETYPE]);
+			else
+				printk("Read Zonetype file success,\
+					use default zonetype setting[%02x]\n",
+					priv->config_file.ZoneType);
+		}
+	}
+
+	if (!priv->bZoneRegExist)
+		priv->byZoneType = priv->abyEEPROM[EEP_OFS_ZONETYPE];
+
+	priv->byRFType = priv->abyEEPROM[EEP_OFS_RFTYPE];
+
+	dev_dbg(&priv->usb->dev, "Zone Type %x\n", priv->byZoneType);
+
+	dev_dbg(&priv->usb->dev, "RF Type %d\n", priv->byRFType);
+
+	if ((priv->byRFType == RF_AL2230) ||
+				(priv->byRFType == RF_AL2230S)) {
+		priv->byBBRxConf = abyVT3184_AL2230[10];
+		length = sizeof(abyVT3184_AL2230);
+		addr = abyVT3184_AL2230;
+		agc = abyVT3184_AGC;
+		length_agc = sizeof(abyVT3184_AGC);
+
+		priv->abyBBVGA[0] = 0x1C;
+		priv->abyBBVGA[1] = 0x10;
+		priv->abyBBVGA[2] = 0x0;
+		priv->abyBBVGA[3] = 0x0;
+		priv->ldBmThreshold[0] = -70;
+		priv->ldBmThreshold[1] = -48;
+		priv->ldBmThreshold[2] = 0;
+		priv->ldBmThreshold[3] = 0;
+	} else if (priv->byRFType == RF_AIROHA7230) {
+		priv->byBBRxConf = abyVT3184_AL2230[10];
+		length = sizeof(abyVT3184_AL2230);
+		addr = abyVT3184_AL2230;
+		agc = abyVT3184_AGC;
+		length_agc = sizeof(abyVT3184_AGC);
 
 		addr[0xd7] = 0x06;
 
-		priv->bb_vga[0] = 0x1c;
-		priv->bb_vga[1] = 0x10;
-		priv->bb_vga[2] = 0x0;
-		priv->bb_vga[3] = 0x0;
+		priv->abyBBVGA[0] = 0x1c;
+		priv->abyBBVGA[1] = 0x10;
+		priv->abyBBVGA[2] = 0x0;
+		priv->abyBBVGA[3] = 0x0;
+		priv->ldBmThreshold[0] = -70;
+		priv->ldBmThreshold[1] = -48;
+		priv->ldBmThreshold[2] = 0;
+		priv->ldBmThreshold[3] = 0;
+	} else if ((priv->byRFType == RF_VT3226) ||
+			(priv->byRFType == RF_VT3226D0)) {
+		priv->byBBRxConf = abyVT3184_VT3226D0[10];
+		length = sizeof(abyVT3184_VT3226D0);
+		addr = abyVT3184_VT3226D0;
+		agc = abyVT3184_AGC;
+		length_agc = sizeof(abyVT3184_AGC);
 
-	} else if ((priv->rf_type == RF_VT3226) ||
-			(priv->rf_type == RF_VT3226D0)) {
-		priv->bb_rx_conf = vnt_vt3184_vt3226d0[10];
-		length = sizeof(vnt_vt3184_vt3226d0);
-		addr = vnt_vt3184_vt3226d0;
-		agc = vnt_vt3184_agc;
-		length_agc = sizeof(vnt_vt3184_agc);
-
-		priv->bb_vga[0] = 0x20;
-		priv->bb_vga[1] = 0x10;
-		priv->bb_vga[2] = 0x0;
-		priv->bb_vga[3] = 0x0;
-
+		priv->abyBBVGA[0] = 0x20;
+		priv->abyBBVGA[1] = 0x10;
+		priv->abyBBVGA[2] = 0x0;
+		priv->abyBBVGA[3] = 0x0;
+		priv->ldBmThreshold[0] = -70;
+		priv->ldBmThreshold[1] = -48;
+		priv->ldBmThreshold[2] = 0;
+		priv->ldBmThreshold[3] = 0;
 		/* Fix VT3226 DFC system timing issue */
-		vnt_mac_reg_bits_on(priv, MAC_REG_SOFTPWRCTL2,
-				    SOFTPWRCTL_RFLEOPT);
-	} else if (priv->rf_type == RF_VT3342A0) {
-		priv->bb_rx_conf = vnt_vt3184_vt3226d0[10];
-		length = sizeof(vnt_vt3184_vt3226d0);
-		addr = vnt_vt3184_vt3226d0;
-		agc = vnt_vt3184_agc;
-		length_agc = sizeof(vnt_vt3184_agc);
+		MACvRegBitsOn(priv, MAC_REG_SOFTPWRCTL2, SOFTPWRCTL_RFLEOPT);
+	} else if ((priv->byRFType == RF_VT3342A0)) {
+		priv->byBBRxConf = abyVT3184_VT3226D0[10];
+		length = sizeof(abyVT3184_VT3226D0);
+		addr = abyVT3184_VT3226D0;
+		agc = abyVT3184_AGC;
+		length_agc = sizeof(abyVT3184_AGC);
 
-		priv->bb_vga[0] = 0x20;
-		priv->bb_vga[1] = 0x10;
-		priv->bb_vga[2] = 0x0;
-		priv->bb_vga[3] = 0x0;
-
+		priv->abyBBVGA[0] = 0x20;
+		priv->abyBBVGA[1] = 0x10;
+		priv->abyBBVGA[2] = 0x0;
+		priv->abyBBVGA[3] = 0x0;
+		priv->ldBmThreshold[0] = -70;
+		priv->ldBmThreshold[1] = -48;
+		priv->ldBmThreshold[2] = 0;
+		priv->ldBmThreshold[3] = 0;
 		/* Fix VT3226 DFC system timing issue */
-		vnt_mac_reg_bits_on(priv, MAC_REG_SOFTPWRCTL2,
-				    SOFTPWRCTL_RFLEOPT);
+		MACvRegBitsOn(priv, MAC_REG_SOFTPWRCTL2, SOFTPWRCTL_RFLEOPT);
 	} else {
 		return true;
 	}
@@ -457,22 +1019,22 @@ int vnt_vt3184_init(struct vnt_private *priv)
 	memcpy(array, addr, length);
 
 	vnt_control_out(priv, MESSAGE_TYPE_WRITE, 0,
-			MESSAGE_REQUEST_BBREG, length, array);
+		MESSAGE_REQUEST_BBREG, length, array);
 
 	memcpy(array, agc, length_agc);
 
 	vnt_control_out(priv, MESSAGE_TYPE_WRITE, 0,
-			MESSAGE_REQUEST_BBAGC, length_agc, array);
+		MESSAGE_REQUEST_BBAGC, length_agc, array);
 
-	if ((priv->rf_type == RF_VT3226) ||
-	    (priv->rf_type == RF_VT3342A0)) {
+	if ((priv->byRFType == RF_VT3226) ||
+		(priv->byRFType == RF_VT3342A0)) {
 		vnt_control_out_u8(priv, MESSAGE_REQUEST_MACREG,
-				   MAC_REG_ITRTMSET, 0x23);
-		vnt_mac_reg_bits_on(priv, MAC_REG_PAPEDELAY, 0x01);
-	} else if (priv->rf_type == RF_VT3226D0) {
+						MAC_REG_ITRTMSET, 0x23);
+		MACvRegBitsOn(priv, MAC_REG_PAPEDELAY, 0x01);
+	} else if (priv->byRFType == RF_VT3226D0) {
 		vnt_control_out_u8(priv, MESSAGE_REQUEST_MACREG,
-				   MAC_REG_ITRTMSET, 0x11);
-		vnt_mac_reg_bits_on(priv, MAC_REG_PAPEDELAY, 0x01);
+						MAC_REG_ITRTMSET, 0x11);
+		MACvRegBitsOn(priv, MAC_REG_PAPEDELAY, 0x01);
 	}
 
 	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x04, 0x7f);
@@ -482,12 +1044,12 @@ int vnt_vt3184_init(struct vnt_private *priv)
 
 	/* Fix for TX USB resets from vendors driver */
 	vnt_control_in(priv, MESSAGE_TYPE_READ, USB_REG4,
-		       MESSAGE_REQUEST_MEM, sizeof(data), &data);
+		MESSAGE_REQUEST_MEM, sizeof(data), &data);
 
 	data |= 0x2;
 
 	vnt_control_out(priv, MESSAGE_TYPE_WRITE, USB_REG4,
-			MESSAGE_REQUEST_MEM, sizeof(data), &data);
+		MESSAGE_REQUEST_MEM, sizeof(data), &data);
 
 	return true;
 }
@@ -504,38 +1066,39 @@ int vnt_vt3184_init(struct vnt_private *priv)
  * Return Value: none
  *
  */
-void vnt_set_short_slot_time(struct vnt_private *priv)
+void BBvSetShortSlotTime(struct vnt_private *priv)
 {
 	u8 bb_vga = 0;
 
-	if (priv->short_slot_time)
-		priv->bb_rx_conf &= 0xdf;
+	if (priv->bShortSlotTime)
+		priv->byBBRxConf &= 0xdf;
 	else
-		priv->bb_rx_conf |= 0x20;
+		priv->byBBRxConf |= 0x20;
 
 	vnt_control_in_u8(priv, MESSAGE_REQUEST_BBREG, 0xe7, &bb_vga);
 
-	if (bb_vga == priv->bb_vga[0])
-		priv->bb_rx_conf |= 0x20;
+	if (bb_vga == priv->abyBBVGA[0])
+		priv->byBBRxConf |= 0x20;
 
-	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0a, priv->bb_rx_conf);
+	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0a, priv->byBBRxConf);
 }
 
-void vnt_set_vga_gain_offset(struct vnt_private *priv, u8 data)
+void BBvSetVGAGainOffset(struct vnt_private *priv, u8 data)
 {
+
 	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0xE7, data);
 
 	/* patch for 3253B0 Baseband with Cardbus module */
-	if (priv->short_slot_time)
-		priv->bb_rx_conf &= 0xdf; /* 1101 1111 */
+	if (priv->bShortSlotTime)
+		priv->byBBRxConf &= 0xdf; /* 1101 1111 */
 	else
-		priv->bb_rx_conf |= 0x20; /* 0010 0000 */
+		priv->byBBRxConf |= 0x20; /* 0010 0000 */
 
-	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0a, priv->bb_rx_conf);
+	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0a, priv->byBBRxConf);
 }
 
 /*
- * Description: vnt_set_deep_sleep
+ * Description: BBvSetDeepSleep
  *
  * Parameters:
  *  In:
@@ -546,24 +1109,24 @@ void vnt_set_vga_gain_offset(struct vnt_private *priv, u8 data)
  * Return Value: none
  *
  */
-void vnt_set_deep_sleep(struct vnt_private *priv)
+void BBvSetDeepSleep(struct vnt_private *priv)
 {
 	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0c, 0x17);/* CR12 */
 	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0d, 0xB9);/* CR13 */
 }
 
-void vnt_exit_deep_sleep(struct vnt_private *priv)
+void BBvExitDeepSleep(struct vnt_private *priv)
 {
 	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0c, 0x00);/* CR12 */
 	vnt_control_out_u8(priv, MESSAGE_REQUEST_BBREG, 0x0d, 0x01);/* CR13 */
 }
 
-void vnt_update_pre_ed_threshold(struct vnt_private *priv, int scanning)
+void BBvUpdatePreEDThreshold(struct vnt_private *priv, int scanning)
 {
 	u8 cr_201 = 0x0, cr_206 = 0x0;
-	u8 ed_inx = priv->bb_pre_ed_index;
+	u8 ed_inx = priv->byBBPreEDIndex;
 
-	switch (priv->rf_type) {
+	switch (priv->byRFType) {
 	case RF_AL2230:
 	case RF_AL2230S:
 	case RF_AIROHA7230:
@@ -573,69 +1136,69 @@ void vnt_update_pre_ed_threshold(struct vnt_private *priv, int scanning)
 			break;
 		}
 
-		if (priv->bb_pre_ed_rssi <= 45) {
+		if (priv->byBBPreEDRSSI <= 45) {
 			ed_inx = 20;
 			cr_201 = 0xff;
-		} else if (priv->bb_pre_ed_rssi <= 46) {
+		} else if (priv->byBBPreEDRSSI <= 46) {
 			ed_inx = 19;
 			cr_201 = 0x1a;
-		} else if (priv->bb_pre_ed_rssi <= 47) {
+		} else if (priv->byBBPreEDRSSI <= 47) {
 			ed_inx = 18;
 			cr_201 = 0x15;
-		} else if (priv->bb_pre_ed_rssi <= 49) {
+		} else if (priv->byBBPreEDRSSI <= 49) {
 			ed_inx = 17;
 			cr_201 = 0xe;
-		} else if (priv->bb_pre_ed_rssi <= 51) {
+		} else if (priv->byBBPreEDRSSI <= 51) {
 			ed_inx = 16;
 			cr_201 = 0x9;
-		} else if (priv->bb_pre_ed_rssi <= 53) {
+		} else if (priv->byBBPreEDRSSI <= 53) {
 			ed_inx = 15;
 			cr_201 = 0x6;
-		} else if (priv->bb_pre_ed_rssi <= 55) {
+		} else if (priv->byBBPreEDRSSI <= 55) {
 			ed_inx = 14;
 			cr_201 = 0x3;
-		} else if (priv->bb_pre_ed_rssi <= 56) {
+		} else if (priv->byBBPreEDRSSI <= 56) {
 			ed_inx = 13;
 			cr_201 = 0x2;
 			cr_206 = 0xa0;
-		} else if (priv->bb_pre_ed_rssi <= 57) {
+		} else if (priv->byBBPreEDRSSI <= 57) {
 			ed_inx = 12;
 			cr_201 = 0x2;
 			cr_206 = 0x20;
-		} else if (priv->bb_pre_ed_rssi <= 58) {
+		} else if (priv->byBBPreEDRSSI <= 58) {
 			ed_inx = 11;
 			cr_201 = 0x1;
 			cr_206 = 0xa0;
-		} else if (priv->bb_pre_ed_rssi <= 59) {
+		} else if (priv->byBBPreEDRSSI <= 59) {
 			ed_inx = 10;
 			cr_201 = 0x1;
 			cr_206 = 0x54;
-		} else if (priv->bb_pre_ed_rssi <= 60) {
+		} else if (priv->byBBPreEDRSSI <= 60) {
 			ed_inx = 9;
 			cr_201 = 0x1;
 			cr_206 = 0x18;
-		} else if (priv->bb_pre_ed_rssi <= 61) {
+		} else if (priv->byBBPreEDRSSI <= 61) {
 			ed_inx = 8;
 			cr_206 = 0xe3;
-		} else if (priv->bb_pre_ed_rssi <= 62) {
+		} else if (priv->byBBPreEDRSSI <= 62) {
 			ed_inx = 7;
 			cr_206 = 0xb9;
-		} else if (priv->bb_pre_ed_rssi <= 63) {
+		} else if (priv->byBBPreEDRSSI <= 63) {
 			ed_inx = 6;
 			cr_206 = 0x93;
-		} else if (priv->bb_pre_ed_rssi <= 64) {
+		} else if (priv->byBBPreEDRSSI <= 64) {
 			ed_inx = 5;
 			cr_206 = 0x79;
-		} else if (priv->bb_pre_ed_rssi <= 65) {
+		} else if (priv->byBBPreEDRSSI <= 65) {
 			ed_inx = 4;
 			cr_206 = 0x62;
-		} else if (priv->bb_pre_ed_rssi <= 66) {
+		} else if (priv->byBBPreEDRSSI <= 66) {
 			ed_inx = 3;
 			cr_206 = 0x51;
-		} else if (priv->bb_pre_ed_rssi <= 67) {
+		} else if (priv->byBBPreEDRSSI <= 67) {
 			ed_inx = 2;
 			cr_206 = 0x43;
-		} else if (priv->bb_pre_ed_rssi <= 68) {
+		} else if (priv->byBBPreEDRSSI <= 68) {
 			ed_inx = 1;
 			cr_206 = 0x36;
 		} else {
@@ -652,75 +1215,75 @@ void vnt_update_pre_ed_threshold(struct vnt_private *priv, int scanning)
 			break;
 		}
 
-		if (priv->bb_pre_ed_rssi <= 41) {
+		if (priv->byBBPreEDRSSI <= 41) {
 			ed_inx = 22;
 			cr_201 = 0xff;
-		} else if (priv->bb_pre_ed_rssi <= 42) {
+		} else if (priv->byBBPreEDRSSI <= 42) {
 			ed_inx = 21;
 			cr_201 = 0x36;
-		} else if (priv->bb_pre_ed_rssi <= 43) {
+		} else if (priv->byBBPreEDRSSI <= 43) {
 			ed_inx = 20;
 			cr_201 = 0x26;
-		} else if (priv->bb_pre_ed_rssi <= 45) {
+		} else if (priv->byBBPreEDRSSI <= 45) {
 			ed_inx = 19;
 			cr_201 = 0x18;
-		} else if (priv->bb_pre_ed_rssi <= 47) {
+		} else if (priv->byBBPreEDRSSI <= 47) {
 			ed_inx = 18;
 			cr_201 = 0x11;
-		} else if (priv->bb_pre_ed_rssi <= 49) {
+		} else if (priv->byBBPreEDRSSI <= 49) {
 			ed_inx = 17;
 			cr_201 = 0xa;
-		} else if (priv->bb_pre_ed_rssi <= 51) {
+		} else if (priv->byBBPreEDRSSI <= 51) {
 			ed_inx = 16;
 			cr_201 = 0x7;
-		} else if (priv->bb_pre_ed_rssi <= 53) {
+		} else if (priv->byBBPreEDRSSI <= 53) {
 			ed_inx = 15;
 			cr_201 = 0x4;
-		} else if (priv->bb_pre_ed_rssi <= 55) {
+		} else if (priv->byBBPreEDRSSI <= 55) {
 			ed_inx = 14;
 			cr_201 = 0x2;
 			cr_206 = 0xc0;
-		} else if (priv->bb_pre_ed_rssi <= 56) {
+		} else if (priv->byBBPreEDRSSI <= 56) {
 			ed_inx = 13;
 			cr_201 = 0x2;
 			cr_206 = 0x30;
-		} else if (priv->bb_pre_ed_rssi <= 57) {
+		} else if (priv->byBBPreEDRSSI <= 57) {
 			ed_inx = 12;
 			cr_201 = 0x1;
 			cr_206 = 0xb0;
-		} else if (priv->bb_pre_ed_rssi <= 58) {
+		} else if (priv->byBBPreEDRSSI <= 58) {
 			ed_inx = 11;
 			cr_201 = 0x1;
 			cr_206 = 0x70;
-		} else if (priv->bb_pre_ed_rssi <= 59) {
+		} else if (priv->byBBPreEDRSSI <= 59) {
 			ed_inx = 10;
 			cr_201 = 0x1;
 			cr_206 = 0x30;
-		} else if (priv->bb_pre_ed_rssi <= 60) {
+		} else if (priv->byBBPreEDRSSI <= 60) {
 			ed_inx = 9;
 			cr_206 = 0xea;
-		} else if (priv->bb_pre_ed_rssi <= 61) {
+		} else if (priv->byBBPreEDRSSI <= 61) {
 			ed_inx = 8;
 			cr_206 = 0xc0;
-		} else if (priv->bb_pre_ed_rssi <= 62) {
+		} else if (priv->byBBPreEDRSSI <= 62) {
 			ed_inx = 7;
 			cr_206 = 0x9c;
-		} else if (priv->bb_pre_ed_rssi <= 63) {
+		} else if (priv->byBBPreEDRSSI <= 63) {
 			ed_inx = 6;
 			cr_206 = 0x80;
-		} else if (priv->bb_pre_ed_rssi <= 64) {
+		} else if (priv->byBBPreEDRSSI <= 64) {
 			ed_inx = 5;
 			cr_206 = 0x68;
-		} else if (priv->bb_pre_ed_rssi <= 65) {
+		} else if (priv->byBBPreEDRSSI <= 65) {
 			ed_inx = 4;
 			cr_206 = 0x52;
-		} else if (priv->bb_pre_ed_rssi <= 66) {
+		} else if (priv->byBBPreEDRSSI <= 66) {
 			ed_inx = 3;
 			cr_206 = 0x43;
-		} else if (priv->bb_pre_ed_rssi <= 67) {
+		} else if (priv->byBBPreEDRSSI <= 67) {
 			ed_inx = 2;
 			cr_206 = 0x36;
-		} else if (priv->bb_pre_ed_rssi <= 68) {
+		} else if (priv->byBBPreEDRSSI <= 68) {
 			ed_inx = 1;
 			cr_206 = 0x2d;
 		} else {
@@ -736,69 +1299,69 @@ void vnt_update_pre_ed_threshold(struct vnt_private *priv, int scanning)
 			break;
 		}
 
-		if (priv->bb_pre_ed_rssi <= 41) {
+		if (priv->byBBPreEDRSSI <= 41) {
 			ed_inx = 20;
 			cr_201 = 0xff;
-		} else if (priv->bb_pre_ed_rssi <= 42) {
+		} else if (priv->byBBPreEDRSSI <= 42) {
 			ed_inx = 19;
 			cr_201 = 0x36;
-		} else if (priv->bb_pre_ed_rssi <= 43) {
+		} else if (priv->byBBPreEDRSSI <= 43) {
 			ed_inx = 18;
 			cr_201 = 0x26;
-		} else if (priv->bb_pre_ed_rssi <= 45) {
+		} else if (priv->byBBPreEDRSSI <= 45) {
 			ed_inx = 17;
 			cr_201 = 0x18;
-		} else if (priv->bb_pre_ed_rssi <= 47) {
+		} else if (priv->byBBPreEDRSSI <= 47) {
 			ed_inx = 16;
 			cr_201 = 0x11;
-		} else if (priv->bb_pre_ed_rssi <= 49) {
+		} else if (priv->byBBPreEDRSSI <= 49) {
 			ed_inx = 15;
 			cr_201 = 0xa;
-		} else if (priv->bb_pre_ed_rssi <= 51) {
+		} else if (priv->byBBPreEDRSSI <= 51) {
 			ed_inx = 14;
 			cr_201 = 0x7;
-		} else if (priv->bb_pre_ed_rssi <= 53) {
+		} else if (priv->byBBPreEDRSSI <= 53) {
 			ed_inx = 13;
 			cr_201 = 0x4;
-		} else if (priv->bb_pre_ed_rssi <= 55) {
+		} else if (priv->byBBPreEDRSSI <= 55) {
 			ed_inx = 12;
 			cr_201 = 0x2;
 			cr_206 = 0xc0;
-		} else if (priv->bb_pre_ed_rssi <= 56) {
+		} else if (priv->byBBPreEDRSSI <= 56) {
 			ed_inx = 11;
 			cr_201 = 0x2;
 			cr_206 = 0x30;
-		} else if (priv->bb_pre_ed_rssi <= 57) {
+		} else if (priv->byBBPreEDRSSI <= 57) {
 			ed_inx = 10;
 			cr_201 = 0x1;
 			cr_206 = 0xb0;
-		} else if (priv->bb_pre_ed_rssi <= 58) {
+		} else if (priv->byBBPreEDRSSI <= 58) {
 			ed_inx = 9;
 			cr_201 = 0x1;
 			cr_206 = 0x70;
-		} else if (priv->bb_pre_ed_rssi <= 59) {
+		} else if (priv->byBBPreEDRSSI <= 59) {
 			ed_inx = 8;
 			cr_201 = 0x1;
 			cr_206 = 0x30;
-		} else if (priv->bb_pre_ed_rssi <= 60) {
+		} else if (priv->byBBPreEDRSSI <= 60) {
 			ed_inx = 7;
 			cr_206 = 0xea;
-		} else if (priv->bb_pre_ed_rssi <= 61) {
+		} else if (priv->byBBPreEDRSSI <= 61) {
 			ed_inx = 6;
 			cr_206 = 0xc0;
-		} else if (priv->bb_pre_ed_rssi <= 62) {
+		} else if (priv->byBBPreEDRSSI <= 62) {
 			ed_inx = 5;
 			cr_206 = 0x9c;
-		} else if (priv->bb_pre_ed_rssi <= 63) {
+		} else if (priv->byBBPreEDRSSI <= 63) {
 			ed_inx = 4;
 			cr_206 = 0x80;
-		} else if (priv->bb_pre_ed_rssi <= 64) {
+		} else if (priv->byBBPreEDRSSI <= 64) {
 			ed_inx = 3;
 			cr_206 = 0x68;
-		} else if (priv->bb_pre_ed_rssi <= 65) {
+		} else if (priv->byBBPreEDRSSI <= 65) {
 			ed_inx = 2;
 			cr_206 = 0x52;
-		} else if (priv->bb_pre_ed_rssi <= 66) {
+		} else if (priv->byBBPreEDRSSI <= 66) {
 			ed_inx = 1;
 			cr_206 = 0x43;
 		} else {
@@ -806,15 +1369,16 @@ void vnt_update_pre_ed_threshold(struct vnt_private *priv, int scanning)
 			cr_206 = 0x38;
 		}
 		break;
+
 	}
 
-	if (ed_inx == priv->bb_pre_ed_index && !scanning)
+	if (ed_inx == priv->byBBPreEDIndex && !scanning)
 		return;
 
-	priv->bb_pre_ed_index = ed_inx;
+	priv->byBBPreEDIndex = ed_inx;
 
-	dev_dbg(&priv->usb->dev, "%s bb_pre_ed_rssi %d\n",
-		__func__, priv->bb_pre_ed_rssi);
+	dev_dbg(&priv->usb->dev, "%s byBBPreEDRSSI %d\n",
+					__func__, priv->byBBPreEDRSSI);
 
 	if (!cr_201 && !cr_206)
 		return;

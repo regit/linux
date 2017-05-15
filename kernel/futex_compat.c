@@ -13,7 +13,7 @@
 #include <linux/ptrace.h>
 #include <linux/syscalls.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 
 /*
@@ -155,7 +155,7 @@ COMPAT_SYSCALL_DEFINE3(get_robust_list, int, pid,
 	}
 
 	ret = -EPERM;
-	if (!ptrace_may_access(p, PTRACE_MODE_READ_REALCREDS))
+	if (!ptrace_may_access(p, PTRACE_MODE_READ))
 		goto err_unlock;
 
 	head = p->compat_robust_list;

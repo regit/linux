@@ -154,41 +154,34 @@ static int mag3110_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
-			return ret;
+		if (iio_buffer_enabled(indio_dev))
+			return -EBUSY;
 
 		switch (chan->type) {
 		case IIO_MAGN: /* in 0.1 uT / LSB */
 			ret = mag3110_read(data, buffer);
 			if (ret < 0)
-				goto release;
+				return ret;
 			*val = sign_extend32(
 				be16_to_cpu(buffer[chan->scan_index]), 15);
-			ret = IIO_VAL_INT;
-			break;
+			return IIO_VAL_INT;
 		case IIO_TEMP: /* in 1 C / LSB */
 			mutex_lock(&data->lock);
 			ret = mag3110_request(data);
 			if (ret < 0) {
 				mutex_unlock(&data->lock);
-				goto release;
+				return ret;
 			}
 			ret = i2c_smbus_read_byte_data(data->client,
 				MAG3110_DIE_TEMP);
 			mutex_unlock(&data->lock);
 			if (ret < 0)
-				goto release;
+				return ret;
 			*val = sign_extend32(ret, 7);
-			ret = IIO_VAL_INT;
-			break;
+			return IIO_VAL_INT;
 		default:
-			ret = -EINVAL;
+			return -EINVAL;
 		}
-release:
-		iio_device_release_direct_mode(indio_dev);
-		return ret;
-
 	case IIO_CHAN_INFO_SCALE:
 		switch (chan->type) {
 		case IIO_MAGN:
@@ -268,7 +261,7 @@ static irqreturn_t mag3110_trigger_handler(int irq, void *p)
 	}
 
 	iio_push_to_buffers_with_timestamp(indio_dev, buffer,
-		iio_get_time_ns(indio_dev));
+		iio_get_time_ns());
 
 done:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -328,12 +321,6 @@ static const struct iio_info mag3110_info = {
 
 static const unsigned long mag3110_scan_masks[] = {0x7, 0xf, 0};
 
-static int mag3110_standby(struct mag3110_data *data)
-{
-	return i2c_smbus_write_byte_data(data->client, MAG3110_CTRL_REG1,
-		data->ctrl_reg1 & ~MAG3110_CTRL_AC);
-}
-
 static int mag3110_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
@@ -373,12 +360,12 @@ static int mag3110_probe(struct i2c_client *client,
 	ret = i2c_smbus_write_byte_data(client, MAG3110_CTRL_REG2,
 		MAG3110_CTRL_AUTO_MRST_EN);
 	if (ret < 0)
-		goto standby_on_error;
+		return ret;
 
 	ret = iio_triggered_buffer_setup(indio_dev, NULL,
 		mag3110_trigger_handler, NULL);
 	if (ret < 0)
-		goto standby_on_error;
+		return ret;
 
 	ret = iio_device_register(indio_dev);
 	if (ret < 0)
@@ -387,9 +374,13 @@ static int mag3110_probe(struct i2c_client *client,
 
 buffer_cleanup:
 	iio_triggered_buffer_cleanup(indio_dev);
-standby_on_error:
-	mag3110_standby(iio_priv(indio_dev));
 	return ret;
+}
+
+static int mag3110_standby(struct mag3110_data *data)
+{
+	return i2c_smbus_write_byte_data(data->client, MAG3110_CTRL_REG1,
+		data->ctrl_reg1 & ~MAG3110_CTRL_AC);
 }
 
 static int mag3110_remove(struct i2c_client *client)

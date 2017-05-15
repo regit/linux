@@ -18,6 +18,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
@@ -31,12 +35,13 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/suspend.h>
+#include <linux/delay.h>
 #include <asm/unaligned.h>
 
 #ifdef CONFIG_ACPI_PROCFS_POWER
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #endif
 
 #include <linux/acpi.h>
@@ -66,7 +71,6 @@ MODULE_AUTHOR("Alexey Starikovskiy <astarikovskiy@suse.de>");
 MODULE_DESCRIPTION("ACPI Battery Driver");
 MODULE_LICENSE("GPL");
 
-static async_cookie_t async_cookie;
 static int battery_bix_broken_package;
 static int battery_notification_delay_ms;
 static unsigned int cache_time = 1000;
@@ -114,8 +118,7 @@ enum {
 struct acpi_battery {
 	struct mutex lock;
 	struct mutex sysfs_lock;
-	struct power_supply *bat;
-	struct power_supply_desc bat_desc;
+	struct power_supply bat;
 	struct acpi_device *device;
 	struct notifier_block pm_nb;
 	unsigned long update_time;
@@ -147,7 +150,7 @@ struct acpi_battery {
 	unsigned long flags;
 };
 
-#define to_acpi_battery(x) power_supply_get_drvdata(x)
+#define to_acpi_battery(x) container_of(x, struct acpi_battery, bat)
 
 static inline int acpi_battery_present(struct acpi_battery *battery)
 {
@@ -335,6 +338,14 @@ static enum power_supply_property energy_battery_props[] = {
 	POWER_SUPPLY_PROP_SERIAL_NUMBER,
 };
 
+#ifdef CONFIG_ACPI_PROCFS_POWER
+inline char *acpi_battery_units(struct acpi_battery *battery)
+{
+	return (battery->power_unit == ACPI_BATTERY_POWER_UNIT_MA) ?
+		"mA" : "mW";
+}
+#endif
+
 /* --------------------------------------------------------------------------
                                Battery Management
    -------------------------------------------------------------------------- */
@@ -343,14 +354,14 @@ struct acpi_offsets {
 	u8 mode;		/* int or string? */
 };
 
-static const struct acpi_offsets state_offsets[] = {
+static struct acpi_offsets state_offsets[] = {
 	{offsetof(struct acpi_battery, state), 0},
 	{offsetof(struct acpi_battery, rate_now), 0},
 	{offsetof(struct acpi_battery, capacity_now), 0},
 	{offsetof(struct acpi_battery, voltage_now), 0},
 };
 
-static const struct acpi_offsets info_offsets[] = {
+static struct acpi_offsets info_offsets[] = {
 	{offsetof(struct acpi_battery, power_unit), 0},
 	{offsetof(struct acpi_battery, design_capacity), 0},
 	{offsetof(struct acpi_battery, full_charge_capacity), 0},
@@ -366,7 +377,7 @@ static const struct acpi_offsets info_offsets[] = {
 	{offsetof(struct acpi_battery, oem_info), 1},
 };
 
-static const struct acpi_offsets extended_info_offsets[] = {
+static struct acpi_offsets extended_info_offsets[] = {
 	{offsetof(struct acpi_battery, revision), 0},
 	{offsetof(struct acpi_battery, power_unit), 0},
 	{offsetof(struct acpi_battery, design_capacity), 0},
@@ -391,7 +402,7 @@ static const struct acpi_offsets extended_info_offsets[] = {
 
 static int extract_package(struct acpi_battery *battery,
 			   union acpi_object *package,
-			   const struct acpi_offsets *offsets, int num)
+			   struct acpi_offsets *offsets, int num)
 {
 	int i;
 	union acpi_object *element;
@@ -430,24 +441,39 @@ static int acpi_battery_get_status(struct acpi_battery *battery)
 	return 0;
 }
 
-
-static int extract_battery_info(const int use_bix,
-			 struct acpi_battery *battery,
-			 const struct acpi_buffer *buffer)
+static int acpi_battery_get_info(struct acpi_battery *battery)
 {
 	int result = -EFAULT;
+	acpi_status status = 0;
+	char *name = test_bit(ACPI_BATTERY_XINFO_PRESENT, &battery->flags) ?
+			"_BIX" : "_BIF";
 
-	if (use_bix && battery_bix_broken_package)
-		result = extract_package(battery, buffer->pointer,
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+
+	if (!acpi_battery_present(battery))
+		return 0;
+	mutex_lock(&battery->lock);
+	status = acpi_evaluate_object(battery->device->handle, name,
+						NULL, &buffer);
+	mutex_unlock(&battery->lock);
+
+	if (ACPI_FAILURE(status)) {
+		ACPI_EXCEPTION((AE_INFO, status, "Evaluating %s", name));
+		return -ENODEV;
+	}
+
+	if (battery_bix_broken_package)
+		result = extract_package(battery, buffer.pointer,
 				extended_info_offsets + 1,
 				ARRAY_SIZE(extended_info_offsets) - 1);
-	else if (use_bix)
-		result = extract_package(battery, buffer->pointer,
+	else if (test_bit(ACPI_BATTERY_XINFO_PRESENT, &battery->flags))
+		result = extract_package(battery, buffer.pointer,
 				extended_info_offsets,
 				ARRAY_SIZE(extended_info_offsets));
 	else
-		result = extract_package(battery, buffer->pointer,
+		result = extract_package(battery, buffer.pointer,
 				info_offsets, ARRAY_SIZE(info_offsets));
+	kfree(buffer.pointer);
 	if (test_bit(ACPI_BATTERY_QUIRK_PERCENTAGE_CAPACITY, &battery->flags))
 		battery->full_charge_capacity = battery->design_capacity;
 	if (test_bit(ACPI_BATTERY_QUIRK_THINKPAD_MAH, &battery->flags) &&
@@ -465,45 +491,6 @@ static int extract_battery_info(const int use_bix,
 		   it's impossible to tell if they would need an adjustment
 		   or not if their values were higher.  */
 	}
-	return result;
-}
-
-static int acpi_battery_get_info(struct acpi_battery *battery)
-{
-	const int xinfo = test_bit(ACPI_BATTERY_XINFO_PRESENT, &battery->flags);
-	int use_bix;
-	int result = -ENODEV;
-
-	if (!acpi_battery_present(battery))
-		return 0;
-
-
-	for (use_bix = xinfo ? 1 : 0; use_bix >= 0; use_bix--) {
-		struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
-		acpi_status status = AE_ERROR;
-
-		mutex_lock(&battery->lock);
-		status = acpi_evaluate_object(battery->device->handle,
-					      use_bix ? "_BIX":"_BIF",
-					      NULL, &buffer);
-		mutex_unlock(&battery->lock);
-
-		if (ACPI_FAILURE(status)) {
-			ACPI_EXCEPTION((AE_INFO, status, "Evaluating %s",
-					use_bix ? "_BIX":"_BIF"));
-		} else {
-			result = extract_battery_info(use_bix,
-						      battery,
-						      &buffer);
-
-			kfree(buffer.pointer);
-			break;
-		}
-	}
-
-	if (!result && !use_bix && xinfo)
-		pr_warn(FW_BUG "The _BIX method is broken, using _BIF.\n");
-
 	return result;
 }
 
@@ -544,8 +531,22 @@ static int acpi_battery_get_state(struct acpi_battery *battery)
 		battery->rate_now != ACPI_BATTERY_VALUE_UNKNOWN &&
 		(s16)(battery->rate_now) < 0) {
 		battery->rate_now = abs((s16)battery->rate_now);
-		printk_once(KERN_WARNING FW_BUG
-			    "battery: (dis)charge rate invalid.\n");
+		printk_once(KERN_WARNING FW_BUG "battery: (dis)charge rate"
+			" invalid.\n");
+	}
+
+	/*
+	 * When fully charged, some batteries wrongly report
+	 * capacity_now = design_capacity instead of = full_charge_capacity
+	 */
+	if (battery->capacity_now > battery->full_charge_capacity
+	    && battery->full_charge_capacity != ACPI_BATTERY_VALUE_UNKNOWN) {
+		battery->capacity_now = battery->full_charge_capacity;
+		if (battery->capacity_now != battery->design_capacity)
+			printk_once(KERN_WARNING FW_BUG
+				"battery: reported current charge level (%d) "
+				"is higher than reported maximum charge level (%d).\n",
+				battery->capacity_now, battery->full_charge_capacity);
 	}
 
 	if (test_bit(ACPI_BATTERY_QUIRK_PERCENTAGE_CAPACITY, &battery->flags)
@@ -622,45 +623,40 @@ static struct device_attribute alarm_attr = {
 
 static int sysfs_add_battery(struct acpi_battery *battery)
 {
-	struct power_supply_config psy_cfg = { .drv_data = battery, };
+	int result;
 
 	if (battery->power_unit == ACPI_BATTERY_POWER_UNIT_MA) {
-		battery->bat_desc.properties = charge_battery_props;
-		battery->bat_desc.num_properties =
+		battery->bat.properties = charge_battery_props;
+		battery->bat.num_properties =
 			ARRAY_SIZE(charge_battery_props);
 	} else {
-		battery->bat_desc.properties = energy_battery_props;
-		battery->bat_desc.num_properties =
+		battery->bat.properties = energy_battery_props;
+		battery->bat.num_properties =
 			ARRAY_SIZE(energy_battery_props);
 	}
 
-	battery->bat_desc.name = acpi_device_bid(battery->device);
-	battery->bat_desc.type = POWER_SUPPLY_TYPE_BATTERY;
-	battery->bat_desc.get_property = acpi_battery_get_property;
+	battery->bat.name = acpi_device_bid(battery->device);
+	battery->bat.type = POWER_SUPPLY_TYPE_BATTERY;
+	battery->bat.get_property = acpi_battery_get_property;
 
-	battery->bat = power_supply_register_no_ws(&battery->device->dev,
-				&battery->bat_desc, &psy_cfg);
+	result = power_supply_register_no_ws(&battery->device->dev, &battery->bat);
 
-	if (IS_ERR(battery->bat)) {
-		int result = PTR_ERR(battery->bat);
-
-		battery->bat = NULL;
+	if (result)
 		return result;
-	}
-	return device_create_file(&battery->bat->dev, &alarm_attr);
+	return device_create_file(battery->bat.dev, &alarm_attr);
 }
 
 static void sysfs_remove_battery(struct acpi_battery *battery)
 {
 	mutex_lock(&battery->sysfs_lock);
-	if (!battery->bat) {
+	if (!battery->bat.dev) {
 		mutex_unlock(&battery->sysfs_lock);
 		return;
 	}
 
-	device_remove_file(&battery->bat->dev, &alarm_attr);
-	power_supply_unregister(battery->bat);
-	battery->bat = NULL;
+	device_remove_file(battery->bat.dev, &alarm_attr);
+	power_supply_unregister(&battery->bat);
+	battery->bat.dev = NULL;
 	mutex_unlock(&battery->sysfs_lock);
 }
 
@@ -714,7 +710,7 @@ static void acpi_battery_quirks(struct acpi_battery *battery)
 	if (battery->power_unit && dmi_name_in_vendors("LENOVO")) {
 		const char *s;
 		s = dmi_get_system_info(DMI_PRODUCT_VERSION);
-		if (s && !strncasecmp(s, "ThinkPad", 8)) {
+		if (s && !strnicmp(s, "ThinkPad", 8)) {
 			dmi_walk(find_battery, battery);
 			if (test_bit(ACPI_BATTERY_QUIRK_THINKPAD_MAH,
 				     &battery->flags) &&
@@ -757,17 +753,15 @@ static int acpi_battery_update(struct acpi_battery *battery, bool resume)
 			return result;
 		acpi_battery_init_alarm(battery);
 	}
-
-	result = acpi_battery_get_state(battery);
-	if (result)
-		return result;
-	acpi_battery_quirks(battery);
-
-	if (!battery->bat) {
+	if (!battery->bat.dev) {
 		result = sysfs_add_battery(battery);
 		if (result)
 			return result;
 	}
+	result = acpi_battery_get_state(battery);
+	if (result)
+		return result;
+	acpi_battery_quirks(battery);
 
 	/*
 	 * Wakeup the system if battery is critical low
@@ -785,7 +779,7 @@ static void acpi_battery_refresh(struct acpi_battery *battery)
 {
 	int power_unit;
 
-	if (!battery->bat)
+	if (!battery->bat.dev)
 		return;
 
 	power_unit = battery->power_unit;
@@ -806,12 +800,6 @@ static void acpi_battery_refresh(struct acpi_battery *battery)
 
 #ifdef CONFIG_ACPI_PROCFS_POWER
 static struct proc_dir_entry *acpi_battery_dir;
-
-static const char *acpi_battery_units(const struct acpi_battery *battery)
-{
-	return (battery->power_unit == ACPI_BATTERY_POWER_UNIT_MA) ?
-		"mA" : "mW";
-}
 
 static int acpi_battery_print_info(struct seq_file *seq, int result)
 {
@@ -1089,11 +1077,11 @@ static void acpi_battery_remove_fs(struct acpi_device *device)
 static void acpi_battery_notify(struct acpi_device *device, u32 event)
 {
 	struct acpi_battery *battery = acpi_driver_data(device);
-	struct power_supply *old;
+	struct device *old;
 
 	if (!battery)
 		return;
-	old = battery->bat;
+	old = battery->bat.dev;
 	/*
 	* On Acer Aspire V5-573G notifications are sometimes triggered too
 	* early. For example, when AC is unplugged and notification is
@@ -1110,8 +1098,8 @@ static void acpi_battery_notify(struct acpi_device *device, u32 event)
 					acpi_battery_present(battery));
 	acpi_notifier_call_chain(device, event, acpi_battery_present(battery));
 	/* acpi_battery_update could remove power_supply object */
-	if (old && battery->bat)
-		power_supply_changed(battery->bat);
+	if (old && battery->bat.dev)
+		power_supply_changed(&battery->bat);
 }
 
 static int battery_notify(struct notifier_block *nb,
@@ -1127,7 +1115,7 @@ static int battery_notify(struct notifier_block *nb,
 		if (!acpi_battery_present(battery))
 			return 0;
 
-		if (!battery->bat) {
+		if (!battery->bat.dev) {
 			result = acpi_battery_get_info(battery);
 			if (result)
 				return result;
@@ -1146,21 +1134,19 @@ static int battery_notify(struct notifier_block *nb,
 	return 0;
 }
 
-static int __init
-battery_bix_broken_package_quirk(const struct dmi_system_id *d)
+static int battery_bix_broken_package_quirk(const struct dmi_system_id *d)
 {
 	battery_bix_broken_package = 1;
 	return 0;
 }
 
-static int __init
-battery_notification_delay_quirk(const struct dmi_system_id *d)
+static int battery_notification_delay_quirk(const struct dmi_system_id *d)
 {
 	battery_notification_delay_ms = 1000;
 	return 0;
 }
 
-static const struct dmi_system_id bat_dmi_table[] __initconst = {
+static struct dmi_system_id bat_dmi_table[] = {
 	{
 		.callback = battery_bix_broken_package_quirk,
 		.ident = "NEC LZ750/LS",
@@ -1209,10 +1195,6 @@ static int acpi_battery_add(struct acpi_device *device)
 
 	if (!device)
 		return -EINVAL;
-
-	if (device->dep_unmet)
-		return -EPROBE_DEFER;
-
 	battery = kzalloc(sizeof(struct acpi_battery), GFP_KERNEL);
 	if (!battery)
 		return -ENOMEM;
@@ -1315,34 +1297,33 @@ static struct acpi_driver acpi_battery_driver = {
 
 static void __init acpi_battery_init_async(void *unused, async_cookie_t cookie)
 {
-	int result;
+	if (acpi_disabled)
+		return;
 
 	dmi_check_system(bat_dmi_table);
-
+	
 #ifdef CONFIG_ACPI_PROCFS_POWER
 	acpi_battery_dir = acpi_lock_battery_dir();
 	if (!acpi_battery_dir)
 		return;
 #endif
-	result = acpi_bus_register_driver(&acpi_battery_driver);
+	if (acpi_bus_register_driver(&acpi_battery_driver) < 0) {
 #ifdef CONFIG_ACPI_PROCFS_POWER
-	if (result < 0)
 		acpi_unlock_battery_dir(acpi_battery_dir);
 #endif
+		return;
+	}
+	return;
 }
 
 static int __init acpi_battery_init(void)
 {
-	if (acpi_disabled)
-		return -ENODEV;
-
-	async_cookie = async_schedule(acpi_battery_init_async, NULL);
+	async_schedule(acpi_battery_init_async, NULL);
 	return 0;
 }
 
 static void __exit acpi_battery_exit(void)
 {
-	async_synchronize_cookie(async_cookie + 1);
 	acpi_bus_unregister_driver(&acpi_battery_driver);
 #ifdef CONFIG_ACPI_PROCFS_POWER
 	acpi_unlock_battery_dir(acpi_battery_dir);

@@ -28,7 +28,6 @@
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
 #include <linux/of_device.h>
-#include <linux/of_graph.h>
 
 #include <drm/drm_fourcc.h>
 
@@ -45,11 +44,16 @@ static inline void ipu_cm_write(struct ipu_soc *ipu, u32 value, unsigned offset)
 	writel(value, ipu->cm_reg + offset);
 }
 
-int ipu_get_num(struct ipu_soc *ipu)
+static inline u32 ipu_idmac_read(struct ipu_soc *ipu, unsigned offset)
 {
-	return ipu->id;
+	return readl(ipu->idmac_reg + offset);
 }
-EXPORT_SYMBOL_GPL(ipu_get_num);
+
+static inline void ipu_idmac_write(struct ipu_soc *ipu, u32 value,
+		unsigned offset)
+{
+	writel(value, ipu->idmac_reg + offset);
+}
 
 void ipu_srm_dp_sync_update(struct ipu_soc *ipu)
 {
@@ -61,18 +65,386 @@ void ipu_srm_dp_sync_update(struct ipu_soc *ipu)
 }
 EXPORT_SYMBOL_GPL(ipu_srm_dp_sync_update);
 
+struct ipu_ch_param __iomem *ipu_get_cpmem(struct ipuv3_channel *channel)
+{
+	struct ipu_soc *ipu = channel->ipu;
+
+	return ipu->cpmem_base + channel->num;
+}
+EXPORT_SYMBOL_GPL(ipu_get_cpmem);
+
+void ipu_cpmem_set_high_priority(struct ipuv3_channel *channel)
+{
+	struct ipu_soc *ipu = channel->ipu;
+	struct ipu_ch_param __iomem *p = ipu_get_cpmem(channel);
+	u32 val;
+
+	if (ipu->ipu_type == IPUV3EX)
+		ipu_ch_param_write_field(p, IPU_FIELD_ID, 1);
+
+	val = ipu_idmac_read(ipu, IDMAC_CHA_PRI(channel->num));
+	val |= 1 << (channel->num % 32);
+	ipu_idmac_write(ipu, val, IDMAC_CHA_PRI(channel->num));
+};
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_high_priority);
+
+void ipu_ch_param_write_field(struct ipu_ch_param __iomem *base, u32 wbs, u32 v)
+{
+	u32 bit = (wbs >> 8) % 160;
+	u32 size = wbs & 0xff;
+	u32 word = (wbs >> 8) / 160;
+	u32 i = bit / 32;
+	u32 ofs = bit % 32;
+	u32 mask = (1 << size) - 1;
+	u32 val;
+
+	pr_debug("%s %d %d %d\n", __func__, word, bit , size);
+
+	val = readl(&base->word[word].data[i]);
+	val &= ~(mask << ofs);
+	val |= v << ofs;
+	writel(val, &base->word[word].data[i]);
+
+	if ((bit + size - 1) / 32 > i) {
+		val = readl(&base->word[word].data[i + 1]);
+		val &= ~(mask >> (ofs ? (32 - ofs) : 0));
+		val |= v >> (ofs ? (32 - ofs) : 0);
+		writel(val, &base->word[word].data[i + 1]);
+	}
+}
+EXPORT_SYMBOL_GPL(ipu_ch_param_write_field);
+
+u32 ipu_ch_param_read_field(struct ipu_ch_param __iomem *base, u32 wbs)
+{
+	u32 bit = (wbs >> 8) % 160;
+	u32 size = wbs & 0xff;
+	u32 word = (wbs >> 8) / 160;
+	u32 i = bit / 32;
+	u32 ofs = bit % 32;
+	u32 mask = (1 << size) - 1;
+	u32 val = 0;
+
+	pr_debug("%s %d %d %d\n", __func__, word, bit , size);
+
+	val = (readl(&base->word[word].data[i]) >> ofs) & mask;
+
+	if ((bit + size - 1) / 32 > i) {
+		u32 tmp;
+		tmp = readl(&base->word[word].data[i + 1]);
+		tmp &= mask >> (ofs ? (32 - ofs) : 0);
+		val |= tmp << (ofs ? (32 - ofs) : 0);
+	}
+
+	return val;
+}
+EXPORT_SYMBOL_GPL(ipu_ch_param_read_field);
+
+int ipu_cpmem_set_format_rgb(struct ipu_ch_param __iomem *p,
+		const struct ipu_rgb *rgb)
+{
+	int bpp = 0, npb = 0, ro, go, bo, to;
+
+	ro = rgb->bits_per_pixel - rgb->red.length - rgb->red.offset;
+	go = rgb->bits_per_pixel - rgb->green.length - rgb->green.offset;
+	bo = rgb->bits_per_pixel - rgb->blue.length - rgb->blue.offset;
+	to = rgb->bits_per_pixel - rgb->transp.length - rgb->transp.offset;
+
+	ipu_ch_param_write_field(p, IPU_FIELD_WID0, rgb->red.length - 1);
+	ipu_ch_param_write_field(p, IPU_FIELD_OFS0, ro);
+	ipu_ch_param_write_field(p, IPU_FIELD_WID1, rgb->green.length - 1);
+	ipu_ch_param_write_field(p, IPU_FIELD_OFS1, go);
+	ipu_ch_param_write_field(p, IPU_FIELD_WID2, rgb->blue.length - 1);
+	ipu_ch_param_write_field(p, IPU_FIELD_OFS2, bo);
+
+	if (rgb->transp.length) {
+		ipu_ch_param_write_field(p, IPU_FIELD_WID3,
+				rgb->transp.length - 1);
+		ipu_ch_param_write_field(p, IPU_FIELD_OFS3, to);
+	} else {
+		ipu_ch_param_write_field(p, IPU_FIELD_WID3, 7);
+		ipu_ch_param_write_field(p, IPU_FIELD_OFS3,
+				rgb->bits_per_pixel);
+	}
+
+	switch (rgb->bits_per_pixel) {
+	case 32:
+		bpp = 0;
+		npb = 15;
+		break;
+	case 24:
+		bpp = 1;
+		npb = 19;
+		break;
+	case 16:
+		bpp = 3;
+		npb = 31;
+		break;
+	case 8:
+		bpp = 5;
+		npb = 63;
+		break;
+	default:
+		return -EINVAL;
+	}
+	ipu_ch_param_write_field(p, IPU_FIELD_BPP, bpp);
+	ipu_ch_param_write_field(p, IPU_FIELD_NPB, npb);
+	ipu_ch_param_write_field(p, IPU_FIELD_PFS, 7); /* rgb mode */
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_format_rgb);
+
+int ipu_cpmem_set_format_passthrough(struct ipu_ch_param __iomem *p,
+		int width)
+{
+	int bpp = 0, npb = 0;
+
+	switch (width) {
+	case 32:
+		bpp = 0;
+		npb = 15;
+		break;
+	case 24:
+		bpp = 1;
+		npb = 19;
+		break;
+	case 16:
+		bpp = 3;
+		npb = 31;
+		break;
+	case 8:
+		bpp = 5;
+		npb = 63;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	ipu_ch_param_write_field(p, IPU_FIELD_BPP, bpp);
+	ipu_ch_param_write_field(p, IPU_FIELD_NPB, npb);
+	ipu_ch_param_write_field(p, IPU_FIELD_PFS, 6); /* raw mode */
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_format_passthrough);
+
+void ipu_cpmem_set_yuv_interleaved(struct ipu_ch_param __iomem *p,
+				   u32 pixel_format)
+{
+	switch (pixel_format) {
+	case V4L2_PIX_FMT_UYVY:
+		ipu_ch_param_write_field(p, IPU_FIELD_BPP, 3);    /* bits/pixel */
+		ipu_ch_param_write_field(p, IPU_FIELD_PFS, 0xA);  /* pix format */
+		ipu_ch_param_write_field(p, IPU_FIELD_NPB, 31);   /* burst size */
+		break;
+	case V4L2_PIX_FMT_YUYV:
+		ipu_ch_param_write_field(p, IPU_FIELD_BPP, 3);    /* bits/pixel */
+		ipu_ch_param_write_field(p, IPU_FIELD_PFS, 0x8);  /* pix format */
+		ipu_ch_param_write_field(p, IPU_FIELD_NPB, 31);   /* burst size */
+		break;
+	}
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_yuv_interleaved);
+
+void ipu_cpmem_set_yuv_planar_full(struct ipu_ch_param __iomem *p,
+		u32 pixel_format, int stride, int u_offset, int v_offset)
+{
+	switch (pixel_format) {
+	case V4L2_PIX_FMT_YUV420:
+		ipu_ch_param_write_field(p, IPU_FIELD_SLUV, (stride / 2) - 1);
+		ipu_ch_param_write_field(p, IPU_FIELD_UBO, u_offset / 8);
+		ipu_ch_param_write_field(p, IPU_FIELD_VBO, v_offset / 8);
+		break;
+	case V4L2_PIX_FMT_YVU420:
+		ipu_ch_param_write_field(p, IPU_FIELD_SLUV, (stride / 2) - 1);
+		ipu_ch_param_write_field(p, IPU_FIELD_UBO, v_offset / 8);
+		ipu_ch_param_write_field(p, IPU_FIELD_VBO, u_offset / 8);
+		break;
+	}
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_yuv_planar_full);
+
+void ipu_cpmem_set_yuv_planar(struct ipu_ch_param __iomem *p, u32 pixel_format,
+		int stride, int height)
+{
+	int u_offset, v_offset;
+	int uv_stride = 0;
+
+	switch (pixel_format) {
+	case V4L2_PIX_FMT_YUV420:
+	case V4L2_PIX_FMT_YVU420:
+		uv_stride = stride / 2;
+		u_offset = stride * height;
+		v_offset = u_offset + (uv_stride * height / 2);
+		ipu_cpmem_set_yuv_planar_full(p, pixel_format, stride,
+				u_offset, v_offset);
+		break;
+	}
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_yuv_planar);
+
+static const struct ipu_rgb def_rgb_32 = {
+	.red	= { .offset = 16, .length = 8, },
+	.green	= { .offset =  8, .length = 8, },
+	.blue	= { .offset =  0, .length = 8, },
+	.transp = { .offset = 24, .length = 8, },
+	.bits_per_pixel = 32,
+};
+
+static const struct ipu_rgb def_bgr_32 = {
+	.red	= { .offset =  0, .length = 8, },
+	.green	= { .offset =  8, .length = 8, },
+	.blue	= { .offset = 16, .length = 8, },
+	.transp = { .offset = 24, .length = 8, },
+	.bits_per_pixel = 32,
+};
+
+static const struct ipu_rgb def_rgb_24 = {
+	.red	= { .offset = 16, .length = 8, },
+	.green	= { .offset =  8, .length = 8, },
+	.blue	= { .offset =  0, .length = 8, },
+	.transp = { .offset =  0, .length = 0, },
+	.bits_per_pixel = 24,
+};
+
+static const struct ipu_rgb def_bgr_24 = {
+	.red	= { .offset =  0, .length = 8, },
+	.green	= { .offset =  8, .length = 8, },
+	.blue	= { .offset = 16, .length = 8, },
+	.transp = { .offset =  0, .length = 0, },
+	.bits_per_pixel = 24,
+};
+
+static const struct ipu_rgb def_rgb_16 = {
+	.red	= { .offset = 11, .length = 5, },
+	.green	= { .offset =  5, .length = 6, },
+	.blue	= { .offset =  0, .length = 5, },
+	.transp = { .offset =  0, .length = 0, },
+	.bits_per_pixel = 16,
+};
+
+static const struct ipu_rgb def_bgr_16 = {
+	.red	= { .offset =  0, .length = 5, },
+	.green	= { .offset =  5, .length = 6, },
+	.blue	= { .offset = 11, .length = 5, },
+	.transp = { .offset =  0, .length = 0, },
+	.bits_per_pixel = 16,
+};
+
+#define Y_OFFSET(pix, x, y)	((x) + pix->width * (y))
+#define U_OFFSET(pix, x, y)	((pix->width * pix->height) + \
+					(pix->width * (y) / 4) + (x) / 2)
+#define V_OFFSET(pix, x, y)	((pix->width * pix->height) + \
+					(pix->width * pix->height / 4) + \
+					(pix->width * (y) / 4) + (x) / 2)
+
+int ipu_cpmem_set_fmt(struct ipu_ch_param __iomem *cpmem, u32 drm_fourcc)
+{
+	switch (drm_fourcc) {
+	case DRM_FORMAT_YUV420:
+	case DRM_FORMAT_YVU420:
+		/* pix format */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_PFS, 2);
+		/* burst size */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_NPB, 63);
+		break;
+	case DRM_FORMAT_UYVY:
+		/* bits/pixel */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_BPP, 3);
+		/* pix format */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_PFS, 0xA);
+		/* burst size */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_NPB, 31);
+		break;
+	case DRM_FORMAT_YUYV:
+		/* bits/pixel */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_BPP, 3);
+		/* pix format */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_PFS, 0x8);
+		/* burst size */
+		ipu_ch_param_write_field(cpmem, IPU_FIELD_NPB, 31);
+		break;
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_XBGR8888:
+		ipu_cpmem_set_format_rgb(cpmem, &def_bgr_32);
+		break;
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XRGB8888:
+		ipu_cpmem_set_format_rgb(cpmem, &def_rgb_32);
+		break;
+	case DRM_FORMAT_BGR888:
+		ipu_cpmem_set_format_rgb(cpmem, &def_bgr_24);
+		break;
+	case DRM_FORMAT_RGB888:
+		ipu_cpmem_set_format_rgb(cpmem, &def_rgb_24);
+		break;
+	case DRM_FORMAT_RGB565:
+		ipu_cpmem_set_format_rgb(cpmem, &def_rgb_16);
+		break;
+	case DRM_FORMAT_BGR565:
+		ipu_cpmem_set_format_rgb(cpmem, &def_bgr_16);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_fmt);
+
+/*
+ * The V4L2 spec defines packed RGB formats in memory byte order, which from
+ * point of view of the IPU corresponds to little-endian words with the first
+ * component in the least significant bits.
+ * The DRM pixel formats and IPU internal representation are ordered the other
+ * way around, with the first named component ordered at the most significant
+ * bits. Further, V4L2 formats are not well defined:
+ *     http://linuxtv.org/downloads/v4l-dvb-apis/packed-rgb.html
+ * We choose the interpretation which matches GStreamer behavior.
+ */
+static int v4l2_pix_fmt_to_drm_fourcc(u32 pixelformat)
+{
+	switch (pixelformat) {
+	case V4L2_PIX_FMT_RGB565:
+		/*
+		 * Here we choose the 'corrected' interpretation of RGBP, a
+		 * little-endian 16-bit word with the red component at the most
+		 * significant bits:
+		 * g[2:0]b[4:0] r[4:0]g[5:3] <=> [16:0] R:G:B
+		 */
+		return DRM_FORMAT_RGB565;
+	case V4L2_PIX_FMT_BGR24:
+		/* B G R <=> [24:0] R:G:B */
+		return DRM_FORMAT_RGB888;
+	case V4L2_PIX_FMT_RGB24:
+		/* R G B <=> [24:0] B:G:R */
+		return DRM_FORMAT_BGR888;
+	case V4L2_PIX_FMT_BGR32:
+		/* B G R A <=> [32:0] A:B:G:R */
+		return DRM_FORMAT_XRGB8888;
+	case V4L2_PIX_FMT_RGB32:
+		/* R G B A <=> [32:0] A:B:G:R */
+		return DRM_FORMAT_XBGR8888;
+	case V4L2_PIX_FMT_UYVY:
+		return DRM_FORMAT_UYVY;
+	case V4L2_PIX_FMT_YUYV:
+		return DRM_FORMAT_YUYV;
+	case V4L2_PIX_FMT_YUV420:
+		return DRM_FORMAT_YUV420;
+	case V4L2_PIX_FMT_YVU420:
+		return DRM_FORMAT_YVU420;
+	}
+
+	return -EINVAL;
+}
+
 enum ipu_color_space ipu_drm_fourcc_to_colorspace(u32 drm_fourcc)
 {
 	switch (drm_fourcc) {
-	case DRM_FORMAT_ARGB1555:
-	case DRM_FORMAT_ABGR1555:
-	case DRM_FORMAT_RGBA5551:
-	case DRM_FORMAT_BGRA5551:
 	case DRM_FORMAT_RGB565:
 	case DRM_FORMAT_BGR565:
 	case DRM_FORMAT_RGB888:
 	case DRM_FORMAT_BGR888:
-	case DRM_FORMAT_ARGB4444:
 	case DRM_FORMAT_XRGB8888:
 	case DRM_FORMAT_XBGR8888:
 	case DRM_FORMAT_RGBX8888:
@@ -86,14 +458,6 @@ enum ipu_color_space ipu_drm_fourcc_to_colorspace(u32 drm_fourcc)
 	case DRM_FORMAT_UYVY:
 	case DRM_FORMAT_YUV420:
 	case DRM_FORMAT_YVU420:
-	case DRM_FORMAT_YUV422:
-	case DRM_FORMAT_YVU422:
-	case DRM_FORMAT_YUV444:
-	case DRM_FORMAT_YVU444:
-	case DRM_FORMAT_NV12:
-	case DRM_FORMAT_NV21:
-	case DRM_FORMAT_NV16:
-	case DRM_FORMAT_NV61:
 		return IPUV3_COLORSPACE_YUV;
 	default:
 		return IPUV3_COLORSPACE_UNKNOWN;
@@ -101,18 +465,73 @@ enum ipu_color_space ipu_drm_fourcc_to_colorspace(u32 drm_fourcc)
 }
 EXPORT_SYMBOL_GPL(ipu_drm_fourcc_to_colorspace);
 
+int ipu_cpmem_set_image(struct ipu_ch_param __iomem *cpmem,
+		struct ipu_image *image)
+{
+	struct v4l2_pix_format *pix = &image->pix;
+	int y_offset, u_offset, v_offset;
+
+	pr_debug("%s: resolution: %dx%d stride: %d\n",
+			__func__, pix->width, pix->height,
+			pix->bytesperline);
+
+	ipu_cpmem_set_resolution(cpmem, image->rect.width,
+			image->rect.height);
+	ipu_cpmem_set_stride(cpmem, pix->bytesperline);
+
+	ipu_cpmem_set_fmt(cpmem, v4l2_pix_fmt_to_drm_fourcc(pix->pixelformat));
+
+	switch (pix->pixelformat) {
+	case V4L2_PIX_FMT_YUV420:
+	case V4L2_PIX_FMT_YVU420:
+		y_offset = Y_OFFSET(pix, image->rect.left, image->rect.top);
+		u_offset = U_OFFSET(pix, image->rect.left,
+				image->rect.top) - y_offset;
+		v_offset = V_OFFSET(pix, image->rect.left,
+				image->rect.top) - y_offset;
+
+		ipu_cpmem_set_yuv_planar_full(cpmem, pix->pixelformat,
+				pix->bytesperline, u_offset, v_offset);
+		ipu_cpmem_set_buffer(cpmem, 0, image->phys + y_offset);
+		break;
+	case V4L2_PIX_FMT_UYVY:
+	case V4L2_PIX_FMT_YUYV:
+		ipu_cpmem_set_buffer(cpmem, 0, image->phys +
+				image->rect.left * 2 +
+				image->rect.top * image->pix.bytesperline);
+		break;
+	case V4L2_PIX_FMT_RGB32:
+	case V4L2_PIX_FMT_BGR32:
+		ipu_cpmem_set_buffer(cpmem, 0, image->phys +
+				image->rect.left * 4 +
+				image->rect.top * image->pix.bytesperline);
+		break;
+	case V4L2_PIX_FMT_RGB565:
+		ipu_cpmem_set_buffer(cpmem, 0, image->phys +
+				image->rect.left * 2 +
+				image->rect.top * image->pix.bytesperline);
+		break;
+	case V4L2_PIX_FMT_RGB24:
+	case V4L2_PIX_FMT_BGR24:
+		ipu_cpmem_set_buffer(cpmem, 0, image->phys +
+				image->rect.left * 3 +
+				image->rect.top * image->pix.bytesperline);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ipu_cpmem_set_image);
+
 enum ipu_color_space ipu_pixelformat_to_colorspace(u32 pixelformat)
 {
 	switch (pixelformat) {
 	case V4L2_PIX_FMT_YUV420:
 	case V4L2_PIX_FMT_YVU420:
-	case V4L2_PIX_FMT_YUV422P:
 	case V4L2_PIX_FMT_UYVY:
 	case V4L2_PIX_FMT_YUYV:
-	case V4L2_PIX_FMT_NV12:
-	case V4L2_PIX_FMT_NV21:
-	case V4L2_PIX_FMT_NV16:
-	case V4L2_PIX_FMT_NV61:
 		return IPUV3_COLORSPACE_YUV;
 	case V4L2_PIX_FMT_RGB32:
 	case V4L2_PIX_FMT_BGR32:
@@ -125,135 +544,6 @@ enum ipu_color_space ipu_pixelformat_to_colorspace(u32 pixelformat)
 	}
 }
 EXPORT_SYMBOL_GPL(ipu_pixelformat_to_colorspace);
-
-bool ipu_pixelformat_is_planar(u32 pixelformat)
-{
-	switch (pixelformat) {
-	case V4L2_PIX_FMT_YUV420:
-	case V4L2_PIX_FMT_YVU420:
-	case V4L2_PIX_FMT_YUV422P:
-	case V4L2_PIX_FMT_NV12:
-	case V4L2_PIX_FMT_NV21:
-	case V4L2_PIX_FMT_NV16:
-	case V4L2_PIX_FMT_NV61:
-		return true;
-	}
-
-	return false;
-}
-EXPORT_SYMBOL_GPL(ipu_pixelformat_is_planar);
-
-enum ipu_color_space ipu_mbus_code_to_colorspace(u32 mbus_code)
-{
-	switch (mbus_code & 0xf000) {
-	case 0x1000:
-		return IPUV3_COLORSPACE_RGB;
-	case 0x2000:
-		return IPUV3_COLORSPACE_YUV;
-	default:
-		return IPUV3_COLORSPACE_UNKNOWN;
-	}
-}
-EXPORT_SYMBOL_GPL(ipu_mbus_code_to_colorspace);
-
-int ipu_stride_to_bytes(u32 pixel_stride, u32 pixelformat)
-{
-	switch (pixelformat) {
-	case V4L2_PIX_FMT_YUV420:
-	case V4L2_PIX_FMT_YVU420:
-	case V4L2_PIX_FMT_YUV422P:
-	case V4L2_PIX_FMT_NV12:
-	case V4L2_PIX_FMT_NV21:
-	case V4L2_PIX_FMT_NV16:
-	case V4L2_PIX_FMT_NV61:
-		/*
-		 * for the planar YUV formats, the stride passed to
-		 * cpmem must be the stride in bytes of the Y plane.
-		 * And all the planar YUV formats have an 8-bit
-		 * Y component.
-		 */
-		return (8 * pixel_stride) >> 3;
-	case V4L2_PIX_FMT_RGB565:
-	case V4L2_PIX_FMT_YUYV:
-	case V4L2_PIX_FMT_UYVY:
-		return (16 * pixel_stride) >> 3;
-	case V4L2_PIX_FMT_BGR24:
-	case V4L2_PIX_FMT_RGB24:
-		return (24 * pixel_stride) >> 3;
-	case V4L2_PIX_FMT_BGR32:
-	case V4L2_PIX_FMT_RGB32:
-		return (32 * pixel_stride) >> 3;
-	default:
-		break;
-	}
-
-	return -EINVAL;
-}
-EXPORT_SYMBOL_GPL(ipu_stride_to_bytes);
-
-int ipu_degrees_to_rot_mode(enum ipu_rotate_mode *mode, int degrees,
-			    bool hflip, bool vflip)
-{
-	u32 r90, vf, hf;
-
-	switch (degrees) {
-	case 0:
-		vf = hf = r90 = 0;
-		break;
-	case 90:
-		vf = hf = 0;
-		r90 = 1;
-		break;
-	case 180:
-		vf = hf = 1;
-		r90 = 0;
-		break;
-	case 270:
-		vf = hf = r90 = 1;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	hf ^= (u32)hflip;
-	vf ^= (u32)vflip;
-
-	*mode = (enum ipu_rotate_mode)((r90 << 2) | (hf << 1) | vf);
-	return 0;
-}
-EXPORT_SYMBOL_GPL(ipu_degrees_to_rot_mode);
-
-int ipu_rot_mode_to_degrees(int *degrees, enum ipu_rotate_mode mode,
-			    bool hflip, bool vflip)
-{
-	u32 r90, vf, hf;
-
-	r90 = ((u32)mode >> 2) & 0x1;
-	hf = ((u32)mode >> 1) & 0x1;
-	vf = ((u32)mode >> 0) & 0x1;
-	hf ^= (u32)hflip;
-	vf ^= (u32)vflip;
-
-	switch ((enum ipu_rotate_mode)((r90 << 2) | (hf << 1) | vf)) {
-	case IPU_ROTATE_NONE:
-		*degrees = 0;
-		break;
-	case IPU_ROTATE_90_RIGHT:
-		*degrees = 90;
-		break;
-	case IPU_ROTATE_180:
-		*degrees = 180;
-		break;
-	case IPU_ROTATE_90_LEFT:
-		*degrees = 270;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(ipu_rot_mode_to_degrees);
 
 struct ipuv3_channel *ipu_idmac_get(struct ipu_soc *ipu, unsigned num)
 {
@@ -297,26 +587,7 @@ void ipu_idmac_put(struct ipuv3_channel *channel)
 }
 EXPORT_SYMBOL_GPL(ipu_idmac_put);
 
-#define idma_mask(ch)			(1 << ((ch) & 0x1f))
-
-/*
- * This is an undocumented feature, a write one to a channel bit in
- * IPU_CHA_CUR_BUF and IPU_CHA_TRIPLE_CUR_BUF will reset the channel's
- * internal current buffer pointer so that transfers start from buffer
- * 0 on the next channel enable (that's the theory anyway, the imx6 TRM
- * only says these are read-only registers). This operation is required
- * for channel linking to work correctly, for instance video capture
- * pipelines that carry out image rotations will fail after the first
- * streaming unless this function is called for each channel before
- * re-enabling the channels.
- */
-static void __ipu_idmac_reset_current_buffer(struct ipuv3_channel *channel)
-{
-	struct ipu_soc *ipu = channel->ipu;
-	unsigned int chno = channel->num;
-
-	ipu_cm_write(ipu, idma_mask(chno), IPU_CHA_CUR_BUF(chno));
-}
+#define idma_mask(ch)			(1 << (ch & 0x1f))
 
 void ipu_idmac_set_double_buffer(struct ipuv3_channel *channel,
 		bool doublebuffer)
@@ -334,80 +605,9 @@ void ipu_idmac_set_double_buffer(struct ipuv3_channel *channel,
 		reg &= ~idma_mask(channel->num);
 	ipu_cm_write(ipu, reg, IPU_CHA_DB_MODE_SEL(channel->num));
 
-	__ipu_idmac_reset_current_buffer(channel);
-
 	spin_unlock_irqrestore(&ipu->lock, flags);
 }
 EXPORT_SYMBOL_GPL(ipu_idmac_set_double_buffer);
-
-static const struct {
-	int chnum;
-	u32 reg;
-	int shift;
-} idmac_lock_en_info[] = {
-	{ .chnum =  5, .reg = IDMAC_CH_LOCK_EN_1, .shift =  0, },
-	{ .chnum = 11, .reg = IDMAC_CH_LOCK_EN_1, .shift =  2, },
-	{ .chnum = 12, .reg = IDMAC_CH_LOCK_EN_1, .shift =  4, },
-	{ .chnum = 14, .reg = IDMAC_CH_LOCK_EN_1, .shift =  6, },
-	{ .chnum = 15, .reg = IDMAC_CH_LOCK_EN_1, .shift =  8, },
-	{ .chnum = 20, .reg = IDMAC_CH_LOCK_EN_1, .shift = 10, },
-	{ .chnum = 21, .reg = IDMAC_CH_LOCK_EN_1, .shift = 12, },
-	{ .chnum = 22, .reg = IDMAC_CH_LOCK_EN_1, .shift = 14, },
-	{ .chnum = 23, .reg = IDMAC_CH_LOCK_EN_1, .shift = 16, },
-	{ .chnum = 27, .reg = IDMAC_CH_LOCK_EN_1, .shift = 18, },
-	{ .chnum = 28, .reg = IDMAC_CH_LOCK_EN_1, .shift = 20, },
-	{ .chnum = 45, .reg = IDMAC_CH_LOCK_EN_2, .shift =  0, },
-	{ .chnum = 46, .reg = IDMAC_CH_LOCK_EN_2, .shift =  2, },
-	{ .chnum = 47, .reg = IDMAC_CH_LOCK_EN_2, .shift =  4, },
-	{ .chnum = 48, .reg = IDMAC_CH_LOCK_EN_2, .shift =  6, },
-	{ .chnum = 49, .reg = IDMAC_CH_LOCK_EN_2, .shift =  8, },
-	{ .chnum = 50, .reg = IDMAC_CH_LOCK_EN_2, .shift = 10, },
-};
-
-int ipu_idmac_lock_enable(struct ipuv3_channel *channel, int num_bursts)
-{
-	struct ipu_soc *ipu = channel->ipu;
-	unsigned long flags;
-	u32 bursts, regval;
-	int i;
-
-	switch (num_bursts) {
-	case 0:
-	case 1:
-		bursts = 0x00; /* locking disabled */
-		break;
-	case 2:
-		bursts = 0x01;
-		break;
-	case 4:
-		bursts = 0x02;
-		break;
-	case 8:
-		bursts = 0x03;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	for (i = 0; i < ARRAY_SIZE(idmac_lock_en_info); i++) {
-		if (channel->num == idmac_lock_en_info[i].chnum)
-			break;
-	}
-	if (i >= ARRAY_SIZE(idmac_lock_en_info))
-		return -EINVAL;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	regval = ipu_idmac_read(ipu, idmac_lock_en_info[i].reg);
-	regval &= ~(0x03 << idmac_lock_en_info[i].shift);
-	regval |= (bursts << idmac_lock_en_info[i].shift);
-	ipu_idmac_write(ipu, regval, idmac_lock_en_info[i].reg);
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(ipu_idmac_lock_enable);
 
 int ipu_module_enable(struct ipu_soc *ipu, u32 mask)
 {
@@ -461,6 +661,30 @@ int ipu_module_disable(struct ipu_soc *ipu, u32 mask)
 }
 EXPORT_SYMBOL_GPL(ipu_module_disable);
 
+int ipu_csi_enable(struct ipu_soc *ipu, int csi)
+{
+	return ipu_module_enable(ipu, csi ? IPU_CONF_CSI1_EN : IPU_CONF_CSI0_EN);
+}
+EXPORT_SYMBOL_GPL(ipu_csi_enable);
+
+int ipu_csi_disable(struct ipu_soc *ipu, int csi)
+{
+	return ipu_module_disable(ipu, csi ? IPU_CONF_CSI1_EN : IPU_CONF_CSI0_EN);
+}
+EXPORT_SYMBOL_GPL(ipu_csi_disable);
+
+int ipu_smfc_enable(struct ipu_soc *ipu)
+{
+	return ipu_module_enable(ipu, IPU_CONF_SMFC_EN);
+}
+EXPORT_SYMBOL_GPL(ipu_smfc_enable);
+
+int ipu_smfc_disable(struct ipu_soc *ipu)
+{
+	return ipu_module_disable(ipu, IPU_CONF_SMFC_EN);
+}
+EXPORT_SYMBOL_GPL(ipu_smfc_disable);
+
 int ipu_idmac_get_current_buffer(struct ipuv3_channel *channel)
 {
 	struct ipu_soc *ipu = channel->ipu;
@@ -469,30 +693,6 @@ int ipu_idmac_get_current_buffer(struct ipuv3_channel *channel)
 	return (ipu_cm_read(ipu, IPU_CHA_CUR_BUF(chno)) & idma_mask(chno)) ? 1 : 0;
 }
 EXPORT_SYMBOL_GPL(ipu_idmac_get_current_buffer);
-
-bool ipu_idmac_buffer_is_ready(struct ipuv3_channel *channel, u32 buf_num)
-{
-	struct ipu_soc *ipu = channel->ipu;
-	unsigned long flags;
-	u32 reg = 0;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-	switch (buf_num) {
-	case 0:
-		reg = ipu_cm_read(ipu, IPU_CHA_BUF0_RDY(channel->num));
-		break;
-	case 1:
-		reg = ipu_cm_read(ipu, IPU_CHA_BUF1_RDY(channel->num));
-		break;
-	case 2:
-		reg = ipu_cm_read(ipu, IPU_CHA_BUF2_RDY(channel->num));
-		break;
-	}
-	spin_unlock_irqrestore(&ipu->lock, flags);
-
-	return ((reg & idma_mask(channel->num)) != 0);
-}
-EXPORT_SYMBOL_GPL(ipu_idmac_buffer_is_ready);
 
 void ipu_idmac_select_buffer(struct ipuv3_channel *channel, u32 buf_num)
 {
@@ -511,34 +711,6 @@ void ipu_idmac_select_buffer(struct ipuv3_channel *channel, u32 buf_num)
 	spin_unlock_irqrestore(&ipu->lock, flags);
 }
 EXPORT_SYMBOL_GPL(ipu_idmac_select_buffer);
-
-void ipu_idmac_clear_buffer(struct ipuv3_channel *channel, u32 buf_num)
-{
-	struct ipu_soc *ipu = channel->ipu;
-	unsigned int chno = channel->num;
-	unsigned long flags;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	ipu_cm_write(ipu, 0xF0300000, IPU_GPR); /* write one to clear */
-	switch (buf_num) {
-	case 0:
-		ipu_cm_write(ipu, idma_mask(chno), IPU_CHA_BUF0_RDY(chno));
-		break;
-	case 1:
-		ipu_cm_write(ipu, idma_mask(chno), IPU_CHA_BUF1_RDY(chno));
-		break;
-	case 2:
-		ipu_cm_write(ipu, idma_mask(chno), IPU_CHA_BUF2_RDY(chno));
-		break;
-	default:
-		break;
-	}
-	ipu_cm_write(ipu, 0x0, IPU_GPR); /* write one to set */
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-}
-EXPORT_SYMBOL_GPL(ipu_idmac_clear_buffer);
 
 int ipu_idmac_enable_channel(struct ipuv3_channel *channel)
 {
@@ -610,8 +782,6 @@ int ipu_idmac_disable_channel(struct ipuv3_channel *channel)
 	val &= ~idma_mask(channel->num);
 	ipu_idmac_write(ipu, val, IDMAC_CHA_EN(channel->num));
 
-	__ipu_idmac_reset_current_buffer(channel);
-
 	/* Set channel buffers NOT to be ready */
 	ipu_cm_write(ipu, 0xf0000000, IPU_GPR); /* write one to clear */
 
@@ -640,31 +810,6 @@ int ipu_idmac_disable_channel(struct ipuv3_channel *channel)
 }
 EXPORT_SYMBOL_GPL(ipu_idmac_disable_channel);
 
-/*
- * The imx6 rev. D TRM says that enabling the WM feature will increase
- * a channel's priority. Refer to Table 36-8 Calculated priority value.
- * The sub-module that is the sink or source for the channel must enable
- * watermark signal for this to take effect (SMFC_WM for instance).
- */
-void ipu_idmac_enable_watermark(struct ipuv3_channel *channel, bool enable)
-{
-	struct ipu_soc *ipu = channel->ipu;
-	unsigned long flags;
-	u32 val;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	val = ipu_idmac_read(ipu, IDMAC_WM_EN(channel->num));
-	if (enable)
-		val |= 1 << (channel->num % 32);
-	else
-		val &= ~(1 << (channel->num % 32));
-	ipu_idmac_write(ipu, val, IDMAC_WM_EN(channel->num));
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-}
-EXPORT_SYMBOL_GPL(ipu_idmac_enable_watermark);
-
 static int ipu_memory_reset(struct ipu_soc *ipu)
 {
 	unsigned long timeout;
@@ -681,197 +826,12 @@ static int ipu_memory_reset(struct ipu_soc *ipu)
 	return 0;
 }
 
-/*
- * Set the source mux for the given CSI. Selects either parallel or
- * MIPI CSI2 sources.
- */
-void ipu_set_csi_src_mux(struct ipu_soc *ipu, int csi_id, bool mipi_csi2)
-{
-	unsigned long flags;
-	u32 val, mask;
-
-	mask = (csi_id == 1) ? IPU_CONF_CSI1_DATA_SOURCE :
-		IPU_CONF_CSI0_DATA_SOURCE;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	val = ipu_cm_read(ipu, IPU_CONF);
-	if (mipi_csi2)
-		val |= mask;
-	else
-		val &= ~mask;
-	ipu_cm_write(ipu, val, IPU_CONF);
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-}
-EXPORT_SYMBOL_GPL(ipu_set_csi_src_mux);
-
-/*
- * Set the source mux for the IC. Selects either CSI[01] or the VDI.
- */
-void ipu_set_ic_src_mux(struct ipu_soc *ipu, int csi_id, bool vdi)
-{
-	unsigned long flags;
-	u32 val;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	val = ipu_cm_read(ipu, IPU_CONF);
-	if (vdi) {
-		val |= IPU_CONF_IC_INPUT;
-	} else {
-		val &= ~IPU_CONF_IC_INPUT;
-		if (csi_id == 1)
-			val |= IPU_CONF_CSI_SEL;
-		else
-			val &= ~IPU_CONF_CSI_SEL;
-	}
-	ipu_cm_write(ipu, val, IPU_CONF);
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-}
-EXPORT_SYMBOL_GPL(ipu_set_ic_src_mux);
-
-
-/* Frame Synchronization Unit Channel Linking */
-
-struct fsu_link_reg_info {
-	int chno;
-	u32 reg;
-	u32 mask;
-	u32 val;
-};
-
-struct fsu_link_info {
-	struct fsu_link_reg_info src;
-	struct fsu_link_reg_info sink;
-};
-
-static const struct fsu_link_info fsu_link_info[] = {
-	{
-		.src  = { IPUV3_CHANNEL_IC_PRP_ENC_MEM, IPU_FS_PROC_FLOW2,
-			  FS_PRP_ENC_DEST_SEL_MASK, FS_PRP_ENC_DEST_SEL_IRT_ENC },
-		.sink = { IPUV3_CHANNEL_MEM_ROT_ENC, IPU_FS_PROC_FLOW1,
-			  FS_PRPENC_ROT_SRC_SEL_MASK, FS_PRPENC_ROT_SRC_SEL_ENC },
-	}, {
-		.src =  { IPUV3_CHANNEL_IC_PRP_VF_MEM, IPU_FS_PROC_FLOW2,
-			  FS_PRPVF_DEST_SEL_MASK, FS_PRPVF_DEST_SEL_IRT_VF },
-		.sink = { IPUV3_CHANNEL_MEM_ROT_VF, IPU_FS_PROC_FLOW1,
-			  FS_PRPVF_ROT_SRC_SEL_MASK, FS_PRPVF_ROT_SRC_SEL_VF },
-	}, {
-		.src =  { IPUV3_CHANNEL_IC_PP_MEM, IPU_FS_PROC_FLOW2,
-			  FS_PP_DEST_SEL_MASK, FS_PP_DEST_SEL_IRT_PP },
-		.sink = { IPUV3_CHANNEL_MEM_ROT_PP, IPU_FS_PROC_FLOW1,
-			  FS_PP_ROT_SRC_SEL_MASK, FS_PP_ROT_SRC_SEL_PP },
-	}, {
-		.src =  { IPUV3_CHANNEL_CSI_DIRECT, 0 },
-		.sink = { IPUV3_CHANNEL_CSI_VDI_PREV, IPU_FS_PROC_FLOW1,
-			  FS_VDI_SRC_SEL_MASK, FS_VDI_SRC_SEL_CSI_DIRECT },
-	},
-};
-
-static const struct fsu_link_info *find_fsu_link_info(int src, int sink)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(fsu_link_info); i++) {
-		if (src == fsu_link_info[i].src.chno &&
-		    sink == fsu_link_info[i].sink.chno)
-			return &fsu_link_info[i];
-	}
-
-	return NULL;
-}
-
-/*
- * Links a source channel to a sink channel in the FSU.
- */
-int ipu_fsu_link(struct ipu_soc *ipu, int src_ch, int sink_ch)
-{
-	const struct fsu_link_info *link;
-	u32 src_reg, sink_reg;
-	unsigned long flags;
-
-	link = find_fsu_link_info(src_ch, sink_ch);
-	if (!link)
-		return -EINVAL;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	if (link->src.mask) {
-		src_reg = ipu_cm_read(ipu, link->src.reg);
-		src_reg &= ~link->src.mask;
-		src_reg |= link->src.val;
-		ipu_cm_write(ipu, src_reg, link->src.reg);
-	}
-
-	if (link->sink.mask) {
-		sink_reg = ipu_cm_read(ipu, link->sink.reg);
-		sink_reg &= ~link->sink.mask;
-		sink_reg |= link->sink.val;
-		ipu_cm_write(ipu, sink_reg, link->sink.reg);
-	}
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-	return 0;
-}
-EXPORT_SYMBOL_GPL(ipu_fsu_link);
-
-/*
- * Unlinks source and sink channels in the FSU.
- */
-int ipu_fsu_unlink(struct ipu_soc *ipu, int src_ch, int sink_ch)
-{
-	const struct fsu_link_info *link;
-	u32 src_reg, sink_reg;
-	unsigned long flags;
-
-	link = find_fsu_link_info(src_ch, sink_ch);
-	if (!link)
-		return -EINVAL;
-
-	spin_lock_irqsave(&ipu->lock, flags);
-
-	if (link->src.mask) {
-		src_reg = ipu_cm_read(ipu, link->src.reg);
-		src_reg &= ~link->src.mask;
-		ipu_cm_write(ipu, src_reg, link->src.reg);
-	}
-
-	if (link->sink.mask) {
-		sink_reg = ipu_cm_read(ipu, link->sink.reg);
-		sink_reg &= ~link->sink.mask;
-		ipu_cm_write(ipu, sink_reg, link->sink.reg);
-	}
-
-	spin_unlock_irqrestore(&ipu->lock, flags);
-	return 0;
-}
-EXPORT_SYMBOL_GPL(ipu_fsu_unlink);
-
-/* Link IDMAC channels in the FSU */
-int ipu_idmac_link(struct ipuv3_channel *src, struct ipuv3_channel *sink)
-{
-	return ipu_fsu_link(src->ipu, src->num, sink->num);
-}
-EXPORT_SYMBOL_GPL(ipu_idmac_link);
-
-/* Unlink IDMAC channels in the FSU */
-int ipu_idmac_unlink(struct ipuv3_channel *src, struct ipuv3_channel *sink)
-{
-	return ipu_fsu_unlink(src->ipu, src->num, sink->num);
-}
-EXPORT_SYMBOL_GPL(ipu_idmac_unlink);
-
 struct ipu_devtype {
 	const char *name;
 	unsigned long cm_ofs;
 	unsigned long cpmem_ofs;
 	unsigned long srm_ofs;
 	unsigned long tpm_ofs;
-	unsigned long csi0_ofs;
-	unsigned long csi1_ofs;
-	unsigned long ic_ofs;
 	unsigned long disp0_ofs;
 	unsigned long disp1_ofs;
 	unsigned long dc_tmpl_ofs;
@@ -885,9 +845,6 @@ static struct ipu_devtype ipu_type_imx51 = {
 	.cpmem_ofs = 0x1f000000,
 	.srm_ofs = 0x1f040000,
 	.tpm_ofs = 0x1f060000,
-	.csi0_ofs = 0x1f030000,
-	.csi1_ofs = 0x1f038000,
-	.ic_ofs = 0x1e020000,
 	.disp0_ofs = 0x1e040000,
 	.disp1_ofs = 0x1e048000,
 	.dc_tmpl_ofs = 0x1f080000,
@@ -901,9 +858,6 @@ static struct ipu_devtype ipu_type_imx53 = {
 	.cpmem_ofs = 0x07000000,
 	.srm_ofs = 0x07040000,
 	.tpm_ofs = 0x07060000,
-	.csi0_ofs = 0x07030000,
-	.csi1_ofs = 0x07038000,
-	.ic_ofs = 0x06020000,
 	.disp0_ofs = 0x06040000,
 	.disp1_ofs = 0x06048000,
 	.dc_tmpl_ofs = 0x07080000,
@@ -917,9 +871,6 @@ static struct ipu_devtype ipu_type_imx6q = {
 	.cpmem_ofs = 0x00300000,
 	.srm_ofs = 0x00340000,
 	.tpm_ofs = 0x00360000,
-	.csi0_ofs = 0x00230000,
-	.csi1_ofs = 0x00238000,
-	.ic_ofs = 0x00220000,
 	.disp0_ofs = 0x00240000,
 	.disp1_ofs = 0x00248000,
 	.dc_tmpl_ofs = 0x00380000,
@@ -944,50 +895,8 @@ static int ipu_submodules_init(struct ipu_soc *ipu,
 	struct device *dev = &pdev->dev;
 	const struct ipu_devtype *devtype = ipu->devtype;
 
-	ret = ipu_cpmem_init(ipu, dev, ipu_base + devtype->cpmem_ofs);
-	if (ret) {
-		unit = "cpmem";
-		goto err_cpmem;
-	}
-
-	ret = ipu_csi_init(ipu, dev, 0, ipu_base + devtype->csi0_ofs,
-			   IPU_CONF_CSI0_EN, ipu_clk);
-	if (ret) {
-		unit = "csi0";
-		goto err_csi_0;
-	}
-
-	ret = ipu_csi_init(ipu, dev, 1, ipu_base + devtype->csi1_ofs,
-			   IPU_CONF_CSI1_EN, ipu_clk);
-	if (ret) {
-		unit = "csi1";
-		goto err_csi_1;
-	}
-
-	ret = ipu_ic_init(ipu, dev,
-			  ipu_base + devtype->ic_ofs,
-			  ipu_base + devtype->tpm_ofs);
-	if (ret) {
-		unit = "ic";
-		goto err_ic;
-	}
-
-	ret = ipu_vdi_init(ipu, dev, ipu_base + devtype->vdi_ofs,
-			   IPU_CONF_VDI_EN | IPU_CONF_ISP_EN |
-			   IPU_CONF_IC_INPUT);
-	if (ret) {
-		unit = "vdi";
-		goto err_vdi;
-	}
-
-	ret = ipu_image_convert_init(ipu, dev);
-	if (ret) {
-		unit = "image_convert";
-		goto err_image_convert;
-	}
-
 	ret = ipu_di_init(ipu, dev, 0, ipu_base + devtype->disp0_ofs,
-			  IPU_CONF_DI0_EN, ipu_clk);
+			IPU_CONF_DI0_EN, ipu_clk);
 	if (ret) {
 		unit = "di0";
 		goto err_di_0;
@@ -1040,18 +949,6 @@ err_dc:
 err_di_1:
 	ipu_di_exit(ipu, 0);
 err_di_0:
-	ipu_image_convert_exit(ipu);
-err_image_convert:
-	ipu_vdi_exit(ipu);
-err_vdi:
-	ipu_ic_exit(ipu);
-err_ic:
-	ipu_csi_exit(ipu, 1);
-err_csi_1:
-	ipu_csi_exit(ipu, 0);
-err_csi_0:
-	ipu_cpmem_exit(ipu);
-err_cpmem:
 	dev_err(&pdev->dev, "init %s failed with %d\n", unit, ret);
 	return ret;
 }
@@ -1075,11 +972,11 @@ static void ipu_irq_handle(struct ipu_soc *ipu, const int *regs, int num_regs)
 	}
 }
 
-static void ipu_irq_handler(struct irq_desc *desc)
+static void ipu_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	struct ipu_soc *ipu = irq_desc_get_handler_data(desc);
-	struct irq_chip *chip = irq_desc_get_chip(desc);
 	const int int_reg[] = { 0, 1, 2, 3, 10, 11, 12, 13, 14};
+	struct irq_chip *chip = irq_get_chip(irq);
 
 	chained_irq_enter(chip, desc);
 
@@ -1088,11 +985,11 @@ static void ipu_irq_handler(struct irq_desc *desc)
 	chained_irq_exit(chip, desc);
 }
 
-static void ipu_err_irq_handler(struct irq_desc *desc)
+static void ipu_err_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	struct ipu_soc *ipu = irq_desc_get_handler_data(desc);
-	struct irq_chip *chip = irq_desc_get_chip(desc);
 	const int int_reg[] = { 4, 5, 8, 9};
+	struct irq_chip *chip = irq_get_chip(irq);
 
 	chained_irq_enter(chip, desc);
 
@@ -1128,12 +1025,6 @@ static void ipu_submodules_exit(struct ipu_soc *ipu)
 	ipu_dc_exit(ipu);
 	ipu_di_exit(ipu, 1);
 	ipu_di_exit(ipu, 0);
-	ipu_image_convert_exit(ipu);
-	ipu_vdi_exit(ipu);
-	ipu_ic_exit(ipu);
-	ipu_csi_exit(ipu, 1);
-	ipu_csi_exit(ipu, 0);
-	ipu_cpmem_exit(ipu);
 }
 
 static int platform_remove_devices_fn(struct device *dev, void *unused)
@@ -1153,25 +1044,11 @@ static void platform_device_unregister_children(struct platform_device *pdev)
 struct ipu_platform_reg {
 	struct ipu_client_platformdata pdata;
 	const char *name;
+	int reg_offset;
 };
 
-/* These must be in the order of the corresponding device tree port nodes */
-static struct ipu_platform_reg client_reg[] = {
+static const struct ipu_platform_reg client_reg[] = {
 	{
-		.pdata = {
-			.csi = 0,
-			.dma[0] = IPUV3_CHANNEL_CSI0,
-			.dma[1] = -EINVAL,
-		},
-		.name = "imx-ipuv3-csi",
-	}, {
-		.pdata = {
-			.csi = 1,
-			.dma[0] = IPUV3_CHANNEL_CSI1,
-			.dma[1] = -EINVAL,
-		},
-		.name = "imx-ipuv3-csi",
-	}, {
 		.pdata = {
 			.di = 0,
 			.dc = 5,
@@ -1189,6 +1066,22 @@ static struct ipu_platform_reg client_reg[] = {
 			.dma[1] = -EINVAL,
 		},
 		.name = "imx-ipuv3-crtc",
+	}, {
+		.pdata = {
+			.csi = 0,
+			.dma[0] = IPUV3_CHANNEL_CSI0,
+			.dma[1] = -EINVAL,
+		},
+		.reg_offset = IPU_CM_CSI0_REG_OFS,
+		.name = "imx-ipuv3-camera",
+	}, {
+		.pdata = {
+			.csi = 1,
+			.dma[0] = IPUV3_CHANNEL_CSI1,
+			.dma[1] = -EINVAL,
+		},
+		.reg_offset = IPU_CM_CSI1_REG_OFS,
+		.name = "imx-ipuv3-camera",
 	},
 };
 
@@ -1207,43 +1100,24 @@ static int ipu_add_client_devices(struct ipu_soc *ipu, unsigned long ipu_base)
 	mutex_unlock(&ipu_client_id_mutex);
 
 	for (i = 0; i < ARRAY_SIZE(client_reg); i++) {
-		struct ipu_platform_reg *reg = &client_reg[i];
+		const struct ipu_platform_reg *reg = &client_reg[i];
 		struct platform_device *pdev;
-		struct device_node *of_node;
+		struct resource res;
 
-		/* Associate subdevice with the corresponding port node */
-		of_node = of_graph_get_port_by_id(dev->of_node, i);
-		if (!of_node) {
-			dev_info(dev,
-				 "no port@%d node in %s, not using %s%d\n",
-				 i, dev->of_node->full_name,
-				 (i / 2) ? "DI" : "CSI", i % 2);
-			continue;
+		if (reg->reg_offset) {
+			memset(&res, 0, sizeof(res));
+			res.flags = IORESOURCE_MEM;
+			res.start = ipu_base + ipu->devtype->cm_ofs + reg->reg_offset;
+			res.end = res.start + PAGE_SIZE - 1;
+			pdev = platform_device_register_resndata(dev, reg->name,
+				id++, &res, 1, &reg->pdata, sizeof(reg->pdata));
+		} else {
+			pdev = platform_device_register_data(dev, reg->name,
+				id++, &reg->pdata, sizeof(reg->pdata));
 		}
 
-		pdev = platform_device_alloc(reg->name, id++);
-		if (!pdev) {
-			ret = -ENOMEM;
+		if (IS_ERR(pdev))
 			goto err_register;
-		}
-
-		pdev->dev.parent = dev;
-
-		reg->pdata.of_node = of_node;
-		ret = platform_device_add_data(pdev, &reg->pdata,
-					       sizeof(reg->pdata));
-		if (!ret)
-			ret = platform_device_add(pdev);
-		if (ret) {
-			platform_device_put(pdev);
-			goto err_register;
-		}
-
-		/*
-		 * Set of_node only after calling platform_device_add. Otherwise
-		 * the platform:imx-ipuv3-crtc modalias won't be used.
-		 */
-		pdev->dev.of_node = of_node;
 	}
 
 	return 0;
@@ -1279,17 +1153,12 @@ static int ipu_irq_init(struct ipu_soc *ipu)
 	}
 
 	ret = irq_alloc_domain_generic_chips(ipu->domain, 32, 1, "IPU",
-					     handle_level_irq, 0, 0, 0);
+					     handle_level_irq, 0,
+					     IRQF_VALID, 0);
 	if (ret < 0) {
 		dev_err(ipu->dev, "failed to alloc generic irq chips\n");
 		irq_domain_remove(ipu->domain);
 		return ret;
-	}
-
-	/* Mask and clear all interrupts */
-	for (i = 0; i < IPU_NUM_IRQS; i += 32) {
-		ipu_cm_write(ipu, 0, IPU_INT_CTRL(i / 32));
-		ipu_cm_write(ipu, ~unused[i / 32], IPU_INT_STAT(i / 32));
 	}
 
 	for (i = 0; i < IPU_NUM_IRQS; i += 32) {
@@ -1304,9 +1173,10 @@ static int ipu_irq_init(struct ipu_soc *ipu)
 		ct->regs.mask = IPU_INT_CTRL(i / 32);
 	}
 
-	irq_set_chained_handler_and_data(ipu->irq_sync, ipu_irq_handler, ipu);
-	irq_set_chained_handler_and_data(ipu->irq_err, ipu_err_irq_handler,
-					 ipu);
+	irq_set_chained_handler(ipu->irq_sync, ipu_irq_handler);
+	irq_set_handler_data(ipu->irq_sync, ipu);
+	irq_set_chained_handler(ipu->irq_err, ipu_err_irq_handler);
+	irq_set_handler_data(ipu->irq_err, ipu);
 
 	return 0;
 }
@@ -1315,8 +1185,10 @@ static void ipu_irq_exit(struct ipu_soc *ipu)
 {
 	int i, irq;
 
-	irq_set_chained_handler_and_data(ipu->irq_err, NULL, NULL);
-	irq_set_chained_handler_and_data(ipu->irq_sync, NULL, NULL);
+	irq_set_chained_handler(ipu->irq_err, NULL);
+	irq_set_handler_data(ipu->irq_err, NULL);
+	irq_set_chained_handler(ipu->irq_sync, NULL);
+	irq_set_handler_data(ipu->irq_sync, NULL);
 
 	/* TODO: remove irq_domain_generic_chips */
 
@@ -1329,56 +1201,17 @@ static void ipu_irq_exit(struct ipu_soc *ipu)
 	irq_domain_remove(ipu->domain);
 }
 
-void ipu_dump(struct ipu_soc *ipu)
-{
-	int i;
-
-	dev_dbg(ipu->dev, "IPU_CONF = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_CONF));
-	dev_dbg(ipu->dev, "IDMAC_CONF = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_CONF));
-	dev_dbg(ipu->dev, "IDMAC_CHA_EN1 = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_CHA_EN(0)));
-	dev_dbg(ipu->dev, "IDMAC_CHA_EN2 = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_CHA_EN(32)));
-	dev_dbg(ipu->dev, "IDMAC_CHA_PRI1 = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_CHA_PRI(0)));
-	dev_dbg(ipu->dev, "IDMAC_CHA_PRI2 = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_CHA_PRI(32)));
-	dev_dbg(ipu->dev, "IDMAC_BAND_EN1 = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_BAND_EN(0)));
-	dev_dbg(ipu->dev, "IDMAC_BAND_EN2 = \t0x%08X\n",
-		ipu_idmac_read(ipu, IDMAC_BAND_EN(32)));
-	dev_dbg(ipu->dev, "IPU_CHA_DB_MODE_SEL0 = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_CHA_DB_MODE_SEL(0)));
-	dev_dbg(ipu->dev, "IPU_CHA_DB_MODE_SEL1 = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_CHA_DB_MODE_SEL(32)));
-	dev_dbg(ipu->dev, "IPU_FS_PROC_FLOW1 = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_FS_PROC_FLOW1));
-	dev_dbg(ipu->dev, "IPU_FS_PROC_FLOW2 = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_FS_PROC_FLOW2));
-	dev_dbg(ipu->dev, "IPU_FS_PROC_FLOW3 = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_FS_PROC_FLOW3));
-	dev_dbg(ipu->dev, "IPU_FS_DISP_FLOW1 = \t0x%08X\n",
-		ipu_cm_read(ipu, IPU_FS_DISP_FLOW1));
-	for (i = 0; i < 15; i++)
-		dev_dbg(ipu->dev, "IPU_INT_CTRL(%d) = \t%08X\n", i,
-			ipu_cm_read(ipu, IPU_INT_CTRL(i)));
-}
-EXPORT_SYMBOL_GPL(ipu_dump);
-
 static int ipu_probe(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.of_node;
+	const struct of_device_id *of_id =
+			of_match_device(imx_ipu_dt_ids, &pdev->dev);
 	struct ipu_soc *ipu;
 	struct resource *res;
 	unsigned long ipu_base;
 	int i, ret, irq_sync, irq_err;
 	const struct ipu_devtype *devtype;
 
-	devtype = of_device_get_match_data(&pdev->dev);
-	if (!devtype)
-		return -EINVAL;
+	devtype = of_id->data;
 
 	irq_sync = platform_get_irq(pdev, 0);
 	irq_err = platform_get_irq(pdev, 1);
@@ -1400,7 +1233,6 @@ static int ipu_probe(struct platform_device *pdev)
 		ipu->channel[i].ipu = ipu;
 	ipu->devtype = devtype;
 	ipu->ipu_type = devtype->type;
-	ipu->id = of_alias_get_id(np, "ipu");
 
 	spin_lock_init(&ipu->lock);
 	mutex_init(&ipu->channel_lock);
@@ -1411,12 +1243,6 @@ static int ipu_probe(struct platform_device *pdev)
 			ipu_base + devtype->cm_ofs + IPU_CM_IDMAC_REG_OFS);
 	dev_dbg(&pdev->dev, "cpmem:    0x%08lx\n",
 			ipu_base + devtype->cpmem_ofs);
-	dev_dbg(&pdev->dev, "csi0:    0x%08lx\n",
-			ipu_base + devtype->csi0_ofs);
-	dev_dbg(&pdev->dev, "csi1:    0x%08lx\n",
-			ipu_base + devtype->csi1_ofs);
-	dev_dbg(&pdev->dev, "ic:      0x%08lx\n",
-			ipu_base + devtype->ic_ofs);
 	dev_dbg(&pdev->dev, "disp0:    0x%08lx\n",
 			ipu_base + devtype->disp0_ofs);
 	dev_dbg(&pdev->dev, "disp1:    0x%08lx\n",
@@ -1439,8 +1265,10 @@ static int ipu_probe(struct platform_device *pdev)
 	ipu->idmac_reg = devm_ioremap(&pdev->dev,
 			ipu_base + devtype->cm_ofs + IPU_CM_IDMAC_REG_OFS,
 			PAGE_SIZE);
+	ipu->cpmem_base = devm_ioremap(&pdev->dev,
+			ipu_base + devtype->cpmem_ofs, PAGE_SIZE);
 
-	if (!ipu->cm_reg || !ipu->idmac_reg)
+	if (!ipu->cm_reg || !ipu->idmac_reg || !ipu->cpmem_base)
 		return -ENOMEM;
 
 	ipu->clk = devm_clk_get(&pdev->dev, "bus");
@@ -1462,6 +1290,10 @@ static int ipu_probe(struct platform_device *pdev)
 	ipu->irq_sync = irq_sync;
 	ipu->irq_err = irq_err;
 
+	ret = ipu_irq_init(ipu);
+	if (ret)
+		goto out_failed_irq;
+
 	ret = device_reset(&pdev->dev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to reset: %d\n", ret);
@@ -1470,10 +1302,6 @@ static int ipu_probe(struct platform_device *pdev)
 	ret = ipu_memory_reset(ipu);
 	if (ret)
 		goto out_failed_reset;
-
-	ret = ipu_irq_init(ipu);
-	if (ret)
-		goto out_failed_irq;
 
 	/* Set MCU_T to divide MCU access window into 2 */
 	ipu_cm_write(ipu, 0x00400000L | (IPU_MCU_T_DEFAULT << 18),
@@ -1497,9 +1325,9 @@ static int ipu_probe(struct platform_device *pdev)
 failed_add_clients:
 	ipu_submodules_exit(ipu);
 failed_submodules_init:
+out_failed_reset:
 	ipu_irq_exit(ipu);
 out_failed_irq:
-out_failed_reset:
 	clk_disable_unprepare(ipu->clk);
 	return ret;
 }

@@ -12,7 +12,7 @@
 #include <linux/interrupt.h>
 #include <linux/miscdevice.h>
 #include <linux/delay.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <irq_kern.h>
 #include <os.h>
 
@@ -79,6 +79,7 @@ static ssize_t rng_dev_read (struct file *filp, char __user *buf, size_t size,
 			set_task_state(current, TASK_INTERRUPTIBLE);
 
 			schedule();
+			set_task_state(current, TASK_RUNNING);
 			remove_wait_queue(&host_read_wait, &wait);
 
 			if (atomic_dec_and_test(&host_sleep_count)) {

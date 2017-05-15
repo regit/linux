@@ -20,7 +20,6 @@
 #include <linux/wait.h>
 #include <linux/gfp.h>
 #include <linux/of.h>
-#include <asm/machdep.h>
 #include <asm/opal.h>
 
 #define N_ASYNC_COMPLETIONS	64
@@ -71,7 +70,6 @@ int opal_async_get_token_interruptible(void)
 
 	return token;
 }
-EXPORT_SYMBOL_GPL(opal_async_get_token_interruptible);
 
 int __opal_async_release_token(int token)
 {
@@ -103,7 +101,6 @@ int opal_async_release_token(int token)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(opal_async_release_token);
 
 int opal_async_wait_response(uint64_t token, struct opal_msg *msg)
 {
@@ -117,17 +114,11 @@ int opal_async_wait_response(uint64_t token, struct opal_msg *msg)
 		return -EINVAL;
 	}
 
-	/* Wakeup the poller before we wait for events to speed things
-	 * up on platforms or simulators where the interrupts aren't
-	 * functional.
-	 */
-	opal_wake_poller();
 	wait_event(opal_async_wait, test_bit(token, opal_async_complete_map));
 	memcpy(msg, &opal_async_responses[token], sizeof(*msg));
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(opal_async_wait_response);
 
 static int opal_async_comp_event(struct notifier_block *nb,
 		unsigned long msg_type, void *msg)
@@ -156,7 +147,7 @@ static struct notifier_block opal_async_comp_nb = {
 		.priority	= 0,
 };
 
-int __init opal_async_comp_init(void)
+static int __init opal_async_comp_init(void)
 {
 	struct device_node *opal_node;
 	const __be32 *async;
@@ -210,3 +201,4 @@ out_opal_node:
 out:
 	return err;
 }
+subsys_initcall(opal_async_comp_init);

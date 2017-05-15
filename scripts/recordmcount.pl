@@ -134,9 +134,7 @@ my %text_sections = (
      ".sched.text" => 1,
      ".spinlock.text" => 1,
      ".irqentry.text" => 1,
-     ".softirqentry.text" => 1,
      ".kprobes.text" => 1,
-     ".cpuidle.text" => 1,
      ".text.unlikely" => 1,
 );
 
@@ -243,14 +241,16 @@ if ($arch eq "x86_64") {
     $objcopy .= " -O elf32-i386";
     $cc .= " -m32";
 
+} elsif ($arch eq "s390" && $bits == 32) {
+    $mcount_regex = "^\\s*([0-9a-fA-F]+):\\s*R_390_32\\s+_mcount\$";
+    $mcount_adjust = -4;
+    $alignment = 4;
+    $ld .= " -m elf_s390";
+    $cc .= " -m31";
+
 } elsif ($arch eq "s390" && $bits == 64) {
-    if ($cc =~ /-DCC_USING_HOTPATCH/) {
-	$mcount_regex = "^\\s*([0-9a-fA-F]+):\\s*c0 04 00 00 00 00\\s*brcl\\s*0,[0-9a-f]+ <([^\+]*)>\$";
-	$mcount_adjust = 0;
-    } else {
-	$mcount_regex = "^\\s*([0-9a-fA-F]+):\\s*R_390_(PC|PLT)32DBL\\s+_mcount\\+0x2\$";
-	$mcount_adjust = -14;
-    }
+    $mcount_regex = "^\\s*([0-9a-fA-F]+):\\s*R_390_(PC|PLT)32DBL\\s+_mcount\\+0x2\$";
+    $mcount_adjust = -8;
     $alignment = 8;
     $type = ".quad";
     $ld .= " -m elf64_s390";
@@ -262,11 +262,11 @@ if ($arch eq "x86_64") {
     # force flags for this arch
     $ld .= " -m shlelf_linux";
     $objcopy .= " -O elf32-sh-linux";
+    $cc .= " -m32";
 
 } elsif ($arch eq "powerpc") {
     $local_regex = "^[0-9a-fA-F]+\\s+t\\s+(\\.?\\S+)";
-    # See comment in the sparc64 section for why we use '\w'.
-    $function_regex = "^([0-9a-fA-F]+)\\s+<(\\.?\\w*?)>:";
+    $function_regex = "^([0-9a-fA-F]+)\\s+<(\\.?.*?)>:";
     $mcount_regex = "^\\s*([0-9a-fA-F]+):.*\\s\\.?_mcount\$";
 
     if ($bits == 64) {

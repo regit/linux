@@ -201,23 +201,21 @@ struct matrox_pll_ctl {
 };
 
 static const struct matrox_pll_features2 maven1000_pll = {
-	.vco_freq_min = 50000000,
-	.vco_freq_max = 300000000,
-	.feed_div_min = 5,
-	.feed_div_max = 128,
-	.in_div_min = 3,
-	.in_div_max = 32,
-	.post_shift_max = 3
+	 50000000,
+	300000000,
+	 5, 128,
+	 3,  32,
+	 3
 };
 
 static const struct matrox_pll_ctl maven_PAL = {
-	.ref_freq = 540000,
-	.den = 50
+	540000,
+	    50
 };
 
 static const struct matrox_pll_ctl maven_NTSC = {
-	.ref_freq = 450450,	/* 27027000/60 == 27000000/59.94005994 */
-	.den = 60
+	450450,	/* 27027000/60 == 27000000/59.94005994 */
+	    60
 };
 
 static int matroxfb_PLL_mavenclock(const struct matrox_pll_features2* pll,

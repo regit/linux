@@ -392,8 +392,8 @@ static const struct ov9740_reg ov9740_defaults[] = {
 	{ OV9740_ISP_CTRL19,		0x02 },
 };
 
-static u32 ov9740_codes[] = {
-	MEDIA_BUS_FMT_YUYV8_2X8,
+static enum v4l2_mbus_pixelcode ov9740_codes[] = {
+	V4L2_MBUS_FMT_YUYV8_2X8,
 };
 
 /* read a register */
@@ -564,13 +564,13 @@ static int ov9740_set_res(struct i2c_client *client, u32 width, u32 height)
 	u32 y_start;
 	u32 x_end;
 	u32 y_end;
-	bool scaling = false;
+	bool scaling = 0;
 	u32 scale_input_x;
 	u32 scale_input_y;
 	int ret;
 
 	if ((width != OV9740_MAX_WIDTH) || (height != OV9740_MAX_HEIGHT))
-		scaling = true;
+		scaling = 1;
 
 	/*
 	 * Try to use as much of the sensor area as possible when supporting
@@ -674,13 +674,13 @@ static int ov9740_s_fmt(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct ov9740_priv *priv = to_ov9740(sd);
 	enum v4l2_colorspace cspace;
-	u32 code = mf->code;
+	enum v4l2_mbus_pixelcode code = mf->code;
 	int ret;
 
 	ov9740_res_roundup(&mf->width, &mf->height);
 
 	switch (code) {
-	case MEDIA_BUS_FMT_YUYV8_2X8:
+	case V4L2_MBUS_FMT_YUYV8_2X8:
 		cspace = V4L2_COLORSPACE_SRGB;
 		break;
 	default:
@@ -704,58 +704,52 @@ static int ov9740_s_fmt(struct v4l2_subdev *sd,
 	return ret;
 }
 
-static int ov9740_set_fmt(struct v4l2_subdev *sd,
-		struct v4l2_subdev_pad_config *cfg,
-		struct v4l2_subdev_format *format)
+static int ov9740_try_fmt(struct v4l2_subdev *sd,
+			  struct v4l2_mbus_framefmt *mf)
 {
-	struct v4l2_mbus_framefmt *mf = &format->format;
-
-	if (format->pad)
-		return -EINVAL;
-
 	ov9740_res_roundup(&mf->width, &mf->height);
 
 	mf->field = V4L2_FIELD_NONE;
-	mf->code = MEDIA_BUS_FMT_YUYV8_2X8;
+	mf->code = V4L2_MBUS_FMT_YUYV8_2X8;
 	mf->colorspace = V4L2_COLORSPACE_SRGB;
 
-	if (format->which == V4L2_SUBDEV_FORMAT_ACTIVE)
-		return ov9740_s_fmt(sd, mf);
-	cfg->try_fmt = *mf;
 	return 0;
 }
 
-static int ov9740_enum_mbus_code(struct v4l2_subdev *sd,
-		struct v4l2_subdev_pad_config *cfg,
-		struct v4l2_subdev_mbus_code_enum *code)
+static int ov9740_enum_fmt(struct v4l2_subdev *sd, unsigned int index,
+			   enum v4l2_mbus_pixelcode *code)
 {
-	if (code->pad || code->index >= ARRAY_SIZE(ov9740_codes))
+	if (index >= ARRAY_SIZE(ov9740_codes))
 		return -EINVAL;
 
-	code->code = ov9740_codes[code->index];
+	*code = ov9740_codes[index];
 
 	return 0;
 }
 
-static int ov9740_get_selection(struct v4l2_subdev *sd,
-		struct v4l2_subdev_pad_config *cfg,
-		struct v4l2_subdev_selection *sel)
+static int ov9740_cropcap(struct v4l2_subdev *sd, struct v4l2_cropcap *a)
 {
-	if (sel->which != V4L2_SUBDEV_FORMAT_ACTIVE)
-		return -EINVAL;
+	a->bounds.left		= 0;
+	a->bounds.top		= 0;
+	a->bounds.width		= OV9740_MAX_WIDTH;
+	a->bounds.height	= OV9740_MAX_HEIGHT;
+	a->defrect		= a->bounds;
+	a->type			= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	a->pixelaspect.numerator	= 1;
+	a->pixelaspect.denominator	= 1;
 
-	switch (sel->target) {
-	case V4L2_SEL_TGT_CROP_BOUNDS:
-	case V4L2_SEL_TGT_CROP_DEFAULT:
-	case V4L2_SEL_TGT_CROP:
-		sel->r.left = 0;
-		sel->r.top = 0;
-		sel->r.width = OV9740_MAX_WIDTH;
-		sel->r.height = OV9740_MAX_HEIGHT;
-		return 0;
-	default:
-		return -EINVAL;
-	}
+	return 0;
+}
+
+static int ov9740_g_crop(struct v4l2_subdev *sd, struct v4l2_crop *a)
+{
+	a->c.left		= 0;
+	a->c.top		= 0;
+	a->c.width		= OV9740_MAX_WIDTH;
+	a->c.height		= OV9740_MAX_HEIGHT;
+	a->type			= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+	return 0;
 }
 
 /* Set status of additional camera capabilities */
@@ -881,7 +875,8 @@ static int ov9740_video_probe(struct i2c_client *client)
 		goto done;
 	}
 
-	dev_info(&client->dev, "ov9740 Model ID 0x%04x, Revision 0x%02x, Manufacturer 0x%02x, SMIA Version 0x%02x\n",
+	dev_info(&client->dev, "ov9740 Model ID 0x%04x, Revision 0x%02x, "
+		 "Manufacturer 0x%02x, SMIA Version 0x%02x\n",
 		 priv->model, priv->revision, priv->manid, priv->smiaver);
 
 	ret = v4l2_ctrl_handler_setup(&priv->hdl);
@@ -909,6 +904,11 @@ static int ov9740_g_mbus_config(struct v4l2_subdev *sd,
 
 static struct v4l2_subdev_video_ops ov9740_video_ops = {
 	.s_stream	= ov9740_s_stream,
+	.s_mbus_fmt	= ov9740_s_fmt,
+	.try_mbus_fmt	= ov9740_try_fmt,
+	.enum_mbus_fmt	= ov9740_enum_fmt,
+	.cropcap	= ov9740_cropcap,
+	.g_crop		= ov9740_g_crop,
 	.g_mbus_config	= ov9740_g_mbus_config,
 };
 
@@ -920,16 +920,9 @@ static struct v4l2_subdev_core_ops ov9740_core_ops = {
 #endif
 };
 
-static const struct v4l2_subdev_pad_ops ov9740_pad_ops = {
-	.enum_mbus_code = ov9740_enum_mbus_code,
-	.get_selection	= ov9740_get_selection,
-	.set_fmt	= ov9740_set_fmt,
-};
-
 static struct v4l2_subdev_ops ov9740_subdev_ops = {
-	.core	= &ov9740_core_ops,
-	.video	= &ov9740_video_ops,
-	.pad	= &ov9740_pad_ops,
+	.core			= &ov9740_core_ops,
+	.video			= &ov9740_video_ops,
 };
 
 static const struct v4l2_ctrl_ops ov9740_ctrl_ops = {

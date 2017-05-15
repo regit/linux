@@ -228,11 +228,8 @@ static int asd_init_scbs(struct asd_ha_struct *asd_ha)
 	bitmap_bytes = (asd_ha->seq.tc_index_bitmap_bits+7)/8;
 	bitmap_bytes = BITS_TO_LONGS(bitmap_bytes*8)*sizeof(unsigned long);
 	asd_ha->seq.tc_index_bitmap = kzalloc(bitmap_bytes, GFP_KERNEL);
-	if (!asd_ha->seq.tc_index_bitmap) {
-		kfree(asd_ha->seq.tc_index_array);
-		asd_ha->seq.tc_index_array = NULL;
+	if (!asd_ha->seq.tc_index_bitmap)
 		return -ENOMEM;
-	}
 
 	spin_lock_init(&seq->tc_index_lock);
 
@@ -480,7 +477,7 @@ static int asd_init_chip(struct asd_ha_struct *asd_ha)
 
 	err = asd_start_seqs(asd_ha);
 	if (err) {
-		asd_printk("couldn't start seqs for %s\n",
+		asd_printk("coudln't start seqs for %s\n",
 			   pci_name(asd_ha->pcidev));
 		goto out;
 	}
@@ -635,7 +632,7 @@ int asd_init_hw(struct asd_ha_struct *asd_ha)
 			   pci_name(asd_ha->pcidev));
 		return err;
 	}
-	err = pci_write_config_dword(asd_ha->pcidev, PCIC_HSTPCIX_CNTRL,
+	pci_write_config_dword(asd_ha->pcidev, PCIC_HSTPCIX_CNTRL,
 					v | SC_TMR_DIS);
 	if (err) {
 		asd_printk("couldn't disable split completion timer of %s\n",
@@ -1203,7 +1200,8 @@ static void asd_start_scb_timers(struct list_head *list)
  * Case A: we can send the whole batch at once.  Increment "pending"
  * in the beginning of this function, when it is checked, in order to
  * eliminate races when this function is called by multiple processes.
- * Case B: should never happen.
+ * Case B: should never happen if the managing layer considers
+ * lldd_queue_size.
  */
 int asd_post_ascb_list(struct asd_ha_struct *asd_ha, struct asd_ascb *ascb,
 		       int num)

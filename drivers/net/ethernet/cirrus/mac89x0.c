@@ -172,6 +172,7 @@ static const struct net_device_ops mac89x0_netdev_ops = {
 	.ndo_set_rx_mode	= set_multicast_list,
 	.ndo_set_mac_address	= set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_change_mtu		= eth_change_mtu,
 };
 
 /* Probe for the CS8900 card in slot E.  We won't bother looking
@@ -215,10 +216,14 @@ struct net_device * __init mac89x0_probe(int unit)
 	ioaddr = (unsigned long)
 		nubus_slot_addr(slot) | (((slot&0xf) << 20) + DEFAULTIOBASE);
 	{
+		unsigned long flags;
 		int card_present;
 
-		card_present = (hwreg_present((void *)ioaddr + 4) &&
-				hwreg_present((void *)ioaddr + DATA_PORT));
+		local_irq_save(flags);
+		card_present = (hwreg_present((void*) ioaddr+4) &&
+				hwreg_present((void*) ioaddr + DATA_PORT));
+		local_irq_restore(flags);
+
 		if (!card_present)
 			goto out;
 	}

@@ -115,7 +115,7 @@ struct scb_platform_data;
 #endif
 
 #define AHD_BUILD_COL_IDX(target, lun)				\
-	((((u8)lun) << 4) | target)
+	(((lun) << 4) | target)
 
 #define AHD_GET_SCB_COL_IDX(ahd, scb)				\
 	((SCB_GET_LUN(scb) << 4) | SCB_GET_TARGET(ahd, scb))
@@ -624,7 +624,7 @@ struct scb {
 };
 
 TAILQ_HEAD(scb_tailq, scb);
-BSD_LIST_HEAD(scb_list, scb);
+LIST_HEAD(scb_list, scb);
 
 struct scb_data {
 	/*
@@ -1069,7 +1069,7 @@ struct ahd_softc {
 	/*
 	 * SCBs that have been sent to the controller
 	 */
-	BSD_LIST_HEAD(, scb)	  pending_scbs;
+	LIST_HEAD(, scb)	  pending_scbs;
 
 	/*
 	 * Current register window mode information.

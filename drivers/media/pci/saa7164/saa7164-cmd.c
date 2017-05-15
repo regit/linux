@@ -1,7 +1,7 @@
 /*
  *  Driver for the NXP SAA7164 PCIe bridge
  *
- *  Copyright (c) 2010-2015 Steven Toth <stoth@kernellabs.com>
+ *  Copyright (c) 2010 Steven Toth <stoth@kernellabs.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -301,8 +301,8 @@ static int saa7164_cmd_wait(struct saa7164_dev *dev, u8 seqno)
 			else
 				saa7164_cmd_timeout_seqno(dev, seqno);
 
-			dprintk(DBGLVL_CMD, "%s(seqno=%d) Waiting res = %d (signalled=%d)\n",
-				__func__, seqno, r,
+			dprintk(DBGLVL_CMD, "%s(seqno=%d) Waiting res = %d "
+				"(signalled=%d)\n", __func__, seqno, r,
 				dev->cmds[seqno].signalled);
 		} else
 			ret = SAA_OK;
@@ -353,8 +353,8 @@ int saa7164_cmd_send(struct saa7164_dev *dev, u8 id, enum tmComResCmd command,
 	int ret;
 	int safety = 0;
 
-	dprintk(DBGLVL_CMD, "%s(unitid = %s (%d) , command = 0x%x, sel = 0x%x)\n",
-		__func__, saa7164_unitid_name(dev, id), id,
+	dprintk(DBGLVL_CMD, "%s(unitid = %s (%d) , command = 0x%x, "
+		"sel = 0x%x)\n", __func__, saa7164_unitid_name(dev, id), id,
 		command, controlselector);
 
 	if ((size == 0) || (buf == NULL)) {
@@ -452,7 +452,9 @@ int saa7164_cmd_send(struct saa7164_dev *dev, u8 id, enum tmComResCmd command,
 		if (presponse_t->seqno != pcommand_t->seqno) {
 
 			dprintk(DBGLVL_CMD,
-				"wrong event: seqno = %d, expected seqno = %d, will dequeue regardless\n",
+				"wrong event: seqno = %d, "
+				"expected seqno = %d, "
+				"will dequeue regardless\n",
 				presponse_t->seqno, pcommand_t->seqno);
 
 			ret = saa7164_cmd_dequeue(dev);

@@ -8,8 +8,6 @@
  */
 
 struct kmem_cache {
-	struct array_cache __percpu *cpu_cache;
-
 /* 1) Cache tunables. Protected by slab_mutex */
 	unsigned int batchcount;
 	unsigned int limit;
@@ -60,9 +58,6 @@ struct kmem_cache {
 	atomic_t allocmiss;
 	atomic_t freehit;
 	atomic_t freemiss;
-#ifdef CONFIG_DEBUG_SLAB_LEAK
-	atomic_t store_user_clean;
-#endif
 
 	/*
 	 * If debugging is enabled, then the allocator can add additional
@@ -72,31 +67,27 @@ struct kmem_cache {
 	 */
 	int obj_offset;
 #endif /* CONFIG_DEBUG_SLAB */
-
-#ifdef CONFIG_MEMCG
-	struct memcg_cache_params memcg_params;
-#endif
-#ifdef CONFIG_KASAN
-	struct kasan_cache kasan_info;
+#ifdef CONFIG_MEMCG_KMEM
+	struct memcg_cache_params *memcg_params;
 #endif
 
-#ifdef CONFIG_SLAB_FREELIST_RANDOM
-	unsigned int *random_seq;
-#endif
-
-	struct kmem_cache_node *node[MAX_NUMNODES];
+/* 6) per-cpu/per-node data, touched during every alloc/free */
+	/*
+	 * We put array[] at the end of kmem_cache, because we want to size
+	 * this array to nr_cpu_ids slots instead of NR_CPUS
+	 * (see kmem_cache_init())
+	 * We still use [NR_CPUS] and not [1] or [0] because cache_cache
+	 * is statically defined, so we reserve the max number of cpus.
+	 *
+	 * We also need to guarantee that the list is able to accomodate a
+	 * pointer for each node since "nodelists" uses the remainder of
+	 * available pointers.
+	 */
+	struct kmem_cache_node **node;
+	struct array_cache *array[NR_CPUS + MAX_NUMNODES];
+	/*
+	 * Do not add fields after array[]
+	 */
 };
-
-static inline void *nearest_obj(struct kmem_cache *cache, struct page *page,
-				void *x)
-{
-	void *object = x - (x - page->s_mem) % cache->size;
-	void *last_object = page->s_mem + (cache->num - 1) * cache->size;
-
-	if (unlikely(object > last_object))
-		return last_object;
-	else
-		return object;
-}
 
 #endif	/* _LINUX_SLAB_DEF_H */

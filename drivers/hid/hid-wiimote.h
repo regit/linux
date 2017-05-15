@@ -147,8 +147,7 @@ struct wiimote_data {
 	struct led_classdev *leds[4];
 	struct input_dev *accel;
 	struct input_dev *ir;
-	struct power_supply *battery;
-	struct power_supply_desc battery_desc;
+	struct power_supply battery;
 	struct input_dev *mp;
 	struct timer_list timer;
 	struct wiimote_debug *debug;
@@ -256,7 +255,8 @@ enum wiiproto_reqs {
 	WIIPROTO_REQ_MAX
 };
 
-#define dev_to_wii(pdev) hid_get_drvdata(to_hid_device(pdev))
+#define dev_to_wii(pdev) hid_get_drvdata(container_of(pdev, struct hid_device, \
+									dev))
 
 void __wiimote_schedule(struct wiimote_data *wdata);
 

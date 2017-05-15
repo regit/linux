@@ -289,7 +289,8 @@ static void nxt200x_microcontroller_stop (struct nxt200x_state* state)
 		counter++;
 	}
 
-	pr_warn("Timeout waiting for nxt200x to stop. This is ok after firmware upload.\n");
+	pr_warn("Timeout waiting for nxt200x to stop. This is ok after "
+		"firmware upload.\n");
 	return;
 }
 
@@ -780,7 +781,7 @@ static int nxt200x_setup_frontend_parameters(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int nxt200x_read_status(struct dvb_frontend *fe, enum fe_status *status)
+static int nxt200x_read_status(struct dvb_frontend* fe, fe_status_t* status)
 {
 	struct nxt200x_state* state = fe->demodulator_priv;
 	u8 lock;
@@ -892,8 +893,8 @@ static int nxt2002_init(struct dvb_frontend* fe)
 			       state->i2c->dev.parent);
 	pr_debug("%s: Waiting for firmware upload(2)...\n", __func__);
 	if (ret) {
-		pr_err("%s: No firmware uploaded (timeout or file not found?)\n",
-		       __func__);
+		pr_err("%s: No firmware uploaded (timeout or file not found?)"
+		       "\n", __func__);
 		return ret;
 	}
 
@@ -959,8 +960,8 @@ static int nxt2004_init(struct dvb_frontend* fe)
 			       state->i2c->dev.parent);
 	pr_debug("%s: Waiting for firmware upload(2)...\n", __func__);
 	if (ret) {
-		pr_err("%s: No firmware uploaded (timeout or file not found?)\n",
-		       __func__);
+		pr_err("%s: No firmware uploaded (timeout or file not found?)"
+		       "\n", __func__);
 		return ret;
 	}
 
@@ -1149,7 +1150,7 @@ static void nxt200x_release(struct dvb_frontend* fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops nxt200x_ops;
+static struct dvb_frontend_ops nxt200x_ops;
 
 struct dvb_frontend* nxt200x_attach(const struct nxt200x_config* config,
 				   struct i2c_adapter* i2c)
@@ -1212,7 +1213,7 @@ error:
 	return NULL;
 }
 
-static const struct dvb_frontend_ops nxt200x_ops = {
+static struct dvb_frontend_ops nxt200x_ops = {
 	.delsys = { SYS_ATSC, SYS_DVBC_ANNEX_B },
 	.info = {
 		.name = "Nextwave NXT200X VSB/QAM frontend",

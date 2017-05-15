@@ -30,6 +30,7 @@
 #include <linux/idr.h>
 #include <linux/spinlock.h>
 #include <linux/percpu.h>
+#include <linux/hardirq.h>
 
 #define MAX_IDR_SHIFT		(sizeof(int) * 8 - 1)
 #define MAX_IDR_BIT		(1U << MAX_IDR_SHIFT)
@@ -399,7 +400,7 @@ void idr_preload(gfp_t gfp_mask)
 	 * allocation guarantee.  Disallow usage from those contexts.
 	 */
 	WARN_ON_ONCE(in_interrupt());
-	might_sleep_if(gfpflags_allow_blocking(gfp_mask));
+	might_sleep_if(gfp_mask & __GFP_WAIT);
 
 	preempt_disable();
 
@@ -453,7 +454,7 @@ int idr_alloc(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask)
 	struct idr_layer *pa[MAX_IDR_LEVEL + 1];
 	int id;
 
-	might_sleep_if(gfpflags_allow_blocking(gfp_mask));
+	might_sleep_if(gfp_mask & __GFP_WAIT);
 
 	/* sanity checks */
 	if (WARN_ON_ONCE(start < 0))
@@ -589,27 +590,26 @@ static void __idr_remove_all(struct idr *idp)
 	struct idr_layer **paa = &pa[0];
 
 	n = idp->layers * IDR_BITS;
-	*paa = idp->top;
+	p = idp->top;
 	RCU_INIT_POINTER(idp->top, NULL);
 	max = idr_max(idp->layers);
 
 	id = 0;
 	while (id >= 0 && id <= max) {
-		p = *paa;
 		while (n > IDR_BITS && p) {
 			n -= IDR_BITS;
+			*paa++ = p;
 			p = p->ary[(id >> n) & IDR_MASK];
-			*++paa = p;
 		}
 
 		bt_mask = id;
 		id += 1 << n;
 		/* Get the highest bit that the above add changed from 0->1. */
 		while (n < fls(id ^ bt_mask)) {
-			if (*paa)
-				free_layer(idp, *paa);
+			if (p)
+				free_layer(idp, p);
 			n += IDR_BITS;
-			--paa;
+			p = *--paa;
 		}
 	}
 	idp->layers = 0;
@@ -625,7 +625,7 @@ static void __idr_remove_all(struct idr *idp)
  * idr_destroy().
  *
  * A typical clean-up sequence for objects stored in an idr tree will use
- * idr_for_each() to free all objects, if necessary, then idr_destroy() to
+ * idr_for_each() to free all objects, if necessay, then idr_destroy() to
  * free up the id mappings and cached idr_layers.
  */
 void idr_destroy(struct idr *idp)
@@ -692,16 +692,15 @@ int idr_for_each(struct idr *idp,
 	struct idr_layer **paa = &pa[0];
 
 	n = idp->layers * IDR_BITS;
-	*paa = rcu_dereference_raw(idp->top);
+	p = rcu_dereference_raw(idp->top);
 	max = idr_max(idp->layers);
 
 	id = 0;
 	while (id >= 0 && id <= max) {
-		p = *paa;
 		while (n > 0 && p) {
 			n -= IDR_BITS;
+			*paa++ = p;
 			p = rcu_dereference_raw(p->ary[(id >> n) & IDR_MASK]);
-			*++paa = p;
 		}
 
 		if (p) {
@@ -713,7 +712,7 @@ int idr_for_each(struct idr *idp,
 		id += 1 << n;
 		while (n < fls(id)) {
 			n += IDR_BITS;
-			--paa;
+			p = *--paa;
 		}
 	}
 
@@ -741,18 +740,17 @@ void *idr_get_next(struct idr *idp, int *nextidp)
 	int n, max;
 
 	/* find first ent */
-	p = *paa = rcu_dereference_raw(idp->top);
+	p = rcu_dereference_raw(idp->top);
 	if (!p)
 		return NULL;
 	n = (p->layer + 1) * IDR_BITS;
 	max = idr_max(p->layer + 1);
 
 	while (id >= 0 && id <= max) {
-		p = *paa;
 		while (n > 0 && p) {
 			n -= IDR_BITS;
+			*paa++ = p;
 			p = rcu_dereference_raw(p->ary[(id >> n) & IDR_MASK]);
-			*++paa = p;
 		}
 
 		if (p) {
@@ -770,7 +768,7 @@ void *idr_get_next(struct idr *idp, int *nextidp)
 		id = round_up(id + 1, 1 << n);
 		while (n < fls(id)) {
 			n += IDR_BITS;
-			--paa;
+			p = *--paa;
 		}
 	}
 	return NULL;
@@ -927,9 +925,6 @@ EXPORT_SYMBOL(ida_pre_get);
  * and go back to the ida_pre_get() call.  If the ida is full, it will
  * return %-ENOSPC.
  *
- * Note that callers must ensure that concurrent access to @ida is not possible.
- * See ida_simple_get() for a varaint which takes care of locking.
- *
  * @p_id returns a value in the range @starting_id ... %0x7fffffff.
  */
 int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
@@ -1076,9 +1071,6 @@ EXPORT_SYMBOL(ida_destroy);
  * Allocates an id in the range start <= id < end, or returns -ENOSPC.
  * On memory allocation failure, returns -ENOMEM.
  *
- * Compared to ida_get_new_above() this function does its own locking, and
- * should be used unless there are special requirements.
- *
  * Use ida_simple_remove() to get rid of an id.
  */
 int ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
@@ -1125,11 +1117,6 @@ EXPORT_SYMBOL(ida_simple_get);
  * ida_simple_remove - remove an allocated id.
  * @ida: the (initialized) ida.
  * @id: the id returned by ida_simple_get.
- *
- * Use to release an id allocated with ida_simple_get().
- *
- * Compared to ida_remove() this function does its own locking, and should be
- * used unless there are special requirements.
  */
 void ida_simple_remove(struct ida *ida, unsigned int id)
 {

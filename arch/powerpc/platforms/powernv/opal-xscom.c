@@ -126,8 +126,8 @@ static const struct scom_controller opal_scom_controller = {
 
 static int opal_xscom_init(void)
 {
-	if (firmware_has_feature(FW_FEATURE_OPAL))
+	if (firmware_has_feature(FW_FEATURE_OPALv3))
 		scom_init(&opal_scom_controller);
 	return 0;
 }
-machine_arch_initcall(powernv, opal_xscom_init);
+arch_initcall(opal_xscom_init);

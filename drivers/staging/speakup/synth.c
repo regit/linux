@@ -8,7 +8,7 @@
 #include <linux/delay.h>	/* for loops_per_sec */
 #include <linux/kmod.h>
 #include <linux/jiffies.h>
-#include <linux/uaccess.h>	/* for copy_from_user */
+#include <linux/uaccess.h> /* for copy_from_user */
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/kthread.h>
@@ -18,7 +18,7 @@
 #include "serialio.h"
 
 #define MAXSYNTHS       16      /* Max number of synths in array. */
-static struct spk_synth *synths[MAXSYNTHS + 1];
+static struct spk_synth *synths[MAXSYNTHS];
 struct spk_synth *synth;
 char spk_pitch_buff[32] = "";
 static int module_status;
@@ -30,9 +30,9 @@ struct speakup_info_t speakup_info = {
 	 * must be taken at each kernel->speakup transition and released at
 	 * each corresponding speakup->kernel transition.
 	 *
-	 * The progression thread only interferes with the speakup machinery
-	 * through the synth buffer, so only needs to take the lock
-	 * while tinkering with the buffer.
+	 * The progression thread only interferes with the speakup machinery through
+	 * the synth buffer, so only needs to take the lock while tinkering with
+	 * the buffer.
 	 *
 	 * We use spin_lock/trylock_irqsave and spin_unlock_irqrestore with this
 	 * spinlock because speakup needs to disable the keyboard IRQ.
@@ -67,14 +67,13 @@ int spk_serial_synth_probe(struct spk_synth *synth)
 		return -ENODEV;
 	}
 	pr_info("%s: ttyS%i, Driver Version %s\n",
-		synth->long_name, synth->ser, synth->version);
+			synth->long_name, synth->ser, synth->version);
 	synth->alive = 1;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(spk_serial_synth_probe);
 
-/*
- * Main loop of the progression thread: keep eating from the buffer
+/* Main loop of the progression thread: keep eating from the buffer
  * and push to the serial port, waiting as needed
  *
  * For devices that have a "full" notification mechanism, the driver can
@@ -123,7 +122,7 @@ void spk_do_catch_up(struct spk_synth *synth)
 			schedule_timeout(msecs_to_jiffies(full_time_val));
 			continue;
 		}
-		if (time_after_eq(jiffies, jiff_max) && (ch == SPACE)) {
+		if ((jiffies >= jiff_max) && (ch == SPACE)) {
 			spin_lock_irqsave(&speakup_info.spinlock, flags);
 			jiffy_delta_val = jiffy_delta->u.n.value;
 			delay_time_val = delay_time->u.n.value;
@@ -149,7 +148,6 @@ EXPORT_SYMBOL_GPL(spk_do_catch_up);
 const char *spk_synth_immediate(struct spk_synth *synth, const char *buff)
 {
 	u_char ch;
-
 	while ((ch = *buff)) {
 		if (ch == '\n')
 			ch = synth->procspeech;
@@ -180,7 +178,7 @@ int spk_synth_is_alive_restart(struct spk_synth *synth)
 {
 	if (synth->alive)
 		return 1;
-	if (spk_wait_for_xmitr() > 0) {
+	if (!synth->alive && spk_wait_for_xmitr() > 0) {
 		/* restart */
 		synth->alive = 1;
 		synth_printf("%s", synth->init);
@@ -261,7 +259,6 @@ static int sentence_count;
 void spk_reset_index_count(int sc)
 {
 	static int first = 1;
-
 	if (first)
 		first = 0;
 	else
@@ -280,7 +277,6 @@ int synth_supports_indexing(void)
 void synth_insert_next_index(int sent_num)
 {
 	int out;
-
 	if (synth->alive) {
 		if (sent_num == 0) {
 			synth->indexing.currindex++;
@@ -299,16 +295,16 @@ void synth_insert_next_index(int sent_num)
 void spk_get_index_count(int *linecount, int *sentcount)
 {
 	int ind = synth->get_index();
-
 	if (ind) {
 		sentence_count = ind % 10;
 
 		if ((ind / 10) <= synth->indexing.currindex)
-			index_count = synth->indexing.currindex - (ind / 10);
+			index_count = synth->indexing.currindex-(ind/10);
 		else
 			index_count = synth->indexing.currindex
-				- synth->indexing.lowindex
-				+ synth->indexing.highindex - (ind / 10) + 1;
+				-synth->indexing.lowindex
+				+ synth->indexing.highindex-(ind/10)+1;
+
 	}
 	*sentcount = sentence_count;
 	*linecount = index_count;
@@ -319,7 +315,6 @@ static struct resource synth_res;
 int synth_request_region(unsigned long start, unsigned long n)
 {
 	struct resource *parent = &ioport_resource;
-
 	memset(&synth_res, 0, sizeof(synth_res));
 	synth_res.name = synth->name;
 	synth_res.start = start;
@@ -406,8 +401,8 @@ static int do_synth_init(struct spk_synth *in_synth)
 		speakup_register_var(var);
 	if (!spk_quiet_boot)
 		synth_printf("%s found\n", synth->long_name);
-	if (synth->attributes.name && sysfs_create_group(speakup_kobj,
-							 &synth->attributes) < 0)
+	if (synth->attributes.name
+	&& sysfs_create_group(speakup_kobj, &(synth->attributes)) < 0)
 		return -ENOMEM;
 	synth_flags = synth->flags;
 	wake_up_interruptible_all(&speakup_event);
@@ -429,7 +424,7 @@ void synth_release(void)
 	del_timer(&thread_timer);
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 	if (synth->attributes.name)
-		sysfs_remove_group(speakup_kobj, &synth->attributes);
+		sysfs_remove_group(speakup_kobj, &(synth->attributes));
 	for (var = synth->vars; var->var_id != MAXVARS; var++)
 		speakup_unregister_var(var->var_id);
 	spk_stop_serial_interrupt();
@@ -442,7 +437,6 @@ int synth_add(struct spk_synth *in_synth)
 {
 	int i;
 	int status = 0;
-
 	mutex_lock(&spk_mutex);
 	for (i = 0; i < MAXSYNTHS && synths[i] != NULL; i++)
 		/* synth_remove() is responsible for rotating the array down */
@@ -467,7 +461,6 @@ EXPORT_SYMBOL_GPL(synth_add);
 void synth_remove(struct spk_synth *in_synth)
 {
 	int i;
-
 	mutex_lock(&spk_mutex);
 	if (synth == in_synth)
 		synth_release();
@@ -476,10 +469,10 @@ void synth_remove(struct spk_synth *in_synth)
 			break;
 	}
 	for ( ; synths[i] != NULL; i++) /* compress table */
-		synths[i] = synths[i + 1];
+		synths[i] = synths[i+1];
 	module_status = 0;
 	mutex_unlock(&spk_mutex);
 }
 EXPORT_SYMBOL_GPL(synth_remove);
 
-short spk_punc_masks[] = { 0, SOME, MOST, PUNC, PUNC | B_SYM };
+short spk_punc_masks[] = { 0, SOME, MOST, PUNC, PUNC|B_SYM };

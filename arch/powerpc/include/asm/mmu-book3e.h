@@ -40,11 +40,7 @@
 
 /* MAS registers bit definitions */
 
-#define MAS0_TLBSEL_MASK	0x30000000
-#define MAS0_TLBSEL_SHIFT	28
-#define MAS0_TLBSEL(x)		(((x) << MAS0_TLBSEL_SHIFT) & MAS0_TLBSEL_MASK)
-#define MAS0_GET_TLBSEL(mas0)	(((mas0) & MAS0_TLBSEL_MASK) >> \
-			MAS0_TLBSEL_SHIFT)
+#define MAS0_TLBSEL(x)		(((x) << 28) & 0x30000000)
 #define MAS0_ESEL_MASK		0x0FFF0000
 #define MAS0_ESEL_SHIFT		16
 #define MAS0_ESEL(x)		(((x) << MAS0_ESEL_SHIFT) & MAS0_ESEL_MASK)
@@ -62,7 +58,6 @@
 #define MAS1_TSIZE_MASK		0x00000f80
 #define MAS1_TSIZE_SHIFT	7
 #define MAS1_TSIZE(x)		(((x) << MAS1_TSIZE_SHIFT) & MAS1_TSIZE_MASK)
-#define MAS1_GET_TSIZE(mas1)	(((mas1) & MAS1_TSIZE_MASK) >> MAS1_TSIZE_SHIFT)
 
 #define MAS2_EPN		(~0xFFFUL)
 #define MAS2_X0			0x00000040
@@ -91,7 +86,6 @@
 #define MAS3_SPSIZE		0x0000003e
 #define MAS3_SPSIZE_SHIFT	1
 
-#define MAS4_TLBSEL_MASK	MAS0_TLBSEL_MASK
 #define MAS4_TLBSELD(x) 	MAS0_TLBSEL(x)
 #define MAS4_INDD		0x00008000	/* Default IND */
 #define MAS4_TSIZED(x)		MAS1_TSIZE(x)
@@ -313,9 +307,6 @@ extern int book3e_htw_mode;
  * return 1, indicating that the tlb requires preloading.
  */
 #define HUGETLB_NEED_PRELOAD
-
-#define mmu_cleanup_all NULL
-
 #endif
 
 #endif /* !__ASSEMBLY__ */

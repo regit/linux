@@ -38,12 +38,12 @@
 #include "../dmaengine.h"
 #include "shdma.h"
 
-/* DMA registers */
-#define SAR	0x00	/* Source Address Register */
-#define DAR	0x04	/* Destination Address Register */
-#define TCR	0x08	/* Transfer Count Register */
-#define CHCR	0x0C	/* Channel Control Register */
-#define DMAOR	0x40	/* DMA Operation Register */
+/* DMA register */
+#define SAR	0x00
+#define DAR	0x04
+#define TCR	0x08
+#define CHCR	0x0C
+#define DMAOR	0x40
 
 #define TEND	0x18 /* USB-DMAC */
 
@@ -239,8 +239,9 @@ static void dmae_init(struct sh_dmae_chan *sh_chan)
 {
 	/*
 	 * Default configuration for dual address memory-memory transfer.
+	 * 0x400 represents auto-request.
 	 */
-	u32 chcr = DM_INC | SM_INC | RS_AUTO | log2size_to_chcr(sh_chan,
+	u32 chcr = DM_INC | SM_INC | 0x400 | log2size_to_chcr(sh_chan,
 						   LOG2_DEFAULT_XFER_SIZE);
 	sh_chan->xmit_shift = calc_xmit_shift(sh_chan, chcr);
 	chcr_write(sh_chan, chcr);
@@ -443,7 +444,7 @@ static bool sh_dmae_reset(struct sh_dmae_device *shdev)
 	return ret;
 }
 
-#if defined(CONFIG_CPU_SH4) || defined(CONFIG_ARCH_SHMOBILE)
+#if defined(CONFIG_CPU_SH4) || defined(CONFIG_ARM)
 static irqreturn_t sh_dmae_err(int irq, void *data)
 {
 	struct sh_dmae_device *shdev = data;
@@ -532,8 +533,11 @@ static int sh_dmae_chan_probe(struct sh_dmae_device *shdev, int id,
 
 	sh_chan = devm_kzalloc(sdev->dma_dev.dev, sizeof(struct sh_dmae_chan),
 			       GFP_KERNEL);
-	if (!sh_chan)
+	if (!sh_chan) {
+		dev_err(sdev->dma_dev.dev,
+			"No free memory for allocating dma channels!\n");
 		return -ENOMEM;
+	}
 
 	schan = &sh_chan->shdma_chan;
 	schan->max_xfer_len = SH_DMA_TCR_MAX + 1;
@@ -569,6 +573,7 @@ err_no_irq:
 
 static void sh_dmae_chan_remove(struct sh_dmae_device *shdev)
 {
+	struct dma_device *dma_dev = &shdev->shdma_dev.dma_dev;
 	struct shdma_chan *schan;
 	int i;
 
@@ -577,14 +582,17 @@ static void sh_dmae_chan_remove(struct sh_dmae_device *shdev)
 
 		shdma_chan_remove(schan);
 	}
+	dma_dev->chancnt = 0;
 }
 
-#ifdef CONFIG_PM
+static void sh_dmae_shutdown(struct platform_device *pdev)
+{
+	struct sh_dmae_device *shdev = platform_get_drvdata(pdev);
+	sh_dmae_ctl_stop(shdev);
+}
+
 static int sh_dmae_runtime_suspend(struct device *dev)
 {
-	struct sh_dmae_device *shdev = dev_get_drvdata(dev);
-
-	sh_dmae_ctl_stop(shdev);
 	return 0;
 }
 
@@ -594,14 +602,10 @@ static int sh_dmae_runtime_resume(struct device *dev)
 
 	return sh_dmae_rst(shdev);
 }
-#endif
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 static int sh_dmae_suspend(struct device *dev)
 {
-	struct sh_dmae_device *shdev = dev_get_drvdata(dev);
-
-	sh_dmae_ctl_stop(shdev);
 	return 0;
 }
 
@@ -631,12 +635,16 @@ static int sh_dmae_resume(struct device *dev)
 
 	return 0;
 }
+#else
+#define sh_dmae_suspend NULL
+#define sh_dmae_resume NULL
 #endif
 
 static const struct dev_pm_ops sh_dmae_pm = {
-	SET_SYSTEM_SLEEP_PM_OPS(sh_dmae_suspend, sh_dmae_resume)
-	SET_RUNTIME_PM_OPS(sh_dmae_runtime_suspend, sh_dmae_runtime_resume,
-			   NULL)
+	.suspend		= sh_dmae_suspend,
+	.resume			= sh_dmae_resume,
+	.runtime_suspend	= sh_dmae_runtime_suspend,
+	.runtime_resume		= sh_dmae_runtime_resume,
 };
 
 static dma_addr_t sh_dmae_slave_addr(struct shdma_chan *schan)
@@ -679,14 +687,10 @@ MODULE_DEVICE_TABLE(of, sh_dmae_of_match);
 
 static int sh_dmae_probe(struct platform_device *pdev)
 {
-	const enum dma_slave_buswidth widths =
-		DMA_SLAVE_BUSWIDTH_1_BYTE   | DMA_SLAVE_BUSWIDTH_2_BYTES |
-		DMA_SLAVE_BUSWIDTH_4_BYTES  | DMA_SLAVE_BUSWIDTH_8_BYTES |
-		DMA_SLAVE_BUSWIDTH_16_BYTES | DMA_SLAVE_BUSWIDTH_32_BYTES;
 	const struct sh_dmae_pdata *pdata;
 	unsigned long chan_flag[SH_DMAE_MAX_CHANNELS] = {};
 	int chan_irq[SH_DMAE_MAX_CHANNELS];
-#if defined(CONFIG_CPU_SH4) || defined(CONFIG_ARCH_SHMOBILE)
+#if defined(CONFIG_CPU_SH4) || defined(CONFIG_ARM)
 	unsigned long irqflags = 0;
 	int errirq;
 #endif
@@ -696,7 +700,7 @@ static int sh_dmae_probe(struct platform_device *pdev)
 	struct resource *chan, *dmars, *errirq_res, *chanirq_res;
 
 	if (pdev->dev.of_node)
-		pdata = of_device_get_match_data(&pdev->dev);
+		pdata = of_match_device(sh_dmae_of_match, &pdev->dev)->data;
 	else
 		pdata = dev_get_platdata(&pdev->dev);
 
@@ -729,8 +733,10 @@ static int sh_dmae_probe(struct platform_device *pdev)
 
 	shdev = devm_kzalloc(&pdev->dev, sizeof(struct sh_dmae_device),
 			     GFP_KERNEL);
-	if (!shdev)
+	if (!shdev) {
+		dev_err(&pdev->dev, "Not enough memory\n");
 		return -ENOMEM;
+	}
 
 	dma_dev = &shdev->shdma_dev.dma_dev;
 
@@ -742,11 +748,6 @@ static int sh_dmae_probe(struct platform_device *pdev)
 		if (IS_ERR(shdev->dmars))
 			return PTR_ERR(shdev->dmars);
 	}
-
-	dma_dev->src_addr_widths = widths;
-	dma_dev->dst_addr_widths = widths;
-	dma_dev->directions = BIT(DMA_MEM_TO_DEV) | BIT(DMA_DEV_TO_MEM);
-	dma_dev->residue_granularity = DMA_RESIDUE_GRANULARITY_DESCRIPTOR;
 
 	if (!pdata->slave_only)
 		dma_cap_set(DMA_MEMCPY, dma_dev->cap_mask);
@@ -924,12 +925,14 @@ static int sh_dmae_remove(struct platform_device *pdev)
 }
 
 static struct platform_driver sh_dmae_driver = {
-	.driver		= {
+	.driver 	= {
+		.owner	= THIS_MODULE,
 		.pm	= &sh_dmae_pm,
 		.name	= SH_DMAE_DRV_NAME,
 		.of_match_table = sh_dmae_of_match,
 	},
 	.remove		= sh_dmae_remove,
+	.shutdown	= sh_dmae_shutdown,
 };
 
 static int __init sh_dmae_init(void)

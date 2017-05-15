@@ -10,6 +10,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/kconfig.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/platform_device.h>
@@ -62,7 +63,7 @@ MODULE_LICENSE("GPL");
 #define   IDR_W5300		  0x5300  /* =0x5300 for WIZnet W5300 */
 #define W5300_S0_MR		0x0200	/* S0 Mode Register */
 #define   S0_MR_CLOSED		  0x0000  /* Close mode */
-#define   S0_MR_MACRAW		  0x0004  /* MAC RAW mode (promiscuous) */
+#define   S0_MR_MACRAW		  0x0004  /* MAC RAW mode (promiscous) */
 #define   S0_MR_MACRAW_MF	  0x0044  /* MAC RAW mode (filtered) */
 #define W5300_S0_CR		0x0202	/* S0 Command Register */
 #define   S0_CR_OPEN		  0x0001  /* OPEN command */
@@ -361,7 +362,7 @@ static void w5300_tx_timeout(struct net_device *ndev)
 	w5300_hw_reset(priv);
 	w5300_hw_start(priv);
 	ndev->stats.tx_errors++;
-	netif_trans_update(ndev);
+	ndev->trans_start = jiffies;
 	netif_wake_queue(ndev);
 }
 
@@ -417,9 +418,9 @@ static int w5300_napi_poll(struct napi_struct *napi, int budget)
 	}
 
 	if (rx_count < budget) {
-		napi_complete(napi);
 		w5300_write(priv, W5300_IMR, IR_S0);
 		mmiowb();
+		napi_complete(napi);
 	}
 
 	return rx_count;
@@ -536,6 +537,7 @@ static const struct net_device_ops w5300_netdev_ops = {
 	.ndo_set_rx_mode	= w5300_set_rx_mode,
 	.ndo_set_mac_address	= w5300_set_macaddr,
 	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_change_mtu		= eth_change_mtu,
 };
 
 static int w5300_hw_probe(struct platform_device *pdev)
@@ -556,11 +558,13 @@ static int w5300_hw_probe(struct platform_device *pdev)
 	}
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!mem)
+		return -ENXIO;
+	mem_size = resource_size(mem);
+
 	priv->base = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(priv->base))
 		return PTR_ERR(priv->base);
-
-	mem_size = resource_size(mem);
 
 	spin_lock_init(&priv->reg_lock);
 	priv->indirect = mem_size < W5300_BUS_DIRECT_SIZE;
@@ -616,6 +620,7 @@ static int w5300_probe(struct platform_device *pdev)
 	priv = netdev_priv(ndev);
 	priv->ndev = ndev;
 
+	ether_setup(ndev);
 	ndev->netdev_ops = &w5300_netdev_ops;
 	ndev->ethtool_ops = &w5300_ethtool_ops;
 	ndev->watchdog_timeo = HZ;
@@ -698,6 +703,7 @@ static SIMPLE_DEV_PM_OPS(w5300_pm_ops, w5300_suspend, w5300_resume);
 static struct platform_driver w5300_driver = {
 	.driver		= {
 		.name	= DRV_NAME,
+		.owner	= THIS_MODULE,
 		.pm	= &w5300_pm_ops,
 	},
 	.probe		= w5300_probe,

@@ -16,12 +16,6 @@
 		bootargs = "console=ttyS0,115200 ubi.mtd=4 root=ubi0:rootfs rootfstype=ubifs";
 	};
 
-	clocks {
-		slow_xtal {
-			clock-frequency = <32768>;
-		};
-	};
-
 	ahb {
 		apb {
 			usart0: serial@fffb0000 {
@@ -57,7 +51,7 @@
 			};
 		};
 
-		usb0: ohci@500000 {
+		usb0: ohci@00500000 {
 			num-ports = <2>;
 			status = "okay";
 		};

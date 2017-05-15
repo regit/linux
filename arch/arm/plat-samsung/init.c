@@ -30,6 +30,7 @@
 
 #include <plat/cpu.h>
 #include <plat/devs.h>
+#include <plat/clock.h>
 
 static struct cpu_table *cpu;
 
@@ -151,11 +152,6 @@ void __init s3c24xx_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 static int __init s3c_arch_init(void)
 {
 	int ret;
-
-	/* init is only needed for ATAGS based platforms */
-	if (!IS_ENABLED(CONFIG_ATAGS) ||
-	    (!soc_is_s3c24xx() && !soc_is_s3c64xx()))
-		return 0;
 
 	// do the correct init for cpu
 

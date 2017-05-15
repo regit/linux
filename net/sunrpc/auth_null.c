@@ -10,7 +10,7 @@
 #include <linux/module.h>
 #include <linux/sunrpc/clnt.h>
 
-#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
+#ifdef RPC_DEBUG
 # define RPCDBG_FACILITY	RPCDBG_AUTH
 #endif
 
@@ -35,8 +35,6 @@ nul_destroy(struct rpc_auth *auth)
 static struct rpc_cred *
 nul_lookup_cred(struct rpc_auth *auth, struct auth_cred *acred, int flags)
 {
-	if (flags & RPCAUTH_LOOKUP_RCU)
-		return &null_cred;
 	return get_rpccred(&null_cred);
 }
 
@@ -113,9 +111,8 @@ const struct rpc_authops authnull_ops = {
 
 static
 struct rpc_auth null_auth = {
-	.au_cslack	= NUL_CALLSLACK,
-	.au_rslack	= NUL_REPLYSLACK,
-	.au_flags	= RPCAUTH_AUTH_NO_CRKEY_TIMEOUT,
+	.au_cslack	= 4,
+	.au_rslack	= 2,
 	.au_ops		= &authnull_ops,
 	.au_flavor	= RPC_AUTH_NULL,
 	.au_count	= ATOMIC_INIT(0),
@@ -139,7 +136,7 @@ struct rpc_cred null_cred = {
 	.cr_ops		= &null_credops,
 	.cr_count	= ATOMIC_INIT(1),
 	.cr_flags	= 1UL << RPCAUTH_CRED_UPTODATE,
-#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
+#ifdef RPC_DEBUG
 	.cr_magic	= RPCAUTH_CRED_MAGIC,
 #endif
 };

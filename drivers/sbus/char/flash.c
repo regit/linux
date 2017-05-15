@@ -15,7 +15,7 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/upa.h>
@@ -207,6 +207,7 @@ MODULE_DEVICE_TABLE(of, flash_match);
 static struct platform_driver flash_driver = {
 	.driver = {
 		.name = "flash",
+		.owner = THIS_MODULE,
 		.of_match_table = flash_match,
 	},
 	.probe		= flash_probe,

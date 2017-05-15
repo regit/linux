@@ -29,14 +29,13 @@
 #include "qxl_drv.h"
 #include "qxl_object.h"
 #include "drm_crtc_helper.h"
-#include <drm/drm_plane_helper.h>
 
 static bool qxl_head_enabled(struct qxl_head *head)
 {
 	return head->width && head->height;
 }
 
-static void qxl_alloc_client_monitors_config(struct qxl_device *qdev, unsigned count)
+void qxl_alloc_client_monitors_config(struct qxl_device *qdev, unsigned count)
 {
 	if (qdev->client_monitors_config &&
 	    count > qdev->client_monitors_config->count) {
@@ -57,27 +56,20 @@ static void qxl_alloc_client_monitors_config(struct qxl_device *qdev, unsigned c
 	qdev->client_monitors_config->count = count;
 }
 
-enum {
-	MONITORS_CONFIG_MODIFIED,
-	MONITORS_CONFIG_UNCHANGED,
-	MONITORS_CONFIG_BAD_CRC,
-};
-
 static int qxl_display_copy_rom_client_monitors_config(struct qxl_device *qdev)
 {
 	int i;
 	int num_monitors;
 	uint32_t crc;
-	int status = MONITORS_CONFIG_UNCHANGED;
 
 	num_monitors = qdev->rom->client_monitors_config.count;
 	crc = crc32(0, (const uint8_t *)&qdev->rom->client_monitors_config,
 		  sizeof(qdev->rom->client_monitors_config));
 	if (crc != qdev->rom->client_monitors_config_crc) {
-		qxl_io_log(qdev, "crc mismatch: have %X (%zd) != %X\n", crc,
+		qxl_io_log(qdev, "crc mismatch: have %X (%d) != %X\n", crc,
 			   sizeof(qdev->rom->client_monitors_config),
 			   qdev->rom->client_monitors_config_crc);
-		return MONITORS_CONFIG_BAD_CRC;
+		return 1;
 	}
 	if (num_monitors > qdev->monitors_config->max_allowed) {
 		DRM_DEBUG_KMS("client monitors list will be truncated: %d < %d\n",
@@ -85,10 +77,6 @@ static int qxl_display_copy_rom_client_monitors_config(struct qxl_device *qdev)
 		num_monitors = qdev->monitors_config->max_allowed;
 	} else {
 		num_monitors = qdev->rom->client_monitors_config.count;
-	}
-	if (qdev->client_monitors_config
-	      && (num_monitors != qdev->client_monitors_config->count)) {
-		status = MONITORS_CONFIG_MODIFIED;
 	}
 	qxl_alloc_client_monitors_config(qdev, num_monitors);
 	/* we copy max from the client but it isn't used */
@@ -99,81 +87,27 @@ static int qxl_display_copy_rom_client_monitors_config(struct qxl_device *qdev)
 			&qdev->rom->client_monitors_config.heads[i];
 		struct qxl_head *client_head =
 			&qdev->client_monitors_config->heads[i];
-		if (client_head->x != c_rect->left) {
-			client_head->x = c_rect->left;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
-		if (client_head->y != c_rect->top) {
-			client_head->y = c_rect->top;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
-		if (client_head->width != c_rect->right - c_rect->left) {
-			client_head->width = c_rect->right - c_rect->left;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
-		if (client_head->height != c_rect->bottom - c_rect->top) {
-			client_head->height = c_rect->bottom - c_rect->top;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
-		if (client_head->surface_id != 0) {
-			client_head->surface_id = 0;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
-		if (client_head->id != i) {
-			client_head->id = i;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
-		if (client_head->flags != 0) {
-			client_head->flags = 0;
-			status = MONITORS_CONFIG_MODIFIED;
-		}
+		client_head->x = c_rect->left;
+		client_head->y = c_rect->top;
+		client_head->width = c_rect->right - c_rect->left;
+		client_head->height = c_rect->bottom - c_rect->top;
+		client_head->surface_id = 0;
+		client_head->id = i;
+		client_head->flags = 0;
 		DRM_DEBUG_KMS("read %dx%d+%d+%d\n", client_head->width, client_head->height,
 			  client_head->x, client_head->y);
 	}
-
-	return status;
-}
-
-static void qxl_update_offset_props(struct qxl_device *qdev)
-{
-	struct drm_device *dev = qdev->ddev;
-	struct drm_connector *connector;
-	struct qxl_output *output;
-	struct qxl_head *head;
-
-	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
-		output = drm_connector_to_qxl_output(connector);
-
-		head = &qdev->client_monitors_config->heads[output->index];
-
-		drm_object_property_set_value(&connector->base,
-			dev->mode_config.suggested_x_property, head->x);
-		drm_object_property_set_value(&connector->base,
-			dev->mode_config.suggested_y_property, head->y);
-	}
+	return 0;
 }
 
 void qxl_display_read_client_monitors_config(struct qxl_device *qdev)
 {
 
-	struct drm_device *dev = qdev->ddev;
-	int status;
-
-	status = qxl_display_copy_rom_client_monitors_config(qdev);
-	while (status == MONITORS_CONFIG_BAD_CRC) {
+	while (qxl_display_copy_rom_client_monitors_config(qdev)) {
 		qxl_io_log(qdev, "failed crc check for client_monitors_config,"
 				 " retrying\n");
-		status = qxl_display_copy_rom_client_monitors_config(qdev);
-	}
-	if (status == MONITORS_CONFIG_UNCHANGED) {
-		qxl_io_log(qdev, "config unchanged\n");
-		DRM_DEBUG("ignoring unchanged client monitors config");
-		return;
 	}
 
-	drm_modeset_lock_all(dev);
-	qxl_update_offset_props(qdev);
-	drm_modeset_unlock_all(dev);
 	if (!drm_helper_hpd_irq_event(qdev->ddev)) {
 		/* notify that the monitor configuration changed, to
 		   adjust at the arbitrary resolution */
@@ -199,40 +133,11 @@ static int qxl_add_monitors_config_modes(struct drm_connector *connector,
 	mode = drm_cvt_mode(dev, head->width, head->height, 60, false, false,
 			    false);
 	mode->type |= DRM_MODE_TYPE_PREFERRED;
-	mode->hdisplay = head->width;
-	mode->vdisplay = head->height;
-	drm_mode_set_name(mode);
 	*pwidth = head->width;
 	*pheight = head->height;
 	drm_mode_probed_add(connector, mode);
-	/* remember the last custom size for mode validation */
-	qdev->monitors_config_width = mode->hdisplay;
-	qdev->monitors_config_height = mode->vdisplay;
 	return 1;
 }
-
-static struct mode_size {
-	int w;
-	int h;
-} common_modes[] = {
-	{ 640,  480},
-	{ 720,  480},
-	{ 800,  600},
-	{ 848,  480},
-	{1024,  768},
-	{1152,  768},
-	{1280,  720},
-	{1280,  800},
-	{1280,  854},
-	{1280,  960},
-	{1280, 1024},
-	{1440,  900},
-	{1400, 1050},
-	{1680, 1050},
-	{1600, 1200},
-	{1920, 1080},
-	{1920, 1200}
-};
 
 static int qxl_add_common_modes(struct drm_connector *connector,
                                 unsigned pwidth,
@@ -241,6 +146,29 @@ static int qxl_add_common_modes(struct drm_connector *connector,
 	struct drm_device *dev = connector->dev;
 	struct drm_display_mode *mode = NULL;
 	int i;
+	struct mode_size {
+		int w;
+		int h;
+	} common_modes[] = {
+		{ 640,  480},
+		{ 720,  480},
+		{ 800,  600},
+		{ 848,  480},
+		{1024,  768},
+		{1152,  768},
+		{1280,  720},
+		{1280,  800},
+		{1280,  854},
+		{1280,  960},
+		{1280, 1024},
+		{1440,  900},
+		{1400, 1050},
+		{1680, 1050},
+		{1600, 1200},
+		{1920, 1080},
+		{1920, 1200}
+	};
+
 	for (i = 0; i < ARRAY_SIZE(common_modes); i++) {
 		mode = drm_cvt_mode(dev, common_modes[i].w, common_modes[i].h,
 				    60, false, false, false);
@@ -256,63 +184,7 @@ static void qxl_crtc_destroy(struct drm_crtc *crtc)
 	struct qxl_crtc *qxl_crtc = to_qxl_crtc(crtc);
 
 	drm_crtc_cleanup(crtc);
-	qxl_bo_unref(&qxl_crtc->cursor_bo);
 	kfree(qxl_crtc);
-}
-
-static int qxl_crtc_page_flip(struct drm_crtc *crtc,
-                              struct drm_framebuffer *fb,
-                              struct drm_pending_vblank_event *event,
-                              uint32_t page_flip_flags)
-{
-	struct drm_device *dev = crtc->dev;
-	struct qxl_device *qdev = dev->dev_private;
-	struct qxl_framebuffer *qfb_src = to_qxl_framebuffer(fb);
-	struct qxl_framebuffer *qfb_old = to_qxl_framebuffer(crtc->primary->fb);
-	struct qxl_bo *bo_old = gem_to_qxl_bo(qfb_old->obj);
-	struct qxl_bo *bo = gem_to_qxl_bo(qfb_src->obj);
-	unsigned long flags;
-	struct drm_clip_rect norect = {
-	    .x1 = 0,
-	    .y1 = 0,
-	    .x2 = fb->width,
-	    .y2 = fb->height
-	};
-	int inc = 1;
-	int one_clip_rect = 1;
-	int ret = 0;
-
-	crtc->primary->fb = fb;
-	bo_old->is_primary = false;
-	bo->is_primary = true;
-
-	ret = qxl_bo_reserve(bo, false);
-	if (ret)
-		return ret;
-	ret = qxl_bo_pin(bo, bo->type, NULL);
-	qxl_bo_unreserve(bo);
-	if (ret)
-		return ret;
-
-	qxl_draw_dirty_fb(qdev, qfb_src, bo, 0, 0,
-			  &norect, one_clip_rect, inc);
-
-	drm_crtc_vblank_get(crtc);
-
-	if (event) {
-		spin_lock_irqsave(&dev->event_lock, flags);
-		drm_crtc_send_vblank_event(crtc, event);
-		spin_unlock_irqrestore(&dev->event_lock, flags);
-	}
-	drm_crtc_vblank_put(crtc);
-
-	ret = qxl_bo_reserve(bo, false);
-	if (!ret) {
-		qxl_bo_unpin(bo);
-		qxl_bo_unreserve(bo);
-	}
-
-	return 0;
 }
 
 static int
@@ -342,52 +214,6 @@ qxl_hide_cursor(struct qxl_device *qdev)
 	return 0;
 }
 
-static int qxl_crtc_apply_cursor(struct drm_crtc *crtc)
-{
-	struct qxl_crtc *qcrtc = to_qxl_crtc(crtc);
-	struct drm_device *dev = crtc->dev;
-	struct qxl_device *qdev = dev->dev_private;
-	struct qxl_cursor_cmd *cmd;
-	struct qxl_release *release;
-	int ret = 0;
-
-	if (!qcrtc->cursor_bo)
-		return 0;
-
-	ret = qxl_alloc_release_reserved(qdev, sizeof(*cmd),
-					 QXL_RELEASE_CURSOR_CMD,
-					 &release, NULL);
-	if (ret)
-		return ret;
-
-	ret = qxl_release_list_add(release, qcrtc->cursor_bo);
-	if (ret)
-		goto out_free_release;
-
-	ret = qxl_release_reserve_list(release, false);
-	if (ret)
-		goto out_free_release;
-
-	cmd = (struct qxl_cursor_cmd *)qxl_release_map(qdev, release);
-	cmd->type = QXL_CURSOR_SET;
-	cmd->u.set.position.x = qcrtc->cur_x + qcrtc->hot_spot_x;
-	cmd->u.set.position.y = qcrtc->cur_y + qcrtc->hot_spot_y;
-
-	cmd->u.set.shape = qxl_bo_physical_address(qdev, qcrtc->cursor_bo, 0);
-
-	cmd->u.set.visible = 1;
-	qxl_release_unmap(qdev, release, &cmd->release_info);
-
-	qxl_push_cursor_ring_release(qdev, release, QXL_CMD_CURSOR, false);
-	qxl_release_fence_buffer_objects(release);
-
-	return ret;
-
-out_free_release:
-	qxl_release_free(qdev, release);
-	return ret;
-}
-
 static int qxl_crtc_cursor_set2(struct drm_crtc *crtc,
 				struct drm_file *file_priv,
 				uint32_t handle,
@@ -409,7 +235,7 @@ static int qxl_crtc_cursor_set2(struct drm_crtc *crtc,
 	if (!handle)
 		return qxl_hide_cursor(qdev);
 
-	obj = drm_gem_object_lookup(file_priv, handle);
+	obj = drm_gem_object_lookup(crtc->dev, file_priv, handle);
 	if (!obj) {
 		DRM_ERROR("cannot find cursor object\n");
 		return -ENOENT;
@@ -466,15 +292,10 @@ static int qxl_crtc_cursor_set2(struct drm_crtc *crtc,
 
 	qxl_bo_kunmap(user_bo);
 
-	qcrtc->cur_x += qcrtc->hot_spot_x - hot_x;
-	qcrtc->cur_y += qcrtc->hot_spot_y - hot_y;
-	qcrtc->hot_spot_x = hot_x;
-	qcrtc->hot_spot_y = hot_y;
-
 	cmd = (struct qxl_cursor_cmd *)qxl_release_map(qdev, release);
 	cmd->type = QXL_CURSOR_SET;
-	cmd->u.set.position.x = qcrtc->cur_x + qcrtc->hot_spot_x;
-	cmd->u.set.position.y = qcrtc->cur_y + qcrtc->hot_spot_y;
+	cmd->u.set.position.x = qcrtc->cur_x;
+	cmd->u.set.position.y = qcrtc->cur_y;
 
 	cmd->u.set.shape = qxl_bo_physical_address(qdev, cursor_bo, 0);
 
@@ -492,8 +313,7 @@ static int qxl_crtc_cursor_set2(struct drm_crtc *crtc,
 	}
 	drm_gem_object_unreference_unlocked(obj);
 
-	qxl_bo_unref (&qcrtc->cursor_bo);
-	qcrtc->cursor_bo = cursor_bo;
+	qxl_bo_unref(&cursor_bo);
 
 	return ret;
 
@@ -538,8 +358,8 @@ static int qxl_crtc_cursor_move(struct drm_crtc *crtc,
 
 	cmd = (struct qxl_cursor_cmd *)qxl_release_map(qdev, release);
 	cmd->type = QXL_CURSOR_MOVE;
-	cmd->u.position.x = qcrtc->cur_x + qcrtc->hot_spot_x;
-	cmd->u.position.y = qcrtc->cur_y + qcrtc->hot_spot_y;
+	cmd->u.position.x = qcrtc->cur_x;
+	cmd->u.position.y = qcrtc->cur_y;
 	qxl_release_unmap(qdev, release, &cmd->release_info);
 
 	qxl_push_cursor_ring_release(qdev, release, QXL_CMD_CURSOR, false);
@@ -554,14 +374,14 @@ static const struct drm_crtc_funcs qxl_crtc_funcs = {
 	.cursor_move = qxl_crtc_cursor_move,
 	.set_config = drm_crtc_helper_set_config,
 	.destroy = qxl_crtc_destroy,
-	.page_flip = qxl_crtc_page_flip,
 };
 
-void qxl_user_framebuffer_destroy(struct drm_framebuffer *fb)
+static void qxl_user_framebuffer_destroy(struct drm_framebuffer *fb)
 {
 	struct qxl_framebuffer *qxl_fb = to_qxl_framebuffer(fb);
 
-	drm_gem_object_unreference_unlocked(qxl_fb->obj);
+	if (qxl_fb->obj)
+		drm_gem_object_unreference_unlocked(qxl_fb->obj);
 	drm_framebuffer_cleanup(fb);
 	kfree(qxl_fb);
 }
@@ -617,14 +437,13 @@ static const struct drm_framebuffer_funcs qxl_fb_funcs = {
 int
 qxl_framebuffer_init(struct drm_device *dev,
 		     struct qxl_framebuffer *qfb,
-		     const struct drm_mode_fb_cmd2 *mode_cmd,
-		     struct drm_gem_object *obj,
-		     const struct drm_framebuffer_funcs *funcs)
+		     struct drm_mode_fb_cmd2 *mode_cmd,
+		     struct drm_gem_object *obj)
 {
 	int ret;
 
 	qfb->obj = obj;
-	ret = drm_framebuffer_init(dev, &qfb->base, funcs);
+	ret = drm_framebuffer_init(dev, &qfb->base, &qxl_fb_funcs);
 	if (ret) {
 		qfb->obj = NULL;
 		return ret;
@@ -652,7 +471,7 @@ static bool qxl_crtc_mode_fixup(struct drm_crtc *crtc,
 	return true;
 }
 
-static void
+void
 qxl_send_monitors_config(struct qxl_device *qdev)
 {
 	int i;
@@ -700,9 +519,11 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 {
 	struct drm_device *dev = crtc->dev;
 	struct qxl_device *qdev = dev->dev_private;
+	struct qxl_mode *m = (void *)mode->private;
 	struct qxl_framebuffer *qfb;
 	struct qxl_bo *bo, *old_bo = NULL;
 	struct qxl_crtc *qcrtc = to_qxl_crtc(crtc);
+	uint32_t width, height, base_offset;
 	bool recreate_primary = false;
 	int ret;
 	int surf_id;
@@ -717,19 +538,24 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 	}
 	qfb = to_qxl_framebuffer(crtc->primary->fb);
 	bo = gem_to_qxl_bo(qfb->obj);
+	if (!m)
+		/* and do we care? */
+		DRM_DEBUG("%dx%d: not a native mode\n", x, y);
+	else
+		DRM_DEBUG("%dx%d: qxl id %d\n",
+			  mode->hdisplay, mode->vdisplay, m->id);
 	DRM_DEBUG("+%d+%d (%d,%d) => (%d,%d)\n",
 		  x, y,
 		  mode->hdisplay, mode->vdisplay,
 		  adjusted_mode->hdisplay,
 		  adjusted_mode->vdisplay);
 
-	if (bo->is_primary == false)
+	if (qcrtc->index == 0)
 		recreate_primary = true;
 
-	if (bo->surf.stride * bo->surf.height > qdev->vram_size) {
-		DRM_ERROR("Mode doesn't fit in vram size (vgamem)");
-		return -EINVAL;
-        }
+	width = mode->hdisplay;
+	height = mode->vdisplay;
+	base_offset = 0;
 
 	ret = qxl_bo_reserve(bo, false);
 	if (ret != 0)
@@ -743,17 +569,11 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 	if (recreate_primary) {
 		qxl_io_destroy_primary(qdev);
 		qxl_io_log(qdev,
-			   "recreate primary: %dx%d,%d,%d\n",
-			   bo->surf.width, bo->surf.height,
-			   bo->surf.stride, bo->surf.format);
-		qxl_io_create_primary(qdev, 0, bo);
+			   "recreate primary: %dx%d (was %dx%d,%d,%d)\n",
+			   width, height, bo->surf.width,
+			   bo->surf.height, bo->surf.stride, bo->surf.format);
+		qxl_io_create_primary(qdev, base_offset, bo);
 		bo->is_primary = true;
-
-		ret = qxl_crtc_apply_cursor(crtc);
-		if (ret) {
-			DRM_ERROR("could not set cursor after modeset");
-			ret = 0;
-		}
 	}
 
 	if (bo->is_primary) {
@@ -827,6 +647,7 @@ static int qdev_crtc_init(struct drm_device *dev, int crtc_id)
 
 	drm_crtc_init(dev, &qxl_crtc->base, &qxl_crtc_funcs);
 	qxl_crtc->index = crtc_id;
+	drm_mode_crtc_set_gamma_size(&qxl_crtc->base, 256);
 	drm_crtc_helper_add(&qxl_crtc->base, &qxl_crtc_helper_funcs);
 	return 0;
 }
@@ -834,6 +655,14 @@ static int qdev_crtc_init(struct drm_device *dev, int crtc_id)
 static void qxl_enc_dpms(struct drm_encoder *encoder, int mode)
 {
 	DRM_DEBUG("\n");
+}
+
+static bool qxl_enc_mode_fixup(struct drm_encoder *encoder,
+			       const struct drm_display_mode *mode,
+			       struct drm_display_mode *adjusted_mode)
+{
+	DRM_DEBUG("\n");
+	return true;
 }
 
 static void qxl_enc_prepare(struct drm_encoder *encoder)
@@ -928,22 +757,11 @@ static int qxl_conn_get_modes(struct drm_connector *connector)
 static int qxl_conn_mode_valid(struct drm_connector *connector,
 			       struct drm_display_mode *mode)
 {
-	struct drm_device *ddev = connector->dev;
-	struct qxl_device *qdev = ddev->dev_private;
-	int i;
-
 	/* TODO: is this called for user defined modes? (xrandr --add-mode)
 	 * TODO: check that the mode fits in the framebuffer */
-
-	if(qdev->monitors_config_width == mode->hdisplay &&
-	   qdev->monitors_config_height == mode->vdisplay)
-		return MODE_OK;
-
-	for (i = 0; i < ARRAY_SIZE(common_modes); i++) {
-		if (common_modes[i].w == mode->hdisplay && common_modes[i].h == mode->vdisplay)
-			return MODE_OK;
-	}
-	return MODE_BAD;
+	DRM_DEBUG("%s: %dx%d status=%d\n", mode->name, mode->hdisplay,
+		  mode->vdisplay, mode->status);
+	return MODE_OK;
 }
 
 static struct drm_encoder *qxl_best_encoder(struct drm_connector *connector)
@@ -958,6 +776,7 @@ static struct drm_encoder *qxl_best_encoder(struct drm_connector *connector)
 
 static const struct drm_encoder_helper_funcs qxl_enc_helper_funcs = {
 	.dpms = qxl_enc_dpms,
+	.mode_fixup = qxl_enc_mode_fixup,
 	.prepare = qxl_enc_prepare,
 	.mode_set = qxl_enc_mode_set,
 	.commit = qxl_enc_commit,
@@ -969,6 +788,16 @@ static const struct drm_connector_helper_funcs qxl_connector_helper_funcs = {
 	.best_encoder = qxl_best_encoder,
 };
 
+static void qxl_conn_save(struct drm_connector *connector)
+{
+	DRM_DEBUG("\n");
+}
+
+static void qxl_conn_restore(struct drm_connector *connector)
+{
+	DRM_DEBUG("\n");
+}
+
 static enum drm_connector_status qxl_conn_detect(
 			struct drm_connector *connector,
 			bool force)
@@ -977,15 +806,13 @@ static enum drm_connector_status qxl_conn_detect(
 		drm_connector_to_qxl_output(connector);
 	struct drm_device *ddev = connector->dev;
 	struct qxl_device *qdev = ddev->dev_private;
-	bool connected = false;
+	int connected;
 
 	/* The first monitor is always connected */
-	if (!qdev->client_monitors_config) {
-		if (output->index == 0)
-			connected = true;
-	} else
-		connected = qdev->client_monitors_config->count > output->index &&
-		     qxl_head_enabled(&qdev->client_monitors_config->heads[output->index]);
+	connected = (output->index == 0) ||
+		    (qdev->client_monitors_config &&
+		     qdev->client_monitors_config->count > output->index &&
+		     qxl_head_enabled(&qdev->client_monitors_config->heads[output->index]));
 
 	DRM_DEBUG("#%d connected: %d\n", output->index, connected);
 	if (!connected)
@@ -1008,15 +835,17 @@ static void qxl_conn_destroy(struct drm_connector *connector)
 	struct qxl_output *qxl_output =
 		drm_connector_to_qxl_output(connector);
 
-	drm_connector_unregister(connector);
+	drm_sysfs_connector_remove(connector);
 	drm_connector_cleanup(connector);
 	kfree(qxl_output);
 }
 
 static const struct drm_connector_funcs qxl_connector_funcs = {
 	.dpms = drm_helper_connector_dpms,
+	.save = qxl_conn_save,
+	.restore = qxl_conn_restore,
 	.detect = qxl_conn_detect,
-	.fill_modes = drm_helper_probe_single_connector_modes,
+	.fill_modes = drm_helper_probe_single_connector_modes_nomerge,
 	.set_property = qxl_conn_set_property,
 	.destroy = qxl_conn_destroy,
 };
@@ -1061,7 +890,7 @@ static int qdev_output_init(struct drm_device *dev, int num_output)
 			   &qxl_connector_funcs, DRM_MODE_CONNECTOR_VIRTUAL);
 
 	drm_encoder_init(dev, &qxl_output->enc, &qxl_enc_funcs,
-			 DRM_MODE_ENCODER_VIRTUAL, NULL);
+			 DRM_MODE_ENCODER_VIRTUAL);
 
 	/* we get HPD via client monitors config */
 	connector->polled = DRM_CONNECTOR_POLL_HPD;
@@ -1073,32 +902,26 @@ static int qdev_output_init(struct drm_device *dev, int num_output)
 
 	drm_object_attach_property(&connector->base,
 				   qdev->hotplug_mode_update_property, 0);
-	drm_object_attach_property(&connector->base,
-				   dev->mode_config.suggested_x_property, 0);
-	drm_object_attach_property(&connector->base,
-				   dev->mode_config.suggested_y_property, 0);
-	drm_connector_register(connector);
+	drm_sysfs_connector_add(connector);
 	return 0;
 }
 
 static struct drm_framebuffer *
 qxl_user_framebuffer_create(struct drm_device *dev,
 			    struct drm_file *file_priv,
-			    const struct drm_mode_fb_cmd2 *mode_cmd)
+			    struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct drm_gem_object *obj;
 	struct qxl_framebuffer *qxl_fb;
 	int ret;
 
-	obj = drm_gem_object_lookup(file_priv, mode_cmd->handles[0]);
-	if (!obj)
-		return NULL;
+	obj = drm_gem_object_lookup(dev, file_priv, mode_cmd->handles[0]);
 
 	qxl_fb = kzalloc(sizeof(*qxl_fb), GFP_KERNEL);
 	if (qxl_fb == NULL)
 		return NULL;
 
-	ret = qxl_framebuffer_init(dev, qxl_fb, mode_cmd, obj, &qxl_fb_funcs);
+	ret = qxl_framebuffer_init(dev, qxl_fb, mode_cmd, obj);
 	if (ret) {
 		kfree(qxl_fb);
 		drm_gem_object_unreference_unlocked(obj);
@@ -1192,7 +1015,6 @@ int qxl_modeset_init(struct qxl_device *qdev)
 
 	qdev->ddev->mode_config.fb_base = qdev->vram_base;
 
-	drm_mode_create_suggested_offset_properties(qdev->ddev);
 	qxl_mode_create_hotplug_mode_update_property(qdev);
 
 	for (i = 0 ; i < qxl_num_crtc; ++i) {

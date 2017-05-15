@@ -151,7 +151,7 @@ Include Files
 #include <pcmcia/cistpl.h>
 #include <pcmcia/ds.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 
 /* ----------------------------------------------------------------------------
@@ -427,6 +427,7 @@ static const struct net_device_ops mace_netdev_ops = {
 	.ndo_set_config		= mace_config,
 	.ndo_get_stats		= mace_get_stats,
 	.ndo_set_rx_mode	= set_multicast_list,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 };
@@ -620,7 +621,7 @@ static int nmclan_config(struct pcmcia_device *link)
   ret = pcmcia_request_io(link);
   if (ret)
 	  goto failed;
-  ret = pcmcia_request_irq(link, mace_interrupt);
+  ret = pcmcia_request_exclusive_irq(link, mace_interrupt);
   if (ret)
 	  goto failed;
   ret = pcmcia_enable_device(link);
@@ -850,7 +851,7 @@ static void mace_tx_timeout(struct net_device *dev)
 #else /* #if RESET_ON_TIMEOUT */
   pr_cont("NOT resetting card\n");
 #endif /* #if RESET_ON_TIMEOUT */
-  netif_trans_update(dev); /* prevent tx timeout */
+  dev->trans_start = jiffies; /* prevent tx timeout */
   netif_wake_queue(dev);
 }
 
@@ -951,8 +952,6 @@ static irqreturn_t mace_interrupt(int irq, void *dev_id)
   do {
     /* WARNING: MACE_IR is a READ/CLEAR port! */
     status = inb(ioaddr + AM2150_MACE_BASE + MACE_IR);
-    if (!(status & ~MACE_IMR_DEFAULT) && IntrCnt == MACE_MAX_IR_ITERATIONS)
-      return IRQ_NONE;
 
     pr_debug("mace_interrupt: irq 0x%X status 0x%X.\n", irq, status);
 

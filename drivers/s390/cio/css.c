@@ -5,14 +5,12 @@
  *
  * Author(s): Arnd Bergmann (arndb@de.ibm.com)
  *	      Cornelia Huck (cornelia.huck@de.ibm.com)
- *
- * License: GPL
  */
 
 #define KMSG_COMPONENT "cio"
 #define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/device.h>
 #include <linux/slab.h>
@@ -46,6 +44,7 @@ for_each_subchannel(int(*fn)(struct subchannel_id, void *), void *data)
 	int ret;
 
 	init_subchannel_id(&schid);
+	ret = -ENODEV;
 	do {
 		do {
 			ret = fn(schid, data);
@@ -392,7 +391,7 @@ static int css_evaluate_new_subchannel(struct subchannel_id schid, int slow)
 		/* Will be done on the slow path. */
 		return -EAGAIN;
 	}
-	if (stsch(schid, &schib)) {
+	if (stsch_err(schid, &schib)) {
 		/* Subchannel is not provided. */
 		return -ENXIO;
 	}
@@ -704,12 +703,17 @@ css_generate_pgid(struct channel_subsystem *css, u32 tod_high)
 		css->global_pgid.pgid_high.ext_cssid.version = 0x80;
 		css->global_pgid.pgid_high.ext_cssid.cssid = css->cssid;
 	} else {
+#ifdef CONFIG_SMP
 		css->global_pgid.pgid_high.cpu_addr = stap();
+#else
+		css->global_pgid.pgid_high.cpu_addr = 0;
+#endif
 	}
 	get_cpu_id(&cpu_id);
 	css->global_pgid.cpu_id = cpu_id.ident;
 	css->global_pgid.cpu_model = cpu_id.machine;
 	css->global_pgid.tod_high = tod_high;
+
 }
 
 static void
@@ -1085,7 +1089,6 @@ void channel_subsystem_reinit(void)
 		if (chp)
 			chp_update_desc(chp);
 	}
-	cmf_reactivate();
 }
 
 #ifdef CONFIG_PROC_FS
@@ -1287,3 +1290,5 @@ void css_driver_unregister(struct css_driver *cdrv)
 	driver_unregister(&cdrv->drv);
 }
 EXPORT_SYMBOL_GPL(css_driver_unregister);
+
+MODULE_LICENSE("GPL");

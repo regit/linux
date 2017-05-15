@@ -26,6 +26,7 @@
 
 #include <asm/processor.h>
 #include <asm/apic.h>
+#include <asm/idle.h>
 #include <asm/mce.h>
 #include <asm/msr.h>
 #include <asm/trace/irq_vectors.h>
@@ -189,7 +190,7 @@ static int therm_throt_process(bool new_event, int event, int level)
 	/* if we just entered the thermal event */
 	if (new_event) {
 		if (event == THERMAL_THROTTLING_EVENT)
-			pr_crit("CPU%d: %s temperature above threshold, cpu clock throttled (total events = %lu)\n",
+			printk(KERN_CRIT "CPU%d: %s temperature above threshold, cpu clock throttled (total events = %lu)\n",
 				this_cpu,
 				level == CORE_LEVEL ? "Core" : "Package",
 				state->count);
@@ -197,7 +198,8 @@ static int therm_throt_process(bool new_event, int event, int level)
 	}
 	if (old_event) {
 		if (event == THERMAL_THROTTLING_EVENT)
-			pr_info("CPU%d: %s temperature/speed normal\n", this_cpu,
+			printk(KERN_INFO "CPU%d: %s temperature/speed normal\n",
+				this_cpu,
 				level == CORE_LEVEL ? "Core" : "Package");
 		return 1;
 	}
@@ -270,32 +272,58 @@ static void thermal_throttle_remove_dev(struct device *dev)
 }
 
 /* Get notified when a cpu comes on/off. Be hotplug friendly. */
-static int thermal_throttle_online(unsigned int cpu)
+static int
+thermal_throttle_cpu_callback(struct notifier_block *nfb,
+			      unsigned long action,
+			      void *hcpu)
 {
-	struct device *dev = get_cpu_device(cpu);
+	unsigned int cpu = (unsigned long)hcpu;
+	struct device *dev;
+	int err = 0;
 
-	return thermal_throttle_add_dev(dev, cpu);
+	dev = get_cpu_device(cpu);
+
+	switch (action) {
+	case CPU_UP_PREPARE:
+	case CPU_UP_PREPARE_FROZEN:
+		err = thermal_throttle_add_dev(dev, cpu);
+		WARN_ON(err);
+		break;
+	case CPU_UP_CANCELED:
+	case CPU_UP_CANCELED_FROZEN:
+	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
+		thermal_throttle_remove_dev(dev);
+		break;
+	}
+	return notifier_from_errno(err);
 }
 
-static int thermal_throttle_offline(unsigned int cpu)
+static struct notifier_block thermal_throttle_cpu_notifier =
 {
-	struct device *dev = get_cpu_device(cpu);
-
-	thermal_throttle_remove_dev(dev);
-	return 0;
-}
+	.notifier_call = thermal_throttle_cpu_callback,
+};
 
 static __init int thermal_throttle_init_device(void)
 {
-	int ret;
+	unsigned int cpu = 0;
+	int err;
 
 	if (!atomic_read(&therm_throt_en))
 		return 0;
 
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "x86/therm:online",
-				thermal_throttle_online,
-				thermal_throttle_offline);
-	return ret < 0 ? ret : 0;
+	cpu_notifier_register_begin();
+
+	/* connect live CPUs to sysfs */
+	for_each_online_cpu(cpu) {
+		err = thermal_throttle_add_dev(get_cpu_device(cpu), cpu);
+		WARN_ON(err);
+	}
+
+	__register_hotcpu_notifier(&thermal_throttle_cpu_notifier);
+	cpu_notifier_register_done();
+
+	return 0;
 }
 device_initcall(thermal_throttle_init_device);
 
@@ -357,9 +385,6 @@ static void intel_thermal_interrupt(void)
 {
 	__u64 msr_val;
 
-	if (static_cpu_has(X86_FEATURE_HWP))
-		wrmsrl_safe(MSR_HWP_STATUS, 0);
-
 	rdmsrl(MSR_IA32_THERM_STATUS, msr_val);
 
 	/* Check for violation of core thermal thresholds*/
@@ -392,8 +417,8 @@ static void intel_thermal_interrupt(void)
 
 static void unexpected_thermal_interrupt(void)
 {
-	pr_err("CPU%d: Unexpected LVT thermal interrupt!\n",
-		smp_processor_id());
+	printk(KERN_ERR "CPU%d: Unexpected LVT thermal interrupt!\n",
+			smp_processor_id());
 }
 
 static void (*smp_thermal_vector)(void) = unexpected_thermal_interrupt;
@@ -423,7 +448,7 @@ asmlinkage __visible void smp_trace_thermal_interrupt(struct pt_regs *regs)
 /* Thermal monitoring depends on APIC, ACPI and clock modulation */
 static int intel_thermal_supported(struct cpuinfo_x86 *c)
 {
-	if (!boot_cpu_has(X86_FEATURE_APIC))
+	if (!cpu_has_apic)
 		return 0;
 	if (!cpu_has(c, X86_FEATURE_ACPI) || !cpu_has(c, X86_FEATURE_ACC))
 		return 0;
@@ -473,8 +498,16 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 
 
 	if ((l & MSR_IA32_MISC_ENABLE_TM1) && (h & APIC_DM_SMI)) {
-		if (system_state == SYSTEM_BOOTING)
-			pr_debug("CPU%d: Thermal monitoring handled by SMI\n", cpu);
+		printk(KERN_DEBUG
+		       "CPU%d: Thermal monitoring handled by SMI\n", cpu);
+		return;
+	}
+
+	/* Check whether a vector already exists */
+	if (h & APIC_VECTOR_MASK) {
+		printk(KERN_DEBUG
+		       "CPU%d: Thermal LVT vector (%#x) already installed\n",
+		       cpu, (h & APIC_VECTOR_MASK));
 		return;
 	}
 
@@ -532,8 +565,8 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 	l = apic_read(APIC_LVTTHMR);
 	apic_write(APIC_LVTTHMR, l & ~APIC_LVT_MASKED);
 
-	pr_info_once("CPU0: Thermal monitoring enabled (%s)\n",
-		      tm2 ? "TM2" : "TM1");
+	printk_once(KERN_INFO "CPU0: Thermal monitoring enabled (%s)\n",
+		       tm2 ? "TM2" : "TM1");
 
 	/* enable thermal throttle processing */
 	atomic_set(&therm_throt_en, 1);

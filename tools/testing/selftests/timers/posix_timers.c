@@ -15,8 +15,6 @@
 #include <time.h>
 #include <pthread.h>
 
-#include "../kselftest.h"
-
 #define DELAY 2
 #define USECS_PER_SEC 1000000
 
@@ -35,11 +33,10 @@ static void user_loop(void)
 static void kernel_loop(void)
 {
 	void *addr = sbrk(0);
-	int err = 0;
 
-	while (!done && !err) {
-		err = brk(addr + 4096);
-		err |= brk(addr);
+	while (!done) {
+		brk(addr + 4096);
+		brk(addr);
 	}
 }
 
@@ -122,7 +119,7 @@ static int check_itimer(int which)
 	else if (which == ITIMER_REAL)
 		idle_loop();
 
-	err = gettimeofday(&end, NULL);
+	gettimeofday(&end, NULL);
 	if (err < 0) {
 		perror("Can't call gettimeofday()\n");
 		return -1;
@@ -175,7 +172,7 @@ static int check_timer_create(int which)
 
 	user_loop();
 
-	err = gettimeofday(&end, NULL);
+	gettimeofday(&end, NULL);
 	if (err < 0) {
 		perror("Can't call gettimeofday()\n");
 		return -1;
@@ -191,20 +188,22 @@ static int check_timer_create(int which)
 
 int main(int argc, char **argv)
 {
+	int err;
+
 	printf("Testing posix timers. False negative may happen on CPU execution \n");
 	printf("based timers if other threads run on the CPU...\n");
 
 	if (check_itimer(ITIMER_VIRTUAL) < 0)
-		return ksft_exit_fail();
+		return -1;
 
 	if (check_itimer(ITIMER_PROF) < 0)
-		return ksft_exit_fail();
+		return -1;
 
 	if (check_itimer(ITIMER_REAL) < 0)
-		return ksft_exit_fail();
+		return -1;
 
 	if (check_timer_create(CLOCK_THREAD_CPUTIME_ID) < 0)
-		return ksft_exit_fail();
+		return -1;
 
 	/*
 	 * It's unfortunately hard to reliably test a timer expiration
@@ -216,7 +215,7 @@ int main(int argc, char **argv)
 	 * find a better solution.
 	 */
 	if (check_timer_create(CLOCK_PROCESS_CPUTIME_ID) < 0)
-		return ksft_exit_fail();
+		return -1;
 
-	return ksft_exit_pass();
+	return 0;
 }

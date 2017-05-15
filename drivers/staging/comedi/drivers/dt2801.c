@@ -4,30 +4,30 @@
  *
  */
 /*
- * Driver: dt2801
- * Description: Data Translation DT2801 series and DT01-EZ
- * Author: ds
- * Status: works
- * Devices: [Data Translation] DT2801 (dt2801), DT2801-A, DT2801/5716A,
- * DT2805, DT2805/5716A, DT2808, DT2818, DT2809, DT01-EZ
- *
- * This driver can autoprobe the type of board.
- *
- * Configuration options:
- * [0] - I/O port base address
- * [1] - unused
- * [2] - A/D reference 0=differential, 1=single-ended
- * [3] - A/D range
- *	  0 = [-10, 10]
- *	  1 = [0,10]
- * [4] - D/A 0 range
- *	  0 = [-10, 10]
- *	  1 = [-5,5]
- *	  2 = [-2.5,2.5]
- *	  3 = [0,10]
- *	  4 = [0,5]
- * [5] - D/A 1 range (same choices)
- */
+Driver: dt2801
+Description: Data Translation DT2801 series and DT01-EZ
+Author: ds
+Status: works
+Devices: [Data Translation] DT2801 (dt2801), DT2801-A, DT2801/5716A,
+  DT2805, DT2805/5716A, DT2808, DT2818, DT2809, DT01-EZ
+
+This driver can autoprobe the type of board.
+
+Configuration options:
+  [0] - I/O port base address
+  [1] - unused
+  [2] - A/D reference 0=differential, 1=single-ended
+  [3] - A/D range
+	  0 = [-10, 10]
+	  1 = [0,10]
+  [4] - D/A 0 range
+	  0 = [-10, 10]
+	  1 = [-5,5]
+	  2 = [-2.5,2.5]
+	  3 = [0,10]
+	  4 = [0,5]
+  [5] - D/A 1 range (same choices)
+*/
 
 #include <linux/module.h>
 #include "../comedidev.h"
@@ -39,6 +39,9 @@
 /* ====================== */
 
 #define DT2801_MAX_DMA_SIZE (64 * 1024)
+
+/* Ports */
+#define DT2801_IOSIZE 2
 
 /* define's */
 /* ====================== */
@@ -65,21 +68,20 @@
 #define DT_C_SET_AD      0xd
 #define DT_C_READ_AD     0xe
 
-/*
- * Command modifiers (only used with read/write), EXTTRIG can be
- * used with some other commands.
- */
-#define DT_MOD_DMA     BIT(4)
-#define DT_MOD_CONT    BIT(5)
-#define DT_MOD_EXTCLK  BIT(6)
-#define DT_MOD_EXTTRIG BIT(7)
+/* Command modifiers (only used with read/write), EXTTRIG can be
+   used with some other commands.
+*/
+#define DT_MOD_DMA     (1<<4)
+#define DT_MOD_CONT    (1<<5)
+#define DT_MOD_EXTCLK  (1<<6)
+#define DT_MOD_EXTTRIG (1<<7)
 
 /* Bits in status register */
-#define DT_S_DATA_OUT_READY   BIT(0)
-#define DT_S_DATA_IN_FULL     BIT(1)
-#define DT_S_READY            BIT(2)
-#define DT_S_COMMAND          BIT(3)
-#define DT_S_COMPOSITE_ERROR  BIT(7)
+#define DT_S_DATA_OUT_READY   (1<<0)
+#define DT_S_DATA_IN_FULL     (1<<1)
+#define DT_S_READY            (1<<2)
+#define DT_S_COMMAND          (1<<3)
+#define DT_S_COMPOSITE_ERROR  (1<<7)
 
 /* registers */
 #define DT2801_DATA		0
@@ -127,6 +129,7 @@ static const struct comedi_lrange range_dt2801_ai_pgl_unipolar = {
 };
 
 struct dt2801_board {
+
 	const char *name;
 	int boardcode;
 	int ad_diff;
@@ -136,10 +139,9 @@ struct dt2801_board {
 	int dabits;
 };
 
-/*
- * Typeid's for the different boards of the DT2801-series
- * (taken from the test-software, that comes with the board)
- */
+/* Typeid's for the different boards of the DT2801-series
+   (taken from the test-software, that comes with the board)
+   */
 static const struct dt2801_board boardtypes[] = {
 	{
 	 .name = "dt2801",
@@ -208,21 +210,20 @@ static const struct dt2801_board boardtypes[] = {
 };
 
 struct dt2801_private {
+
 	const struct comedi_lrange *dac_range_types[2];
+	unsigned int ao_readback[2];
 };
 
-/*
- * These are the low-level routines:
- * writecommand: write a command to the board
- * writedata: write data byte
- * readdata: read data byte
+/* These are the low-level routines:
+   writecommand: write a command to the board
+   writedata: write data byte
+   readdata: read data byte
  */
 
-/*
- * Only checks DataOutReady-flag, not the Ready-flag as it is done
- *  in the examples of the manual. I don't see why this should be
- *  necessary.
- */
+/* Only checks DataOutReady-flag, not the Ready-flag as it is done
+   in the examples of the manual. I don't see why this should be
+   necessary. */
 static int dt2801_readdata(struct comedi_device *dev, int *data)
 {
 	int stat = 0;
@@ -284,7 +285,7 @@ static int dt2801_writedata2(struct comedi_device *dev, unsigned int data)
 	ret = dt2801_writedata(dev, data & 0xff);
 	if (ret < 0)
 		return ret;
-	ret = dt2801_writedata(dev, data >> 8);
+	ret = dt2801_writedata(dev, (data >> 8));
 	if (ret < 0)
 		return ret;
 
@@ -311,7 +312,7 @@ static int dt2801_wait_for_ready(struct comedi_device *dev)
 	return -ETIME;
 }
 
-static void dt2801_writecmd(struct comedi_device *dev, int command)
+static int dt2801_writecmd(struct comedi_device *dev, int command)
 {
 	int stat;
 
@@ -325,6 +326,8 @@ static void dt2801_writecmd(struct comedi_device *dev, int command)
 	if (!(stat & DT_S_READY))
 		dev_dbg(dev->class_dev, "!ready in %s, ignoring\n", __func__);
 	outb_p(command, dev->iobase + DT2801_CMD);
+
+	return 0;
 }
 
 static int dt2801_reset(struct comedi_device *dev)
@@ -380,7 +383,7 @@ static int probe_number_of_ai_chans(struct comedi_device *dev)
 	int data;
 
 	for (n_chans = 0; n_chans < 16; n_chans++) {
-		dt2801_writecmd(dev, DT_C_READ_ADIM);
+		stat = dt2801_writecmd(dev, DT_C_READ_ADIM);
 		dt2801_writedata(dev, 0);
 		dt2801_writedata(dev, n_chans);
 		stat = dt2801_readdata2(dev, &data);
@@ -451,7 +454,7 @@ static int dt2801_ai_insn_read(struct comedi_device *dev,
 	int i;
 
 	for (i = 0; i < insn->n; i++) {
-		dt2801_writecmd(dev, DT_C_READ_ADIM);
+		stat = dt2801_writecmd(dev, DT_C_READ_ADIM);
 		dt2801_writedata(dev, CR_RANGE(insn->chanspec));
 		dt2801_writedata(dev, CR_CHAN(insn->chanspec));
 		stat = dt2801_readdata2(dev, &d);
@@ -465,18 +468,28 @@ static int dt2801_ai_insn_read(struct comedi_device *dev,
 	return i;
 }
 
+static int dt2801_ao_insn_read(struct comedi_device *dev,
+			       struct comedi_subdevice *s,
+			       struct comedi_insn *insn, unsigned int *data)
+{
+	struct dt2801_private *devpriv = dev->private;
+
+	data[0] = devpriv->ao_readback[CR_CHAN(insn->chanspec)];
+
+	return 1;
+}
+
 static int dt2801_ao_insn_write(struct comedi_device *dev,
 				struct comedi_subdevice *s,
-				struct comedi_insn *insn,
-				unsigned int *data)
+				struct comedi_insn *insn, unsigned int *data)
 {
-	unsigned int chan = CR_CHAN(insn->chanspec);
+	struct dt2801_private *devpriv = dev->private;
 
 	dt2801_writecmd(dev, DT_C_WRITE_DAIM);
-	dt2801_writedata(dev, chan);
+	dt2801_writedata(dev, CR_CHAN(insn->chanspec));
 	dt2801_writedata2(dev, data[0]);
 
-	s->readback[chan] = data[0];
+	devpriv->ao_readback[CR_CHAN(insn->chanspec)] = data[0];
 
 	return 1;
 }
@@ -522,14 +535,14 @@ static int dt2801_dio_insn_config(struct comedi_device *dev,
 }
 
 /*
- * options:
- *	[0] - i/o base
- *	[1] - unused
- *	[2] - a/d 0=differential, 1=single-ended
- *	[3] - a/d range 0=[-10,10], 1=[0,10]
- *	[4] - dac0 range 0=[-10,10], 1=[-5,5], 2=[-2.5,2.5] 3=[0,10], 4=[0,5]
- *	[5] - dac1 range 0=[-10,10], 1=[-5,5], 2=[-2.5,2.5] 3=[0,10], 4=[0,5]
- */
+   options:
+	[0] - i/o base
+	[1] - unused
+	[2] - a/d 0=differential, 1=single-ended
+	[3] - a/d range 0=[-10,10], 1=[0,10]
+	[4] - dac0 range 0=[-10,10], 1=[-5,5], 2=[-2.5,2.5] 3=[0,10], 4=[0,5]
+	[5] - dac1 range 0=[-10,10], 1=[-5,5], 2=[-2.5,2.5] 3=[0,10], 4=[0,5]
+*/
 static int dt2801_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 {
 	const struct dt2801_board *board;
@@ -539,7 +552,7 @@ static int dt2801_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	int ret = 0;
 	int n_ai_chans;
 
-	ret = comedi_request_region(dev, it->options[0], 0x2);
+	ret = comedi_request_region(dev, it->options[0], DT2801_IOSIZE);
 	if (ret)
 		return ret;
 
@@ -561,7 +574,7 @@ static int dt2801_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 
 havetype:
 	dev->board_ptr = boardtypes + type;
-	board = dev->board_ptr;
+	board = comedi_board(dev);
 
 	n_ai_chans = probe_number_of_ai_chans(dev);
 
@@ -600,11 +613,8 @@ havetype:
 	s->range_table_list = devpriv->dac_range_types;
 	devpriv->dac_range_types[0] = dac_range_lkup(it->options[4]);
 	devpriv->dac_range_types[1] = dac_range_lkup(it->options[5]);
+	s->insn_read = dt2801_ao_insn_read;
 	s->insn_write = dt2801_ao_insn_write;
-
-	ret = comedi_alloc_subdev_readback(s);
-	if (ret)
-		return ret;
 
 	s = &dev->subdevices[2];
 	/* 1st digital subdevice */

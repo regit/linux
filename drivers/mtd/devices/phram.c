@@ -17,7 +17,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/io.h>
+#include <asm/io.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -181,9 +181,11 @@ static int parse_name(char **pname, const char *token)
 	if (len > 64)
 		return -ENOSPC;
 
-	name = kstrdup(token, GFP_KERNEL);
+	name = kmalloc(len, GFP_KERNEL);
 	if (!name)
 		return -ENOMEM;
+
+	strcpy(name, token);
 
 	*pname = name;
 	return 0;
@@ -193,7 +195,6 @@ static int parse_name(char **pname, const char *token)
 static inline void kill_final_newline(char *str)
 {
 	char *newline = strrchr(str, '\n');
-
 	if (newline && !newline[1])
 		*newline = 0;
 }
@@ -232,7 +233,7 @@ static int phram_setup(const char *val)
 	strcpy(str, val);
 	kill_final_newline(str);
 
-	for (i = 0; i < 3; i++)
+	for (i=0; i<3; i++)
 		token[i] = strsep(&str, ",");
 
 	if (str)

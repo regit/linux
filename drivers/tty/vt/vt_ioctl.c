@@ -29,7 +29,7 @@
 #include <linux/timex.h>
 
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <linux/kbd_kern.h>
 #include <linux/vt_kern.h>
@@ -388,7 +388,7 @@ int vt_ioctl(struct tty_struct *tty,
 		 * Generate the tone for the appropriate number of ticks.
 		 * If the time is zero, turn off sound ourselves.
 		 */
-		ticks = msecs_to_jiffies((arg >> 16) & 0xffff);
+		ticks = HZ * ((arg >> 16) & 0xffff) / 1000;
 		count = ticks ? (arg & 0xffff) : 0;
 		if (count)
 			count = PIT_TICK_RATE / count;
@@ -1006,10 +1006,16 @@ int vt_ioctl(struct tty_struct *tty,
 		break;
 
 	case PIO_UNIMAPCLR:
+	      { struct unimapinit ui;
 		if (!perm)
 			return -EPERM;
-		con_clear_unimap(vc);
+		ret = copy_from_user(&ui, up, sizeof(struct unimapinit));
+		if (ret)
+			ret = -EFAULT;
+		else
+			con_clear_unimap(vc, &ui);
 		break;
+	      }
 
 	case PIO_UNIMAP:
 	case GIO_UNIMAP:

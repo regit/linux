@@ -2,7 +2,7 @@
  * Copyright 2000 by Hans Reiser, licensing governed by reiserfs/README
  */
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/string.h>
 #include <linux/time.h>
 #include "reiserfs.h"
@@ -1153,9 +1153,8 @@ int balance_internal(struct tree_balance *tb,
 				       insert_ptr);
 	}
 
+	memcpy(new_insert_key_addr, &new_insert_key, KEY_SIZE);
 	insert_ptr[0] = new_insert_ptr;
-	if (new_insert_ptr)
-		memcpy(new_insert_key_addr, &new_insert_key, KEY_SIZE);
 
 	return order;
 }

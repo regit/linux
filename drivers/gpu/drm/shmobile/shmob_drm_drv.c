@@ -1,7 +1,7 @@
 /*
  * shmob_drm_drv.c  --  SH Mobile DRM driver
  *
- * Copyright (C) 2012 Renesas Electronics Corporation
+ * Copyright (C) 2012 Renesas Corporation
  *
  * Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
@@ -200,6 +200,13 @@ done:
 	return ret;
 }
 
+static void shmob_drm_preclose(struct drm_device *dev, struct drm_file *file)
+{
+	struct shmob_drm_device *sdev = dev->dev_private;
+
+	shmob_drm_crtc_cancel_page_flip(&sdev->crtc, file);
+}
+
 static irqreturn_t shmob_drm_irq(int irq, void *arg)
 {
 	struct drm_device *dev = arg;
@@ -224,7 +231,7 @@ static irqreturn_t shmob_drm_irq(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static int shmob_drm_enable_vblank(struct drm_device *dev, unsigned int pipe)
+static int shmob_drm_enable_vblank(struct drm_device *dev, int crtc)
 {
 	struct shmob_drm_device *sdev = dev->dev_private;
 
@@ -233,7 +240,7 @@ static int shmob_drm_enable_vblank(struct drm_device *dev, unsigned int pipe)
 	return 0;
 }
 
-static void shmob_drm_disable_vblank(struct drm_device *dev, unsigned int pipe)
+static void shmob_drm_disable_vblank(struct drm_device *dev, int crtc)
 {
 	struct shmob_drm_device *sdev = dev->dev_private;
 
@@ -245,7 +252,9 @@ static const struct file_operations shmob_drm_fops = {
 	.open		= drm_open,
 	.release	= drm_release,
 	.unlocked_ioctl	= drm_ioctl,
+#ifdef CONFIG_COMPAT
 	.compat_ioctl	= drm_compat_ioctl,
+#endif
 	.poll		= drm_poll,
 	.read		= drm_read,
 	.llseek		= no_llseek,
@@ -257,11 +266,12 @@ static struct drm_driver shmob_drm_driver = {
 				| DRIVER_PRIME,
 	.load			= shmob_drm_load,
 	.unload			= shmob_drm_unload,
+	.preclose		= shmob_drm_preclose,
 	.irq_handler		= shmob_drm_irq,
-	.get_vblank_counter	= drm_vblank_no_hw_counter,
+	.get_vblank_counter	= drm_vblank_count,
 	.enable_vblank		= shmob_drm_enable_vblank,
 	.disable_vblank		= shmob_drm_disable_vblank,
-	.gem_free_object_unlocked = drm_gem_cma_free_object,
+	.gem_free_object	= drm_gem_cma_free_object,
 	.gem_vm_ops		= &drm_gem_cma_vm_ops,
 	.prime_handle_to_fd	= drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle	= drm_gem_prime_fd_to_handle,
@@ -287,7 +297,7 @@ static struct drm_driver shmob_drm_driver = {
  * Power management
  */
 
-#ifdef CONFIG_PM_SLEEP
+#if CONFIG_PM_SLEEP
 static int shmob_drm_pm_suspend(struct device *dev)
 {
 	struct shmob_drm_device *sdev = dev_get_drvdata(dev);
@@ -337,6 +347,7 @@ static struct platform_driver shmob_drm_platform_driver = {
 	.probe		= shmob_drm_probe,
 	.remove		= shmob_drm_remove,
 	.driver		= {
+		.owner	= THIS_MODULE,
 		.name	= "shmob-drm",
 		.pm	= &shmob_drm_pm_ops,
 	},

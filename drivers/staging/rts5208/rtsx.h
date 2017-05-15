@@ -37,7 +37,7 @@
 #include <linux/cdrom.h>
 #include <linux/workqueue.h>
 #include <linux/timer.h>
-#include <linux/time64.h>
+#include <linux/time.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -46,7 +46,14 @@
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_host.h>
 
+#include "debug.h"
+#include "trace.h"
+#include "general.h"
+
 #define CR_DRIVER_NAME		"rts5208"
+
+#define pci_get_bus_and_slot(bus, devfn)	\
+	pci_get_domain_bus_and_slot(0, (bus), (devfn))
 
 /*
  * macros for easy use
@@ -70,12 +77,13 @@
 #define rtsx_write_config_byte(chip, where, val) \
 	pci_write_config_byte((chip)->rtsx->pci, where, val)
 
-#define wait_timeout_x(task_state, msecs)	\
-do {						\
-	set_current_state((task_state));	\
-	schedule_timeout((msecs) * HZ / 1000);	\
+#define wait_timeout_x(task_state, msecs)		\
+do {							\
+		set_current_state((task_state));	\
+		schedule_timeout((msecs) * HZ / 1000);	\
 } while (0)
 #define wait_timeout(msecs)	wait_timeout_x(TASK_INTERRUPTIBLE, (msecs))
+
 
 #define STATE_TRANS_NONE	0
 #define STATE_TRANS_CMD		1
@@ -87,6 +95,8 @@ do {						\
 #define TRANS_RESULT_FAIL	2
 
 #define SCSI_LUN(srb)		((srb)->device->lun)
+
+typedef unsigned long DELAY_PARA_T;
 
 struct rtsx_chip;
 
@@ -128,43 +138,39 @@ struct rtsx_dev {
 	struct rtsx_chip	*chip;
 };
 
+typedef struct rtsx_dev rtsx_dev_t;
+
 /* Convert between rtsx_dev and the corresponding Scsi_Host */
 static inline struct Scsi_Host *rtsx_to_host(struct rtsx_dev *dev)
 {
-	return container_of((void *)dev, struct Scsi_Host, hostdata);
+	return container_of((void *) dev, struct Scsi_Host, hostdata);
 }
-
 static inline struct rtsx_dev *host_to_rtsx(struct Scsi_Host *host)
 {
-	return (struct rtsx_dev *)host->hostdata;
+	return (struct rtsx_dev *) host->hostdata;
 }
 
 static inline void get_current_time(u8 *timeval_buf, int buf_len)
 {
-	struct timespec64 ts64;
-	u32 tv_usec;
+	struct timeval tv;
 
 	if (!timeval_buf || (buf_len < 8))
 		return;
 
-	getnstimeofday64(&ts64);
+	do_gettimeofday(&tv);
 
-	tv_usec = ts64.tv_nsec / NSEC_PER_USEC;
-
-	timeval_buf[0] = (u8)(ts64.tv_sec >> 24);
-	timeval_buf[1] = (u8)(ts64.tv_sec >> 16);
-	timeval_buf[2] = (u8)(ts64.tv_sec >> 8);
-	timeval_buf[3] = (u8)(ts64.tv_sec);
-	timeval_buf[4] = (u8)(tv_usec >> 24);
-	timeval_buf[5] = (u8)(tv_usec >> 16);
-	timeval_buf[6] = (u8)(tv_usec >> 8);
-	timeval_buf[7] = (u8)(tv_usec);
+	timeval_buf[0] = (u8)(tv.tv_sec >> 24);
+	timeval_buf[1] = (u8)(tv.tv_sec >> 16);
+	timeval_buf[2] = (u8)(tv.tv_sec >> 8);
+	timeval_buf[3] = (u8)(tv.tv_sec);
+	timeval_buf[4] = (u8)(tv.tv_usec >> 24);
+	timeval_buf[5] = (u8)(tv.tv_usec >> 16);
+	timeval_buf[6] = (u8)(tv.tv_usec >> 8);
+	timeval_buf[7] = (u8)(tv.tv_usec);
 }
 
-/*
- * The scsi_lock() and scsi_unlock() macros protect the sm_state and the
- * single queue element srb for write access
- */
+/* The scsi_lock() and scsi_unlock() macros protect the sm_state and the
+ * single queue element srb for write access */
 #define scsi_unlock(host)	spin_unlock_irq(host->host_lock)
 #define scsi_lock(host)		spin_lock_irq(host->host_lock)
 
@@ -175,15 +181,5 @@ static inline void get_current_time(u8 *timeval_buf, int buf_len)
 enum xfer_buf_dir	{TO_XFER_BUF, FROM_XFER_BUF};
 
 int rtsx_read_pci_cfg_byte(u8 bus, u8 dev, u8 func, u8 offset, u8 *val);
-
-#define _MSG_TRACE
-
-#include "trace.h"
-#include "rtsx_chip.h"
-#include "rtsx_transport.h"
-#include "rtsx_scsi.h"
-#include "rtsx_card.h"
-#include "rtsx_sys.h"
-#include "general.h"
 
 #endif  /* __REALTEK_RTSX_H */

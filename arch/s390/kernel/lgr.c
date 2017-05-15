@@ -5,8 +5,7 @@
  * Author(s): Michael Holzheu <holzheu@linux.vnet.ibm.com>
  */
 
-#include <linux/init.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/timer.h>
 #include <linux/slab.h>
 #include <asm/facility.h>
@@ -184,4 +183,4 @@ static int __init lgr_init(void)
 	lgr_timer_set();
 	return 0;
 }
-device_initcall(lgr_init);
+module_init(lgr_init);

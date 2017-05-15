@@ -223,7 +223,6 @@ static struct s3c2410_platform_nand __initdata anubis_nand_info = {
 	.nr_sets	= ARRAY_SIZE(anubis_nand_sets),
 	.sets		= anubis_nand_sets,
 	.select_chip	= anubis_nand_select,
-	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 /* IDE channels */
@@ -431,4 +430,5 @@ MACHINE_START(ANUBIS, "Simtec-Anubis")
 	.init_machine	= anubis_init,
 	.init_irq	= s3c2440_init_irq,
 	.init_time	= anubis_init_time,
+	.restart	= s3c244x_restart,
 MACHINE_END

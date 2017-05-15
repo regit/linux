@@ -12,6 +12,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
  * File: rxtx.h
  *
@@ -30,15 +33,13 @@
 #include "wcmd.h"
 #include "baseband.h"
 
-#define DEFAULT_MGN_LIFETIME_RES_64us	125  /* 64us */
-#define DEFAULT_MSDU_LIFETIME_RES_64us  8000
-
 /* MIC HDR data header */
 struct vnt_mic_hdr {
 	u8 id;
 	u8 tx_priority;
 	u8 mic_addr2[6];
-	u8 ccmp_pn[IEEE80211_CCMP_PN_LEN];
+	__be32 tsc_47_16;
+	__be16 tsc_15_0;
 	__be16 payload_len;
 	__be16 hlen;
 	__le16 frame_control;
@@ -80,7 +81,6 @@ struct vnt_tx_datahead_g {
 	__le16 duration_a;
 	__le16 time_stamp_off_b;
 	__le16 time_stamp_off_a;
-	struct ieee80211_hdr hdr;
 } __packed;
 
 struct vnt_tx_datahead_g_fb {
@@ -92,14 +92,12 @@ struct vnt_tx_datahead_g_fb {
 	__le16 duration_a_f1;
 	__le16 time_stamp_off_b;
 	__le16 time_stamp_off_a;
-	struct ieee80211_hdr hdr;
 } __packed;
 
 struct vnt_tx_datahead_ab {
 	struct vnt_phy_field ab;
 	__le16 duration;
 	__le16 time_stamp_off;
-	struct ieee80211_hdr hdr;
 } __packed;
 
 struct vnt_tx_datahead_a_fb {
@@ -108,7 +106,6 @@ struct vnt_tx_datahead_a_fb {
 	__le16 time_stamp_off;
 	__le16 duration_f0;
 	__le16 duration_f1;
-	struct ieee80211_hdr hdr;
 } __packed;
 
 /* RTS buffer header */
@@ -218,23 +215,23 @@ union vnt_tx_head {
 };
 
 struct vnt_tx_fifo_head {
-	u8 tx_key[WLAN_KEY_LEN_CCMP];
-	__le16 fifo_ctl;
+	u32 adwTxKey[4];
+	u16 wFIFOCtl;
 	__le16 time_stamp;
-	__le16 frag_ctl;
+	u16 wFragCtl;
 	__le16 current_rate;
 } __packed;
 
 struct vnt_tx_buffer {
-	u8 type;
-	u8 pkt_no;
+	u8 byType;
+	u8 byPKTNO;
 	__le16 tx_byte_count;
 	struct vnt_tx_fifo_head fifo_head;
 	union vnt_tx_head tx_head;
 } __packed;
 
 struct vnt_tx_short_buf_head {
-	__le16 fifo_ctl;
+	u16 fifo_ctl;
 	u16 time_stamp;
 	struct vnt_phy_field ab;
 	__le16 duration;
@@ -242,16 +239,16 @@ struct vnt_tx_short_buf_head {
 } __packed;
 
 struct vnt_beacon_buffer {
-	u8 type;
-	u8 pkt_no;
+	u8 byType;
+	u8 byPKTNO;
 	__le16 tx_byte_count;
 	struct vnt_tx_short_buf_head short_head;
-	struct ieee80211_mgmt mgmt_hdr;
+	struct ieee80211_hdr hdr;
 } __packed;
 
-int vnt_tx_packet(struct vnt_private *, struct sk_buff *);
-int vnt_beacon_make(struct vnt_private *, struct ieee80211_vif *);
-int vnt_beacon_enable(struct vnt_private *, struct ieee80211_vif *,
-	struct ieee80211_bss_conf *);
+void vDMA0_tx_80211(struct vnt_private *, struct sk_buff *skb);
+int nsDMA_tx_packet(struct vnt_private *, struct sk_buff *skb);
+CMD_STATUS csMgmt_xmit(struct vnt_private *, struct vnt_tx_mgmt *);
+CMD_STATUS csBeacon_xmit(struct vnt_private *, struct vnt_tx_mgmt *);
 
 #endif /* __RXTX_H__ */

@@ -125,7 +125,7 @@ void menu_set_type(int type)
 		sym_type_name(sym->type), sym_type_name(type));
 }
 
-static struct property *menu_add_prop(enum prop_type type, char *prompt, struct expr *expr, struct expr *dep)
+struct property *menu_add_prop(enum prop_type type, char *prompt, struct expr *expr, struct expr *dep)
 {
 	struct property *prop = prop_alloc(type, current_entry->sym);
 
@@ -233,8 +233,6 @@ static void sym_check_prop(struct symbol *sym)
 {
 	struct property *prop;
 	struct symbol *sym2;
-	char *use;
-
 	for (prop = sym->prop; prop; prop = prop->next) {
 		switch (prop->type) {
 		case P_DEFAULT:
@@ -254,20 +252,18 @@ static void sym_check_prop(struct symbol *sym)
 			}
 			break;
 		case P_SELECT:
-		case P_IMPLY:
-			use = prop->type == P_SELECT ? "select" : "imply";
 			sym2 = prop_get_symbol(prop);
 			if (sym->type != S_BOOLEAN && sym->type != S_TRISTATE)
 				prop_warn(prop,
-				    "config symbol '%s' uses %s, but is "
-				    "not boolean or tristate", sym->name, use);
+				    "config symbol '%s' uses select, but is "
+				    "not boolean or tristate", sym->name);
 			else if (sym2->type != S_UNKNOWN &&
 				 sym2->type != S_BOOLEAN &&
 				 sym2->type != S_TRISTATE)
 				prop_warn(prop,
-				    "'%s' has wrong type. '%s' only "
+				    "'%s' has wrong type. 'select' only "
 				    "accept arguments of boolean and "
-				    "tristate type", sym2->name, use);
+				    "tristate type", sym2->name);
 			break;
 		case P_RANGE:
 			if (sym->type != S_INT && sym->type != S_HEX)
@@ -336,10 +332,6 @@ void menu_finalize(struct menu *parent)
 				if (prop->type == P_SELECT) {
 					struct symbol *es = prop_get_symbol(prop);
 					es->rev_dep.expr = expr_alloc_or(es->rev_dep.expr,
-							expr_alloc_and(expr_alloc_symbol(menu->sym), expr_copy(dep)));
-				} else if (prop->type == P_IMPLY) {
-					struct symbol *es = prop_get_symbol(prop);
-					es->implied.expr = expr_alloc_or(es->implied.expr,
 							expr_alloc_and(expr_alloc_symbol(menu->sym), expr_copy(dep)));
 				}
 			}
@@ -485,7 +477,7 @@ bool menu_is_visible(struct menu *menu)
 
 	if (menu->visibility) {
 		if (expr_calc_value(menu->visibility) == no)
-			return false;
+			return no;
 	}
 
 	sym = menu->sym;
@@ -556,7 +548,7 @@ static void get_prompt_str(struct gstr *r, struct property *prop,
 {
 	int i, j;
 	struct menu *submenu[8], *menu, *location = NULL;
-	struct jump_key *jump = NULL;
+	struct jump_key *jump;
 
 	str_printf(r, _("Prompt: %s\n"), _(prop->text));
 	menu = prop->menu->parent;
@@ -594,7 +586,7 @@ static void get_prompt_str(struct gstr *r, struct property *prop,
 		str_printf(r, _("  Location:\n"));
 		for (j = 4; --i >= 0; j += 2) {
 			menu = submenu[i];
-			if (jump && menu == location)
+			if (head && location && menu == location)
 				jump->offset = strlen(r->s);
 			str_printf(r, "%*c-> %s", j, ' ',
 				   _(menu_get_prompt(menu)));
@@ -620,30 +612,13 @@ static struct property *get_symbol_prop(struct symbol *sym)
 	return prop;
 }
 
-static void get_symbol_props_str(struct gstr *r, struct symbol *sym,
-				 enum prop_type tok, const char *prefix)
-{
-	bool hit = false;
-	struct property *prop;
-
-	for_all_properties(sym, prop, tok) {
-		if (!hit) {
-			str_append(r, prefix);
-			hit = true;
-		} else
-			str_printf(r, " && ");
-		expr_gstr_print(prop->expr, r);
-	}
-	if (hit)
-		str_append(r, "\n");
-}
-
 /*
  * head is optional and may be NULL
  */
-static void get_symbol_str(struct gstr *r, struct symbol *sym,
+void get_symbol_str(struct gstr *r, struct symbol *sym,
 		    struct list_head *head)
 {
+	bool hit;
 	struct property *prop;
 
 	if (sym && sym->name) {
@@ -673,20 +648,22 @@ static void get_symbol_str(struct gstr *r, struct symbol *sym,
 		}
 	}
 
-	get_symbol_props_str(r, sym, P_SELECT, _("  Selects: "));
+	hit = false;
+	for_all_properties(sym, prop, P_SELECT) {
+		if (!hit) {
+			str_append(r, "  Selects: ");
+			hit = true;
+		} else
+			str_printf(r, " && ");
+		expr_gstr_print(prop->expr, r);
+	}
+	if (hit)
+		str_append(r, "\n");
 	if (sym->rev_dep.expr) {
 		str_append(r, _("  Selected by: "));
 		expr_gstr_print(sym->rev_dep.expr, r);
 		str_append(r, "\n");
 	}
-
-	get_symbol_props_str(r, sym, P_IMPLY, _("  Implies: "));
-	if (sym->implied.expr) {
-		str_append(r, _("  Implied by: "));
-		expr_gstr_print(sym->implied.expr, r);
-		str_append(r, "\n");
-	}
-
 	str_append(r, "\n\n");
 }
 

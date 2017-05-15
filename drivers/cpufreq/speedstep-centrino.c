@@ -13,8 +13,6 @@
  * Copyright (C) 2003 Jeremy Fitzhardinge <jeremy@goop.org>
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -29,6 +27,7 @@
 #include <asm/cpufeature.h>
 #include <asm/cpu_device_id.h>
 
+#define PFX		"speedstep-centrino: "
 #define MAINTAINER	"linux-pm@vger.kernel.org"
 
 #define INTEL_MSR_RANGE	(0xffff)
@@ -387,7 +386,8 @@ static int centrino_cpu_init(struct cpufreq_policy *policy)
 		/* check to see if it stuck */
 		rdmsr(MSR_IA32_MISC_ENABLE, l, h);
 		if (!(l & MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP)) {
-			pr_info("couldn't enable Enhanced SpeedStep\n");
+			printk(KERN_INFO PFX
+				"couldn't enable Enhanced SpeedStep\n");
 			return -ENODEV;
 		}
 	}

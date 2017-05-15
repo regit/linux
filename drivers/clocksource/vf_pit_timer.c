@@ -52,7 +52,7 @@ static inline void pit_irq_acknowledge(void)
 	__raw_writel(PITTFLG_TIF, clkevt_base + PITTFLG);
 }
 
-static u64 notrace pit_read_sched_clock(void)
+static u64 pit_read_sched_clock(void)
 {
 	return ~__raw_readl(clksrc_base + PITCVAL);
 }
@@ -86,16 +86,16 @@ static int pit_set_next_event(unsigned long delta,
 	return 0;
 }
 
-static int pit_shutdown(struct clock_event_device *evt)
+static void pit_set_mode(enum clock_event_mode mode,
+				struct clock_event_device *evt)
 {
-	pit_timer_disable();
-	return 0;
-}
-
-static int pit_set_periodic(struct clock_event_device *evt)
-{
-	pit_set_next_event(cycle_per_jiffy, evt);
-	return 0;
+	switch (mode) {
+	case CLOCK_EVT_MODE_PERIODIC:
+		pit_set_next_event(cycle_per_jiffy, evt);
+		break;
+	default:
+		break;
+	}
 }
 
 static irqreturn_t pit_timer_interrupt(int irq, void *dev_id)
@@ -110,7 +110,7 @@ static irqreturn_t pit_timer_interrupt(int irq, void *dev_id)
 	 * and start the counter again. So software need to disable the timer
 	 * to stop the counter loop in ONESHOT mode.
 	 */
-	if (likely(clockevent_state_oneshot(evt)))
+	if (likely(evt->mode == CLOCK_EVT_MODE_ONESHOT))
 		pit_timer_disable();
 
 	evt->event_handler(evt);
@@ -121,8 +121,7 @@ static irqreturn_t pit_timer_interrupt(int irq, void *dev_id)
 static struct clock_event_device clockevent_pit = {
 	.name		= "VF pit timer",
 	.features	= CLOCK_EVT_FEAT_PERIODIC | CLOCK_EVT_FEAT_ONESHOT,
-	.set_state_shutdown = pit_shutdown,
-	.set_state_periodic = pit_set_periodic,
+	.set_mode	= pit_set_mode,
 	.set_next_event	= pit_set_next_event,
 	.rating		= 300,
 };
@@ -156,18 +155,15 @@ static int __init pit_clockevent_init(unsigned long rate, int irq)
 	return 0;
 }
 
-static int __init pit_timer_init(struct device_node *np)
+static void __init pit_timer_init(struct device_node *np)
 {
 	struct clk *pit_clk;
 	void __iomem *timer_base;
 	unsigned long clk_rate;
-	int irq, ret;
+	int irq;
 
 	timer_base = of_iomap(np, 0);
-	if (!timer_base) {
-		pr_err("Failed to iomap");
-		return -ENXIO;
-	}
+	BUG_ON(!timer_base);
 
 	/*
 	 * PIT0 and PIT1 can be chained to build a 64-bit timer,
@@ -178,16 +174,12 @@ static int __init pit_timer_init(struct device_node *np)
 	clkevt_base = timer_base + PITn_OFFSET(3);
 
 	irq = irq_of_parse_and_map(np, 0);
-	if (irq <= 0)
-		return -EINVAL;
+	BUG_ON(irq <= 0);
 
 	pit_clk = of_clk_get(np, 0);
-	if (IS_ERR(pit_clk))
-		return PTR_ERR(pit_clk);
+	BUG_ON(IS_ERR(pit_clk));
 
-	ret = clk_prepare_enable(pit_clk);
-	if (ret)
-		return ret;
+	BUG_ON(clk_prepare_enable(pit_clk));
 
 	clk_rate = clk_get_rate(pit_clk);
 	cycle_per_jiffy = clk_rate / (HZ);
@@ -195,10 +187,8 @@ static int __init pit_timer_init(struct device_node *np)
 	/* enable the pit module */
 	__raw_writel(~PITMCR_MDIS, timer_base + PITMCR);
 
-	ret = pit_clocksource_init(clk_rate);
-	if (ret)
-		return ret;
+	BUG_ON(pit_clocksource_init(clk_rate));
 
-	return pit_clockevent_init(clk_rate, irq);
+	pit_clockevent_init(clk_rate, irq);
 }
 CLOCKSOURCE_OF_DECLARE(vf610, "fsl,vf610-pit", pit_timer_init);

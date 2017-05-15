@@ -21,7 +21,7 @@
  *  Copyright (C) 2008-2009 Red Hat, Inc., Ingo Molnar
  *  Copyright (C) 2009 Jaswinder Singh Rajput
  *  Copyright (C) 2009 Advanced Micro Devices, Inc., Robert Richter
- *  Copyright (C) 2008-2009 Red Hat, Inc., Peter Zijlstra
+ *  Copyright (C) 2008-2009 Red Hat, Inc., Peter Zijlstra <pzijlstr@redhat.com>
  *  Copyright (C) 2009 Intel Corporation, <markus.t.metzger@intel.com>
  *  Copyright (C) 2009 Google, Inc., Stephane Eranian
  */
@@ -590,7 +590,7 @@ static int tile_event_set_period(struct perf_event *event)
  */
 static void tile_pmu_stop(struct perf_event *event, int flags)
 {
-	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+	struct cpu_hw_events *cpuc = &__get_cpu_var(cpu_hw_events);
 	struct hw_perf_event *hwc = &event->hw;
 	int idx = hwc->idx;
 
@@ -616,7 +616,7 @@ static void tile_pmu_stop(struct perf_event *event, int flags)
  */
 static void tile_pmu_start(struct perf_event *event, int flags)
 {
-	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+	struct cpu_hw_events *cpuc = &__get_cpu_var(cpu_hw_events);
 	int idx = event->hw.idx;
 
 	if (WARN_ON_ONCE(!(event->hw.state & PERF_HES_STOPPED)))
@@ -650,7 +650,7 @@ static void tile_pmu_start(struct perf_event *event, int flags)
  */
 static int tile_pmu_add(struct perf_event *event, int flags)
 {
-	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+	struct cpu_hw_events *cpuc = &__get_cpu_var(cpu_hw_events);
 	struct hw_perf_event *hwc;
 	unsigned long mask;
 	int b, max_cnt;
@@ -706,7 +706,7 @@ static int tile_pmu_add(struct perf_event *event, int flags)
  */
 static void tile_pmu_del(struct perf_event *event, int flags)
 {
-	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+	struct cpu_hw_events *cpuc = &__get_cpu_var(cpu_hw_events);
 	int i;
 
 	/*
@@ -880,14 +880,14 @@ static struct pmu tilera_pmu = {
 int tile_pmu_handle_irq(struct pt_regs *regs, int fault)
 {
 	struct perf_sample_data data;
-	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+	struct cpu_hw_events *cpuc = &__get_cpu_var(cpu_hw_events);
 	struct perf_event *event;
 	struct hw_perf_event *hwc;
 	u64 val;
 	unsigned long status;
 	int bit;
 
-	__this_cpu_inc(perf_irqs);
+	__get_cpu_var(perf_irqs)++;
 
 	if (!atomic_read(&tile_active_events))
 		return 0;
@@ -941,7 +941,7 @@ arch_initcall(init_hw_perf_events);
 /*
  * Tile specific backtracing code for perf_events.
  */
-static inline void perf_callchain(struct perf_callchain_entry_ctx *entry,
+static inline void perf_callchain(struct perf_callchain_entry *entry,
 		    struct pt_regs *regs)
 {
 	struct KBacktraceIterator kbt;
@@ -992,13 +992,13 @@ static inline void perf_callchain(struct perf_callchain_entry_ctx *entry,
 	}
 }
 
-void perf_callchain_user(struct perf_callchain_entry_ctx *entry,
+void perf_callchain_user(struct perf_callchain_entry *entry,
 		    struct pt_regs *regs)
 {
 	perf_callchain(entry, regs);
 }
 
-void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry,
+void perf_callchain_kernel(struct perf_callchain_entry *entry,
 		      struct pt_regs *regs)
 {
 	perf_callchain(entry, regs);

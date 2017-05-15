@@ -318,8 +318,6 @@ static void digital_in_recv_sel_res(struct nfc_digital_dev *ddev, void *arg,
 
 	if (DIGITAL_SEL_RES_IS_T2T(sel_res)) {
 		nfc_proto = NFC_PROTO_MIFARE;
-	} else if (DIGITAL_SEL_RES_IS_NFC_DEP(sel_res)) {
-		nfc_proto = NFC_PROTO_NFC_DEP;
 	} else if (DIGITAL_SEL_RES_IS_T4T(sel_res)) {
 		rc = digital_in_send_rats(ddev, target);
 		if (rc)
@@ -329,6 +327,8 @@ static void digital_in_recv_sel_res(struct nfc_digital_dev *ddev, void *arg,
 		 * done when receiving the ATS
 		 */
 		goto exit_free_skb;
+	} else if (DIGITAL_SEL_RES_IS_NFC_DEP(sel_res)) {
+		nfc_proto = NFC_PROTO_NFC_DEP;
 	} else {
 		rc = -EOPNOTSUPP;
 		goto exit;
@@ -944,13 +944,6 @@ static int digital_tg_send_sel_res(struct nfc_digital_dev *ddev)
 	if (!DIGITAL_DRV_CAPS_TG_CRC(ddev))
 		digital_skb_add_crc_a(skb);
 
-	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
-				     NFC_DIGITAL_FRAMING_NFCA_ANTICOL_COMPLETE);
-	if (rc) {
-		kfree_skb(skb);
-		return rc;
-	}
-
 	rc = digital_tg_send_cmd(ddev, skb, 300, digital_tg_recv_atr_req,
 				 NULL);
 	if (rc)
@@ -1009,13 +1002,6 @@ static int digital_tg_send_sdd_res(struct nfc_digital_dev *ddev)
 	for (i = 0; i < 4; i++)
 		sdd_res->bcc ^= sdd_res->nfcid1[i];
 
-	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
-				NFC_DIGITAL_FRAMING_NFCA_STANDARD_WITH_CRC_A);
-	if (rc) {
-		kfree_skb(skb);
-		return rc;
-	}
-
 	rc = digital_tg_send_cmd(ddev, skb, 300, digital_tg_recv_sel_req,
 				 NULL);
 	if (rc)
@@ -1067,13 +1053,6 @@ static int digital_tg_send_sens_res(struct nfc_digital_dev *ddev)
 
 	sens_res[0] = (DIGITAL_SENS_RES_NFC_DEP >> 8) & 0xFF;
 	sens_res[1] = DIGITAL_SENS_RES_NFC_DEP & 0xFF;
-
-	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
-				     NFC_DIGITAL_FRAMING_NFCA_STANDARD);
-	if (rc) {
-		kfree_skb(skb);
-		return rc;
-	}
 
 	rc = digital_tg_send_cmd(ddev, skb, 300, digital_tg_recv_sdd_req,
 				 NULL);
@@ -1218,31 +1197,7 @@ exit:
 	dev_kfree_skb(resp);
 }
 
-static int digital_tg_config_nfca(struct nfc_digital_dev *ddev)
-{
-	int rc;
-
-	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_RF_TECH,
-				     NFC_DIGITAL_RF_TECH_106A);
-	if (rc)
-		return rc;
-
-	return digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
-				       NFC_DIGITAL_FRAMING_NFCA_NFC_DEP);
-}
-
 int digital_tg_listen_nfca(struct nfc_digital_dev *ddev, u8 rf_tech)
-{
-	int rc;
-
-	rc = digital_tg_config_nfca(ddev);
-	if (rc)
-		return rc;
-
-	return digital_tg_listen(ddev, 300, digital_tg_recv_sens_req, NULL);
-}
-
-static int digital_tg_config_nfcf(struct nfc_digital_dev *ddev, u8 rf_tech)
 {
 	int rc;
 
@@ -1250,57 +1205,35 @@ static int digital_tg_config_nfcf(struct nfc_digital_dev *ddev, u8 rf_tech)
 	if (rc)
 		return rc;
 
-	return digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
-				       NFC_DIGITAL_FRAMING_NFCF_NFC_DEP);
+	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
+				     NFC_DIGITAL_FRAMING_NFCA_NFC_DEP);
+	if (rc)
+		return rc;
+
+	return digital_tg_listen(ddev, 300, digital_tg_recv_sens_req, NULL);
 }
 
 int digital_tg_listen_nfcf(struct nfc_digital_dev *ddev, u8 rf_tech)
 {
 	int rc;
+	u8 *nfcid2;
 
-	rc = digital_tg_config_nfcf(ddev, rf_tech);
+	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_RF_TECH, rf_tech);
 	if (rc)
 		return rc;
 
-	return digital_tg_listen(ddev, 300, digital_tg_recv_sensf_req, NULL);
-}
-
-void digital_tg_recv_md_req(struct nfc_digital_dev *ddev, void *arg,
-			    struct sk_buff *resp)
-{
-	u8 rf_tech;
-	int rc;
-
-	if (IS_ERR(resp)) {
-		resp = NULL;
-		goto exit_free_skb;
-	}
-
-	rc = ddev->ops->tg_get_rf_tech(ddev, &rf_tech);
+	rc = digital_tg_configure_hw(ddev, NFC_DIGITAL_CONFIG_FRAMING,
+				     NFC_DIGITAL_FRAMING_NFCF_NFC_DEP);
 	if (rc)
-		goto exit_free_skb;
+		return rc;
 
-	switch (rf_tech) {
-	case NFC_DIGITAL_RF_TECH_106A:
-		rc = digital_tg_config_nfca(ddev);
-		if (rc)
-			goto exit_free_skb;
-		digital_tg_recv_sens_req(ddev, arg, resp);
-		break;
-	case NFC_DIGITAL_RF_TECH_212F:
-	case NFC_DIGITAL_RF_TECH_424F:
-		rc = digital_tg_config_nfcf(ddev, rf_tech);
-		if (rc)
-			goto exit_free_skb;
-		digital_tg_recv_sensf_req(ddev, arg, resp);
-		break;
-	default:
-		goto exit_free_skb;
-	}
+	nfcid2 = kzalloc(NFC_NFCID2_MAXSIZE, GFP_KERNEL);
+	if (!nfcid2)
+		return -ENOMEM;
 
-	return;
+	nfcid2[0] = DIGITAL_SENSF_NFCID2_NFC_DEP_B1;
+	nfcid2[1] = DIGITAL_SENSF_NFCID2_NFC_DEP_B2;
+	get_random_bytes(nfcid2 + 2, NFC_NFCID2_MAXSIZE - 2);
 
-exit_free_skb:
-	digital_poll_next_tech(ddev);
-	dev_kfree_skb(resp);
+	return digital_tg_listen(ddev, 300, digital_tg_recv_sensf_req, nfcid2);
 }

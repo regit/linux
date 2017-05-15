@@ -53,7 +53,7 @@ struct check {
 	void *data;
 	bool warn, error;
 	enum checkstatus status;
-	bool inprogress;
+	int inprogress;
 	int num_prereqs;
 	struct check **prereq;
 };
@@ -113,7 +113,6 @@ static inline void check_msg(struct check *c, const char *fmt, ...)
 		vfprintf(stderr, fmt, ap);
 		fprintf(stderr, "\n");
 	}
-	va_end(ap);
 }
 
 #define FAIL(c, ...) \
@@ -142,9 +141,9 @@ static void check_nodes_props(struct check *c, struct node *dt, struct node *nod
 		check_nodes_props(c, dt, child);
 }
 
-static bool run_check(struct check *c, struct node *dt)
+static int run_check(struct check *c, struct node *dt)
 {
-	bool error = false;
+	int error = 0;
 	int i;
 
 	assert(!c->inprogress);
@@ -152,11 +151,11 @@ static bool run_check(struct check *c, struct node *dt)
 	if (c->status != UNCHECKED)
 		goto out;
 
-	c->inprogress = true;
+	c->inprogress = 1;
 
 	for (i = 0; i < c->num_prereqs; i++) {
 		struct check *prq = c->prereq[i];
-		error = error || run_check(prq, dt);
+		error |= run_check(prq, dt);
 		if (prq->status != PASSED) {
 			c->status = PREREQ;
 			check_msg(c, "Failed prerequisite '%s'",
@@ -178,9 +177,9 @@ static bool run_check(struct check *c, struct node *dt)
 	TRACE(c, "\tCompleted, status %d", c->status);
 
 out:
-	c->inprogress = false;
+	c->inprogress = 0;
 	if ((c->status != PASSED) && (c->error))
-		error = true;
+		error = 1;
 	return error;
 }
 
@@ -293,30 +292,6 @@ static void check_node_name_format(struct check *c, struct node *dt,
 		     node->fullpath);
 }
 NODE_ERROR(node_name_format, NULL, &node_name_chars);
-
-static void check_unit_address_vs_reg(struct check *c, struct node *dt,
-			     struct node *node)
-{
-	const char *unitname = get_unitname(node);
-	struct property *prop = get_property(node, "reg");
-
-	if (!prop) {
-		prop = get_property(node, "ranges");
-		if (prop && !prop->val.len)
-			prop = NULL;
-	}
-
-	if (prop) {
-		if (!unitname[0])
-			FAIL(c, "Node %s has a reg or ranges property, but no unit name",
-			    node->fullpath);
-	} else {
-		if (unitname[0])
-			FAIL(c, "Node %s has a unit name, but no reg property",
-			    node->fullpath);
-	}
-}
-NODE_WARNING(unit_address_vs_reg, NULL);
 
 static void check_property_name_chars(struct check *c, struct node *dt,
 				      struct node *node, struct property *prop)
@@ -584,7 +559,7 @@ static void check_reg_format(struct check *c, struct node *dt,
 	size_cells = node_size_cells(node->parent);
 	entrylen = (addr_cells + size_cells) * sizeof(cell_t);
 
-	if (!entrylen || (prop->val.len % entrylen) != 0)
+	if ((prop->val.len % entrylen) != 0)
 		FAIL(c, "\"reg\" property in %s has invalid length (%d bytes) "
 		     "(#address-cells == %d, #size-cells == %d)",
 		     node->fullpath, prop->val.len, addr_cells, size_cells);
@@ -649,11 +624,11 @@ static void check_avoid_default_addr_size(struct check *c, struct node *dt,
 	if (!reg && !ranges)
 		return;
 
-	if (node->parent->addr_cells == -1)
+	if ((node->parent->addr_cells == -1))
 		FAIL(c, "Relying on default #address-cells value for %s",
 		     node->fullpath);
 
-	if (node->parent->size_cells == -1)
+	if ((node->parent->size_cells == -1))
 		FAIL(c, "Relying on default #size-cells value for %s",
 		     node->fullpath);
 }
@@ -690,8 +665,6 @@ static struct check *check_table[] = {
 	&device_type_is_string, &model_is_string, &status_is_string,
 
 	&addr_size_cells, &reg_format, &ranges_format,
-
-	&unit_address_vs_reg,
 
 	&avoid_default_addr_size,
 	&obsolete_chosen_interrupt_controller,
@@ -733,15 +706,15 @@ static void disable_warning_error(struct check *c, bool warn, bool error)
 	c->error = c->error && !error;
 }
 
-void parse_checks_option(bool warn, bool error, const char *arg)
+void parse_checks_option(bool warn, bool error, const char *optarg)
 {
 	int i;
-	const char *name = arg;
+	const char *name = optarg;
 	bool enable = true;
 
-	if ((strncmp(arg, "no-", 3) == 0)
-	    || (strncmp(arg, "no_", 3) == 0)) {
-		name = arg + 3;
+	if ((strncmp(optarg, "no-", 3) == 0)
+	    || (strncmp(optarg, "no_", 3) == 0)) {
+		name = optarg + 3;
 		enable = false;
 	}
 
@@ -760,7 +733,7 @@ void parse_checks_option(bool warn, bool error, const char *arg)
 	die("Unrecognized check name \"%s\"\n", name);
 }
 
-void process_checks(bool force, struct boot_info *bi)
+void process_checks(int force, struct boot_info *bi)
 {
 	struct node *dt = bi->dt;
 	int i;

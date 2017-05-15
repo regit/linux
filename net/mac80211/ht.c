@@ -150,12 +150,13 @@ bool ieee80211_ht_cap_ie_to_sta_ht_cap(struct ieee80211_sub_if_data *sdata,
 
 	/*
 	 * If user has specified capability over-rides, take care
-	 * of that if the station we're setting up is the AP or TDLS peer that
+	 * of that if the station we're setting up is the AP that
 	 * we advertised a restricted capability set to. Override
 	 * our own capabilities and then use those below.
 	 */
-	if (sdata->vif.type == NL80211_IFTYPE_STATION ||
-	    sdata->vif.type == NL80211_IFTYPE_ADHOC)
+	if ((sdata->vif.type == NL80211_IFTYPE_STATION ||
+	     sdata->vif.type == NL80211_IFTYPE_ADHOC) &&
+	    !test_sta_flag(sta, WLAN_STA_TDLS_PEER))
 		ieee80211_apply_htcap_overrides(sdata, &own_cap);
 
 	/*
@@ -227,14 +228,6 @@ bool ieee80211_ht_cap_ie_to_sta_ht_cap(struct ieee80211_sub_if_data *sdata,
 	if (own_cap.mcs.rx_mask[32/8] & ht_cap_ie->mcs.rx_mask[32/8] & 1)
 		ht_cap.mcs.rx_mask[32/8] |= 1;
 
-	/* set Rx highest rate */
-	ht_cap.mcs.rx_highest = ht_cap_ie->mcs.rx_highest;
-
-	if (ht_cap.cap & IEEE80211_HT_CAP_MAX_AMSDU)
-		sta->sta.max_amsdu_len = IEEE80211_MAX_MPDU_LEN_HT_7935;
-	else
-		sta->sta.max_amsdu_len = IEEE80211_MAX_MPDU_LEN_HT_3839;
-
  apply:
 	changed = memcmp(&sta->sta.ht_cap, &ht_cap, sizeof(ht_cap));
 
@@ -257,6 +250,8 @@ bool ieee80211_ht_cap_ie_to_sta_ht_cap(struct ieee80211_sub_if_data *sdata,
 		break;
 	}
 
+	if (bw != sta->sta.bandwidth)
+		changed = true;
 	sta->sta.bandwidth = bw;
 
 	sta->cur_max_bandwidth =

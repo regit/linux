@@ -24,7 +24,9 @@
 #include <linux/mii.h>
 #include <linux/timer.h>
 #include <linux/irq.h>
+
 #include <linux/vmalloc.h>
+
 #include <linux/io.h>
 #include <asm/byteorder.h>
 #include <linux/bitops.h>
@@ -37,8 +39,8 @@
 
 #define _QLCNIC_LINUX_MAJOR 5
 #define _QLCNIC_LINUX_MINOR 3
-#define _QLCNIC_LINUX_SUBVERSION 65
-#define QLCNIC_LINUX_VERSIONID  "5.3.65"
+#define _QLCNIC_LINUX_SUBVERSION 60
+#define QLCNIC_LINUX_VERSIONID  "5.3.60"
 #define QLCNIC_DRV_IDC_VER  0x01
 #define QLCNIC_DRIVER_VERSION  ((_QLCNIC_LINUX_MAJOR << 16) |\
 		 (_QLCNIC_LINUX_MINOR << 8) | (_QLCNIC_LINUX_SUBVERSION))
@@ -266,7 +268,7 @@ struct qlcnic_fdt {
 	u16	cksum;
 	u16	unused;
 	u8	model[16];
-	u8	mfg_id;
+	u16	mfg_id;
 	u16	id;
 	u8	flag;
 	u8	erase_cmd;
@@ -312,7 +314,7 @@ struct qlcnic_fdt {
 #define QLCNIC_BRDCFG_START	0x4000		/* board config */
 #define QLCNIC_BOOTLD_START	0x10000		/* bootld */
 #define QLCNIC_IMAGE_START	0x43000		/* compressed image */
-#define QLCNIC_USER_START	0x3E8000	/* Firmware info */
+#define QLCNIC_USER_START	0x3E8000	/* Firmare info */
 
 #define QLCNIC_FW_VERSION_OFFSET	(QLCNIC_USER_START+0x408)
 #define QLCNIC_FW_SIZE_OFFSET		(QLCNIC_USER_START+0x40c)
@@ -536,11 +538,8 @@ struct qlcnic_hardware_context {
 	u8 extend_lb_time;
 	u8 phys_port_id[ETH_ALEN];
 	u8 lb_mode;
-	u8 vxlan_port_count;
 	u16 vxlan_port;
 	struct device *hwmon_dev;
-	u32 post_mode;
-	bool run_post;
 };
 
 struct qlcnic_adapter_stats {
@@ -566,7 +565,6 @@ struct qlcnic_adapter_stats {
 	u64  tx_dma_map_error;
 	u64  spurious_intr;
 	u64  mac_filter_limit_overrun;
-	u64  mbx_spurious_intr;
 };
 
 /*
@@ -848,17 +846,10 @@ struct qlcnic_cardrsp_tx_ctx {
 #define QLCNIC_MAC_VLAN_ADD	3
 #define QLCNIC_MAC_VLAN_DEL	4
 
-enum qlcnic_mac_type {
-	QLCNIC_UNICAST_MAC,
-	QLCNIC_MULTICAST_MAC,
-	QLCNIC_BROADCAST_MAC,
-};
-
 struct qlcnic_mac_vlan_list {
 	struct list_head list;
 	uint8_t mac_addr[ETH_ALEN+2];
 	u16 vlan_id;
-	enum qlcnic_mac_type mac_type;
 };
 
 /* MAC Learn */
@@ -926,7 +917,6 @@ struct qlcnic_mac_vlan_list {
 #define QLCNIC_FW_CAPABILITY_SET_DRV_VER	BIT_5
 #define QLCNIC_FW_CAPABILITY_2_BEACON		BIT_7
 #define QLCNIC_FW_CAPABILITY_2_PER_PORT_ESWITCH_CFG	BIT_9
-#define QLCNIC_FW_CAPABILITY_2_EXT_ISCSI_DUMP	BIT_13
 
 #define QLCNIC_83XX_FW_CAPAB_ENCAP_RX_OFFLOAD	BIT_0
 #define QLCNIC_83XX_FW_CAPAB_ENCAP_TX_OFFLOAD	BIT_1
@@ -1026,8 +1016,10 @@ struct qlcnic_ipaddr {
 #define QLCNIC_HAS_PHYS_PORT_ID		0x40000
 #define QLCNIC_TSS_RSS			0x80000
 
+#ifdef CONFIG_QLCNIC_VXLAN
 #define QLCNIC_ADD_VXLAN_PORT		0x100000
 #define QLCNIC_DEL_VXLAN_PORT		0x200000
+#endif
 
 #define QLCNIC_VLAN_FILTERING		0x800000
 
@@ -1091,14 +1083,14 @@ struct qlcnic_filter_hash {
 struct qlcnic_mailbox {
 	struct workqueue_struct	*work_q;
 	struct qlcnic_adapter	*adapter;
-	const struct qlcnic_mbx_ops *ops;
+	struct qlcnic_mbx_ops	*ops;
 	struct work_struct	work;
 	struct completion	completion;
 	struct list_head	cmd_q;
 	unsigned long		status;
 	spinlock_t		queue_lock;	/* Mailbox queue lock */
 	spinlock_t		aen_lock;	/* Mailbox response/AEN lock */
-	u32			rsp_status;
+	atomic_t		rsp_status;
 	u32			num_cmds;
 };
 
@@ -1324,6 +1316,9 @@ struct qlcnic_eswitch {
 #define QLCNIC_SWITCH_PORT_MIRRORING	BIT_4
 };
 
+
+/* Return codes for Error handling */
+#define QL_STATUS_INVALID_PARAM	-1
 
 #define MAX_BW			100	/* % of link speed */
 #define MIN_BW			1	/* % of link speed */
@@ -1618,9 +1613,7 @@ void qlcnic_watchdog_task(struct work_struct *work);
 void qlcnic_post_rx_buffers(struct qlcnic_adapter *adapter,
 		struct qlcnic_host_rds_ring *rds_ring, u8 ring_id);
 void qlcnic_set_multi(struct net_device *netdev);
-void qlcnic_flush_mcast_mac(struct qlcnic_adapter *);
-int qlcnic_nic_add_mac(struct qlcnic_adapter *, const u8 *, u16,
-		       enum qlcnic_mac_type);
+int qlcnic_nic_add_mac(struct qlcnic_adapter *, const u8 *, u16);
 int qlcnic_nic_del_mac(struct qlcnic_adapter *, const u8 *);
 void qlcnic_82xx_free_mac_list(struct qlcnic_adapter *adapter);
 int qlcnic_82xx_read_phys_port_id(struct qlcnic_adapter *);
@@ -2291,8 +2284,6 @@ extern const struct ethtool_ops qlcnic_ethtool_failed_ops;
 #define PCI_DEVICE_ID_QLOGIC_QLE824X		0x8020
 #define PCI_DEVICE_ID_QLOGIC_QLE834X		0x8030
 #define PCI_DEVICE_ID_QLOGIC_VF_QLE834X	0x8430
-#define PCI_DEVICE_ID_QLOGIC_QLE8830		0x8830
-#define PCI_DEVICE_ID_QLOGIC_VF_QLE8C30		0x8C30
 #define PCI_DEVICE_ID_QLOGIC_QLE844X		0x8040
 #define PCI_DEVICE_ID_QLOGIC_VF_QLE844X	0x8440
 
@@ -2316,11 +2307,9 @@ static inline bool qlcnic_83xx_check(struct qlcnic_adapter *adapter)
 	bool status;
 
 	status = ((device == PCI_DEVICE_ID_QLOGIC_QLE834X) ||
-		  (device == PCI_DEVICE_ID_QLOGIC_QLE8830) ||
 		  (device == PCI_DEVICE_ID_QLOGIC_QLE844X) ||
 		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE844X) ||
-		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE834X) ||
-		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE8C30)) ? true : false;
+		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE834X)) ? true : false;
 
 	return status;
 }
@@ -2336,8 +2325,7 @@ static inline bool qlcnic_sriov_vf_check(struct qlcnic_adapter *adapter)
 	bool status;
 
 	status = ((device == PCI_DEVICE_ID_QLOGIC_VF_QLE834X) ||
-		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE844X) ||
-		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE8C30)) ? true : false;
+		  (device == PCI_DEVICE_ID_QLOGIC_VF_QLE844X)) ? true : false;
 
 	return status;
 }
@@ -2353,8 +2341,7 @@ static inline bool qlcnic_83xx_vf_check(struct qlcnic_adapter *adapter)
 {
 	unsigned short device = adapter->pdev->device;
 
-	return ((device == PCI_DEVICE_ID_QLOGIC_VF_QLE834X) ||
-		(device == PCI_DEVICE_ID_QLOGIC_VF_QLE8C30)) ? true : false;
+	return (device == PCI_DEVICE_ID_QLOGIC_VF_QLE834X) ? true : false;
 }
 
 static inline bool qlcnic_sriov_check(struct qlcnic_adapter *adapter)
@@ -2373,19 +2360,6 @@ static inline u32 qlcnic_get_vnic_func_count(struct qlcnic_adapter *adapter)
 		return QLC_84XX_VNIC_COUNT;
 	else
 		return QLC_DEFAULT_VNIC_COUNT;
-}
-
-static inline void qlcnic_swap32_buffer(u32 *buffer, int count)
-{
-#if defined(__BIG_ENDIAN)
-	u32 *tmp = buffer;
-	int i;
-
-	for (i = 0; i < count; i++) {
-		*tmp = swab32(*tmp);
-		tmp++;
-	}
-#endif
 }
 
 #ifdef CONFIG_QLCNIC_HWMON

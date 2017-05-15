@@ -32,7 +32,7 @@
 #include <asm/cacheflush.h>
 #include <asm/processor.h>
 #include <asm/sigcontext.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 static struct hard_trap_info {
 	unsigned char tt;	/* Trap type code for MIPS R3xxx and R4xxx */
@@ -378,6 +378,10 @@ int kgdb_arch_handle_exception(int vector, int signo, int err_code,
 
 struct kgdb_arch arch_kgdb_ops;
 
+/*
+ * We use kgdb_early_setup so that functions we need to call now don't
+ * cause trouble when called again later.
+ */
 int kgdb_arch_init(void)
 {
 	union mips_instruction insn = {

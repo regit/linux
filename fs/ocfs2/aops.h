@@ -22,7 +22,7 @@
 #ifndef OCFS2_AOPS_H
 #define OCFS2_AOPS_H
 
-#include <linux/fs.h>
+#include <linux/aio.h>
 
 handle_t *ocfs2_start_walk_page_trans(struct inode *inode,
 							 struct page *page,
@@ -44,16 +44,12 @@ int walk_page_buffers(	handle_t *handle,
 					struct buffer_head *bh));
 
 int ocfs2_write_end_nolock(struct address_space *mapping,
-			   loff_t pos, unsigned len, unsigned copied, void *fsdata);
+			   loff_t pos, unsigned len, unsigned copied,
+			   struct page *page, void *fsdata);
 
-typedef enum {
-	OCFS2_WRITE_BUFFER = 0,
-	OCFS2_WRITE_DIRECT,
-	OCFS2_WRITE_MMAP,
-} ocfs2_write_type_t;
-
-int ocfs2_write_begin_nolock(struct address_space *mapping,
-			     loff_t pos, unsigned len, ocfs2_write_type_t type,
+int ocfs2_write_begin_nolock(struct file *filp,
+			     struct address_space *mapping,
+			     loff_t pos, unsigned len, unsigned flags,
 			     struct page **pagep, void **fsdata,
 			     struct buffer_head *di_bh, struct page *mmap_page);
 
@@ -83,6 +79,8 @@ static inline void ocfs2_iocb_set_rw_locked(struct kiocb *iocb, int level)
 enum ocfs2_iocb_lock_bits {
 	OCFS2_IOCB_RW_LOCK = 0,
 	OCFS2_IOCB_RW_LOCK_LEVEL,
+	OCFS2_IOCB_SEM,
+	OCFS2_IOCB_UNALIGNED_IO,
 	OCFS2_IOCB_NUM_LOCKS
 };
 
@@ -90,5 +88,18 @@ enum ocfs2_iocb_lock_bits {
 	clear_bit(OCFS2_IOCB_RW_LOCK, (unsigned long *)&iocb->private)
 #define ocfs2_iocb_rw_locked_level(iocb) \
 	test_bit(OCFS2_IOCB_RW_LOCK_LEVEL, (unsigned long *)&iocb->private)
+#define ocfs2_iocb_set_sem_locked(iocb) \
+	set_bit(OCFS2_IOCB_SEM, (unsigned long *)&iocb->private)
+#define ocfs2_iocb_clear_sem_locked(iocb) \
+	clear_bit(OCFS2_IOCB_SEM, (unsigned long *)&iocb->private)
+#define ocfs2_iocb_is_sem_locked(iocb) \
+	test_bit(OCFS2_IOCB_SEM, (unsigned long *)&iocb->private)
+
+#define ocfs2_iocb_set_unaligned_aio(iocb) \
+	set_bit(OCFS2_IOCB_UNALIGNED_IO, (unsigned long *)&iocb->private)
+#define ocfs2_iocb_clear_unaligned_aio(iocb) \
+	clear_bit(OCFS2_IOCB_UNALIGNED_IO, (unsigned long *)&iocb->private)
+#define ocfs2_iocb_is_unaligned_aio(iocb) \
+	test_bit(OCFS2_IOCB_UNALIGNED_IO, (unsigned long *)&iocb->private)
 
 #endif /* OCFS2_FILE_H */

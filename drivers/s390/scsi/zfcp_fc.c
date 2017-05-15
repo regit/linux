@@ -12,8 +12,6 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/utsname.h>
-#include <linux/random.h>
-#include <linux/bsg-lib.h>
 #include <scsi/fc/fc_els.h>
 #include <scsi/libfc.h>
 #include "zfcp_ext.h"
@@ -33,54 +31,12 @@ module_param_named(no_auto_port_rescan, no_auto_port_rescan, bool, 0600);
 MODULE_PARM_DESC(no_auto_port_rescan,
 		 "no automatic port_rescan (default off)");
 
-static unsigned int port_scan_backoff = 500;
-module_param(port_scan_backoff, uint, 0600);
-MODULE_PARM_DESC(port_scan_backoff,
-	"upper limit of port scan random backoff in msecs (default 500)");
-
-static unsigned int port_scan_ratelimit = 60000;
-module_param(port_scan_ratelimit, uint, 0600);
-MODULE_PARM_DESC(port_scan_ratelimit,
-	"minimum interval between port scans in msecs (default 60000)");
-
-unsigned int zfcp_fc_port_scan_backoff(void)
-{
-	if (!port_scan_backoff)
-		return 0;
-	return get_random_int() % port_scan_backoff;
-}
-
-static void zfcp_fc_port_scan_time(struct zfcp_adapter *adapter)
-{
-	unsigned long interval = msecs_to_jiffies(port_scan_ratelimit);
-	unsigned long backoff = msecs_to_jiffies(zfcp_fc_port_scan_backoff());
-
-	adapter->next_port_scan = jiffies + interval + backoff;
-}
-
-static void zfcp_fc_port_scan(struct zfcp_adapter *adapter)
-{
-	unsigned long now = jiffies;
-	unsigned long next = adapter->next_port_scan;
-	unsigned long delay = 0, max;
-
-	/* delay only needed within waiting period */
-	if (time_before(now, next)) {
-		delay = next - now;
-		/* paranoia: never ever delay scans longer than specified */
-		max = msecs_to_jiffies(port_scan_ratelimit + port_scan_backoff);
-		delay = min(delay, max);
-	}
-
-	queue_delayed_work(adapter->work_queue, &adapter->scan_work, delay);
-}
-
 void zfcp_fc_conditional_port_scan(struct zfcp_adapter *adapter)
 {
 	if (no_auto_port_rescan)
 		return;
 
-	zfcp_fc_port_scan(adapter);
+	queue_work(adapter->work_queue, &adapter->scan_work);
 }
 
 void zfcp_fc_inverse_conditional_port_scan(struct zfcp_adapter *adapter)
@@ -88,7 +44,7 @@ void zfcp_fc_inverse_conditional_port_scan(struct zfcp_adapter *adapter)
 	if (!no_auto_port_rescan)
 		return;
 
-	zfcp_fc_port_scan(adapter);
+	queue_work(adapter->work_queue, &adapter->scan_work);
 }
 
 /**
@@ -509,7 +465,7 @@ static void zfcp_fc_adisc_handler(void *data)
 	/* port is good, unblock rport without going through erp */
 	zfcp_scsi_schedule_rport_register(port);
  out:
-	atomic_andnot(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
+	atomic_clear_mask(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
 	put_device(&port->dev);
 	kmem_cache_free(zfcp_fc_req_cache, fc_req);
 }
@@ -565,14 +521,14 @@ void zfcp_fc_link_test_work(struct work_struct *work)
 	if (atomic_read(&port->status) & ZFCP_STATUS_PORT_LINK_TEST)
 		goto out;
 
-	atomic_or(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
+	atomic_set_mask(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
 
 	retval = zfcp_fc_adisc(port);
 	if (retval == 0)
 		return;
 
 	/* send of ADISC was not possible */
-	atomic_andnot(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
+	atomic_clear_mask(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
 	zfcp_erp_port_forced_reopen(port, 0, "fcltwk1");
 
 out:
@@ -641,7 +597,7 @@ static void zfcp_fc_validate_port(struct zfcp_port *port, struct list_head *lh)
 	if (!(atomic_read(&port->status) & ZFCP_STATUS_COMMON_NOESC))
 		return;
 
-	atomic_andnot(ZFCP_STATUS_COMMON_NOESC, &port->status);
+	atomic_clear_mask(ZFCP_STATUS_COMMON_NOESC, &port->status);
 
 	if ((port->supported_classes != 0) ||
 	    !list_empty(&port->unit_list))
@@ -724,14 +680,11 @@ static int zfcp_fc_eval_gpn_ft(struct zfcp_fc_req *fc_req,
  */
 void zfcp_fc_scan_ports(struct work_struct *work)
 {
-	struct delayed_work *dw = to_delayed_work(work);
-	struct zfcp_adapter *adapter = container_of(dw, struct zfcp_adapter,
+	struct zfcp_adapter *adapter = container_of(work, struct zfcp_adapter,
 						    scan_work);
 	int ret, i;
 	struct zfcp_fc_req *fc_req;
 	int chain, max_entries, buf_num, max_bytes;
-
-	zfcp_fc_port_scan_time(adapter);
 
 	chain = adapter->adapter_features & FSF_FEATURE_ELS_CT_CHAINED_SBALS;
 	buf_num = chain ? ZFCP_FC_GPN_FT_NUM_BUFS : 1;
@@ -886,30 +839,26 @@ out_free:
 
 static void zfcp_fc_ct_els_job_handler(void *data)
 {
-	struct bsg_job *job = data;
+	struct fc_bsg_job *job = data;
 	struct zfcp_fsf_ct_els *zfcp_ct_els = job->dd_data;
 	struct fc_bsg_reply *jr = job->reply;
 
 	jr->reply_payload_rcv_len = job->reply_payload.payload_len;
 	jr->reply_data.ctels_reply.status = FC_CTELS_STATUS_OK;
 	jr->result = zfcp_ct_els->status ? -EIO : 0;
-	bsg_job_done(job, jr->result, jr->reply_payload_rcv_len);
+	job->job_done(job);
 }
 
-static struct zfcp_fc_wka_port *zfcp_fc_job_wka_port(struct bsg_job *job)
+static struct zfcp_fc_wka_port *zfcp_fc_job_wka_port(struct fc_bsg_job *job)
 {
 	u32 preamble_word1;
 	u8 gs_type;
 	struct zfcp_adapter *adapter;
-	struct fc_bsg_request *bsg_request = job->request;
-	struct fc_rport *rport = fc_bsg_to_rport(job);
-	struct Scsi_Host *shost;
 
-	preamble_word1 = bsg_request->rqst_data.r_ct.preamble_word1;
+	preamble_word1 = job->request->rqst_data.r_ct.preamble_word1;
 	gs_type = (preamble_word1 & 0xff000000) >> 24;
 
-	shost = rport ? rport_to_shost(rport) : fc_bsg_to_shost(job);
-	adapter = (struct zfcp_adapter *) shost->hostdata[0];
+	adapter = (struct zfcp_adapter *) job->shost->hostdata[0];
 
 	switch (gs_type) {
 	case FC_FST_ALIAS:
@@ -929,7 +878,7 @@ static struct zfcp_fc_wka_port *zfcp_fc_job_wka_port(struct bsg_job *job)
 
 static void zfcp_fc_ct_job_handler(void *data)
 {
-	struct bsg_job *job = data;
+	struct fc_bsg_job *job = data;
 	struct zfcp_fc_wka_port *wka_port;
 
 	wka_port = zfcp_fc_job_wka_port(job);
@@ -938,12 +887,11 @@ static void zfcp_fc_ct_job_handler(void *data)
 	zfcp_fc_ct_els_job_handler(data);
 }
 
-static int zfcp_fc_exec_els_job(struct bsg_job *job,
+static int zfcp_fc_exec_els_job(struct fc_bsg_job *job,
 				struct zfcp_adapter *adapter)
 {
 	struct zfcp_fsf_ct_els *els = job->dd_data;
-	struct fc_rport *rport = fc_bsg_to_rport(job);
-	struct fc_bsg_request *bsg_request = job->request;
+	struct fc_rport *rport = job->rport;
 	struct zfcp_port *port;
 	u32 d_id;
 
@@ -955,13 +903,13 @@ static int zfcp_fc_exec_els_job(struct bsg_job *job,
 		d_id = port->d_id;
 		put_device(&port->dev);
 	} else
-		d_id = ntoh24(bsg_request->rqst_data.h_els.port_id);
+		d_id = ntoh24(job->request->rqst_data.h_els.port_id);
 
 	els->handler = zfcp_fc_ct_els_job_handler;
 	return zfcp_fsf_send_els(adapter, d_id, els, job->req->timeout / HZ);
 }
 
-static int zfcp_fc_exec_ct_job(struct bsg_job *job,
+static int zfcp_fc_exec_ct_job(struct fc_bsg_job *job,
 			       struct zfcp_adapter *adapter)
 {
 	int ret;
@@ -984,15 +932,13 @@ static int zfcp_fc_exec_ct_job(struct bsg_job *job,
 	return ret;
 }
 
-int zfcp_fc_exec_bsg_job(struct bsg_job *job)
+int zfcp_fc_exec_bsg_job(struct fc_bsg_job *job)
 {
 	struct Scsi_Host *shost;
 	struct zfcp_adapter *adapter;
 	struct zfcp_fsf_ct_els *ct_els = job->dd_data;
-	struct fc_bsg_request *bsg_request = job->request;
-	struct fc_rport *rport = fc_bsg_to_rport(job);
 
-	shost = rport ? rport_to_shost(rport) : fc_bsg_to_shost(job);
+	shost = job->rport ? rport_to_shost(job->rport) : job->shost;
 	adapter = (struct zfcp_adapter *)shost->hostdata[0];
 
 	if (!(atomic_read(&adapter->status) & ZFCP_STATUS_COMMON_OPEN))
@@ -1002,7 +948,7 @@ int zfcp_fc_exec_bsg_job(struct bsg_job *job)
 	ct_els->resp = job->reply_payload.sg_list;
 	ct_els->handler_data = job;
 
-	switch (bsg_request->msgcode) {
+	switch (job->request->msgcode) {
 	case FC_BSG_RPT_ELS:
 	case FC_BSG_HST_ELS_NOLOGIN:
 		return zfcp_fc_exec_els_job(job, adapter);
@@ -1014,7 +960,7 @@ int zfcp_fc_exec_bsg_job(struct bsg_job *job)
 	}
 }
 
-int zfcp_fc_timeout_bsg_job(struct bsg_job *job)
+int zfcp_fc_timeout_bsg_job(struct fc_bsg_job *job)
 {
 	/* hardware tracks timeout, reset bsg timeout to not interfere */
 	return -EAGAIN;

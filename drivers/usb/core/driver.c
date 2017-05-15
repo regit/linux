@@ -15,9 +15,6 @@
  *		(usb_device_id matching changes by Adam J. Richter)
  *	(C) Copyright Greg Kroah-Hartman 2002-2003
  *
- * Released under the GPLv2 only.
- * SPDX-License-Identifier: GPL-2.0
- *
  * NOTE! This is not actually a driver at all, rather this is
  * just a collection of helper routines that implement the
  * matching, probing, releasing, suspending and resuming for
@@ -163,7 +160,6 @@ static ssize_t remove_id_store(struct device_driver *driver, const char *buf,
 	spin_lock(&usb_driver->dynids.lock);
 	list_for_each_entry_safe(dynid, n, &usb_driver->dynids.list, node) {
 		struct usb_device_id *id = &dynid->id;
-
 		if ((id->idVendor == idVendor) &&
 		    (id->idProduct == idProduct)) {
 			list_del(&dynid->node);
@@ -279,6 +275,21 @@ static int usb_unbind_device(struct device *dev)
 	return 0;
 }
 
+/*
+ * Cancel any pending scheduled resets
+ *
+ * [see usb_queue_reset_device()]
+ *
+ * Called after unconfiguring / when releasing interfaces. See
+ * comments in __usb_queue_reset_device() regarding
+ * udev->reset_running.
+ */
+static void usb_cancel_queued_reset(struct usb_interface *iface)
+{
+	if (iface->reset_running == 0)
+		cancel_work_sync(&iface->reset_ws);
+}
+
 /* called from driver core with dev locked */
 static int usb_probe_interface(struct device *dev)
 {
@@ -287,7 +298,7 @@ static int usb_probe_interface(struct device *dev)
 	struct usb_device *udev = interface_to_usbdev(intf);
 	const struct usb_device_id *id;
 	int error = -ENODEV;
-	int lpm_disable_error = -ENODEV;
+	int lpm_disable_error;
 
 	dev_dbg(dev, "%s\n", __func__);
 
@@ -298,10 +309,6 @@ static int usb_probe_interface(struct device *dev)
 
 	if (udev->authorized == 0) {
 		dev_err(&intf->dev, "Device is not authorized for usage\n");
-		return error;
-	} else if (intf->authorized == 0) {
-		dev_err(&intf->dev, "Interface %d is not authorized for usage\n",
-				intf->altsetting->desc.bInterfaceNumber);
 		return error;
 	}
 
@@ -339,14 +346,12 @@ static int usb_probe_interface(struct device *dev)
 	 * setting during probe, that should also be fine.  usb_set_interface()
 	 * will attempt to disable LPM, and fail if it can't disable it.
 	 */
-	if (driver->disable_hub_initiated_lpm) {
-		lpm_disable_error = usb_unlocked_disable_lpm(udev);
-		if (lpm_disable_error) {
-			dev_err(&intf->dev, "%s Failed to disable LPM for driver %s\n.",
-					__func__, driver->name);
-			error = lpm_disable_error;
-			goto err;
-		}
+	lpm_disable_error = usb_unlocked_disable_lpm(udev);
+	if (lpm_disable_error && driver->disable_hub_initiated_lpm) {
+		dev_err(&intf->dev, "%s Failed to disable LPM for driver %s\n.",
+				__func__, driver->name);
+		error = lpm_disable_error;
+		goto err;
 	}
 
 	/* Carry out a deferred switch to altsetting 0 */
@@ -375,6 +380,7 @@ static int usb_probe_interface(struct device *dev)
 	usb_set_intfdata(intf, NULL);
 	intf->needs_remote_wakeup = 0;
 	intf->condition = USB_INTERFACE_UNBOUND;
+	usb_cancel_queued_reset(intf);
 
 	/* If the LPM disable succeeded, balance the ref counts. */
 	if (!lpm_disable_error)
@@ -396,8 +402,7 @@ static int usb_unbind_interface(struct device *dev)
 	struct usb_interface *intf = to_usb_interface(dev);
 	struct usb_host_endpoint *ep, **eps = NULL;
 	struct usb_device *udev;
-	int i, j, error, r;
-	int lpm_disable_error = -ENODEV;
+	int i, j, error, r, lpm_disable_error;
 
 	intf->condition = USB_INTERFACE_UNBINDING;
 
@@ -405,22 +410,21 @@ static int usb_unbind_interface(struct device *dev)
 	udev = interface_to_usbdev(intf);
 	error = usb_autoresume_device(udev);
 
-	/* If hub-initiated LPM policy may change, attempt to disable LPM until
+	/* Hub-initiated LPM policy may change, so attempt to disable LPM until
 	 * the driver is unbound.  If LPM isn't disabled, that's fine because it
 	 * wouldn't be enabled unless all the bound interfaces supported
 	 * hub-initiated LPM.
 	 */
-	if (driver->disable_hub_initiated_lpm)
-		lpm_disable_error = usb_unlocked_disable_lpm(udev);
+	lpm_disable_error = usb_unlocked_disable_lpm(udev);
 
-	/*
-	 * Terminate all URBs for this interface unless the driver
-	 * supports "soft" unbinding and the device is still present.
+	/* Terminate all URBs for this interface unless the driver
+	 * supports "soft" unbinding.
 	 */
-	if (!driver->soft_unbind || udev->state == USB_STATE_NOTATTACHED)
+	if (!driver->soft_unbind)
 		usb_disable_interface(udev, intf, false);
 
 	driver->disconnect(intf);
+	usb_cancel_queued_reset(intf);
 
 	/* Free streams */
 	for (i = 0, j = 0; i < intf->cur_altsetting->desc.bNumEndpoints; i++) {
@@ -428,10 +432,12 @@ static int usb_unbind_interface(struct device *dev)
 		if (ep->streams == 0)
 			continue;
 		if (j == 0) {
-			eps = kmalloc_array(USB_MAXENDPOINTS, sizeof(void *),
+			eps = kmalloc(USB_MAXENDPOINTS * sizeof(void *),
 				      GFP_KERNEL);
-			if (!eps)
+			if (!eps) {
+				dev_warn(dev, "oom, leaking streams\n");
 				break;
+			}
 		}
 		eps[j++] = ep;
 	}
@@ -509,21 +515,13 @@ static int usb_unbind_interface(struct device *dev)
 int usb_driver_claim_interface(struct usb_driver *driver,
 				struct usb_interface *iface, void *priv)
 {
-	struct device *dev;
+	struct device *dev = &iface->dev;
 	struct usb_device *udev;
 	int retval = 0;
-	int lpm_disable_error = -ENODEV;
+	int lpm_disable_error;
 
-	if (!iface)
-		return -ENODEV;
-
-	dev = &iface->dev;
 	if (dev->driver)
 		return -EBUSY;
-
-	/* reject claim if interface is not authorized */
-	if (!iface->authorized)
-		return -ENODEV;
 
 	udev = interface_to_usbdev(iface);
 
@@ -533,14 +531,12 @@ int usb_driver_claim_interface(struct usb_driver *driver,
 
 	iface->condition = USB_INTERFACE_BOUND;
 
-	/* See the comment about disabling LPM in usb_probe_interface(). */
-	if (driver->disable_hub_initiated_lpm) {
-		lpm_disable_error = usb_unlocked_disable_lpm(udev);
-		if (lpm_disable_error) {
-			dev_err(&iface->dev, "%s Failed to disable LPM for driver %s\n.",
-					__func__, driver->name);
-			return -ENOMEM;
-		}
+	/* Disable LPM until this driver is bound. */
+	lpm_disable_error = usb_unlocked_disable_lpm(udev);
+	if (lpm_disable_error && driver->disable_hub_initiated_lpm) {
+		dev_err(&iface->dev, "%s Failed to disable LPM for driver %s\n.",
+				__func__, driver->name);
+		return -ENOMEM;
 	}
 
 	/* Claimed interfaces are initially inactive (suspended) and
@@ -1496,6 +1492,10 @@ int usb_resume(struct device *dev, pm_message_t msg)
 	return status;
 }
 
+#endif /* CONFIG_PM */
+
+#ifdef CONFIG_PM_RUNTIME
+
 /**
  * usb_enable_autosuspend - allow a USB device to be autosuspended
  * @udev: the USB device which may be autosuspended
@@ -1800,18 +1800,6 @@ static int autosuspend_check(struct usb_device *udev)
 		dev_dbg(&udev->dev, "remote wakeup needed for autosuspend\n");
 		return -EOPNOTSUPP;
 	}
-
-	/*
-	 * If the device is a direct child of the root hub and the HCD
-	 * doesn't handle wakeup requests, don't allow autosuspend when
-	 * wakeup is needed.
-	 */
-	if (w && udev->parent == udev->bus->root_hub &&
-			bus_to_hcd(udev->bus)->cant_recv_wakeups) {
-		dev_dbg(&udev->dev, "HCD doesn't handle wakeup requests\n");
-		return -EOPNOTSUPP;
-	}
-
 	udev->do_remote_wakeup = w;
 	return 0;
 }
@@ -1887,7 +1875,7 @@ int usb_set_usb2_hardware_lpm(struct usb_device *udev, int enable)
 	return ret;
 }
 
-#endif /* CONFIG_PM */
+#endif /* CONFIG_PM_RUNTIME */
 
 struct bus_type usb_bus_type = {
 	.name =		"usb",

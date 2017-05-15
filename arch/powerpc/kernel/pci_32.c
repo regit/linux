@@ -24,7 +24,7 @@
 #include <asm/pci-bridge.h>
 #include <asm/ppc-pci.h>
 #include <asm/byteorder.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/machdep.h>
 
 #undef DEBUG
@@ -32,8 +32,6 @@
 unsigned long isa_io_base     = 0;
 unsigned long pci_dram_offset = 0;
 int pcibios_assign_bus_offset = 1;
-EXPORT_SYMBOL(isa_io_base);
-EXPORT_SYMBOL(pci_dram_offset);
 
 void pcibios_make_OF_bus_map(void);
 
@@ -201,7 +199,9 @@ pci_create_OF_bus_map(void)
 	struct property* of_prop;
 	struct device_node *dn;
 
-	of_prop = memblock_virt_alloc(sizeof(struct property) + 256, 0);
+	of_prop = (struct property*) alloc_bootmem(sizeof(struct property) + 256);
+	if (!of_prop)
+		return;
 	dn = of_find_node_by_path("/");
 	if (dn) {
 		memset(of_prop, -1, sizeof(struct property) + 256);

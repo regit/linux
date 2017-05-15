@@ -184,9 +184,8 @@ void fdtv_handle_rc(struct firedtv *fdtv, unsigned int code)
 	else if (code >= 0x4540 && code <= 0x4542)
 		code = oldtable[code - 0x4521];
 	else {
-		dev_dbg(fdtv->device,
-			"invalid key code 0x%04x from remote control\n",
-			code);
+		printk(KERN_DEBUG "firedtv: invalid key code 0x%04x "
+		       "from remote control\n", code);
 		return;
 	}
 

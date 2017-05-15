@@ -172,7 +172,7 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 	struct crypto_larval *larval = (void *)alg;
 	long timeout;
 
-	timeout = wait_for_completion_killable_timeout(
+	timeout = wait_for_completion_interruptible_timeout(
 		&larval->completion, 60 * HZ);
 
 	alg = larval->adult;
@@ -211,16 +211,16 @@ struct crypto_alg *crypto_larval_lookup(const char *name, u32 type, u32 mask)
 	if (!name)
 		return ERR_PTR(-ENOENT);
 
-	type &= ~(CRYPTO_ALG_LARVAL | CRYPTO_ALG_DEAD);
 	mask &= ~(CRYPTO_ALG_LARVAL | CRYPTO_ALG_DEAD);
+	type &= mask;
 
 	alg = crypto_alg_lookup(name, type, mask);
 	if (!alg) {
-		request_module("crypto-%s", name);
+		request_module("%s", name);
 
 		if (!((type ^ CRYPTO_ALG_NEED_FALLBACK) & mask &
 		      CRYPTO_ALG_NEED_FALLBACK))
-			request_module("crypto-%s-all", name);
+			request_module("%s-all", name);
 
 		alg = crypto_alg_lookup(name, type, mask);
 	}
@@ -256,16 +256,6 @@ struct crypto_alg *crypto_alg_mod_lookup(const char *name, u32 type, u32 mask)
 		type |= CRYPTO_ALG_TESTED;
 		mask |= CRYPTO_ALG_TESTED;
 	}
-
-	/*
-	 * If the internal flag is set for a cipher, require a caller to
-	 * to invoke the cipher with the internal flag to use that cipher.
-	 * Also, if a caller wants to allocate a cipher that may or may
-	 * not be an internal cipher, use type | CRYPTO_ALG_INTERNAL and
-	 * !(mask & CRYPTO_ALG_INTERNAL).
-	 */
-	if (!((type | mask) & CRYPTO_ALG_INTERNAL))
-		mask |= CRYPTO_ALG_INTERNAL;
 
 	larval = crypto_larval_lookup(name, type, mask);
 	if (IS_ERR(larval) || !crypto_is_larval(larval))
@@ -310,8 +300,24 @@ static void crypto_exit_ops(struct crypto_tfm *tfm)
 {
 	const struct crypto_type *type = tfm->__crt_alg->cra_type;
 
-	if (type && tfm->exit)
-		tfm->exit(tfm);
+	if (type) {
+		if (tfm->exit)
+			tfm->exit(tfm);
+		return;
+	}
+
+	switch (crypto_tfm_alg_type(tfm)) {
+	case CRYPTO_ALG_TYPE_CIPHER:
+		crypto_exit_cipher_ops(tfm);
+		break;
+
+	case CRYPTO_ALG_TYPE_COMPRESS:
+		crypto_exit_compress_ops(tfm);
+		break;
+
+	default:
+		BUG();
+	}
 }
 
 static unsigned int crypto_ctxsize(struct crypto_alg *alg, u32 type, u32 mask)
@@ -429,7 +435,7 @@ struct crypto_tfm *crypto_alloc_base(const char *alg_name, u32 type, u32 mask)
 err:
 		if (err != -EAGAIN)
 			break;
-		if (fatal_signal_pending(current)) {
+		if (signal_pending(current)) {
 			err = -EINTR;
 			break;
 		}
@@ -546,7 +552,7 @@ void *crypto_alloc_tfm(const char *alg_name,
 err:
 		if (err != -EAGAIN)
 			break;
-		if (fatal_signal_pending(current)) {
+		if (signal_pending(current)) {
 			err = -EINTR;
 			break;
 		}

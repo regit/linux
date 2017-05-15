@@ -206,7 +206,7 @@ static int ds_send_control_cmd(struct ds_device *dev, u16 value, u16 index)
 	err = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, dev->ep[EP_CONTROL]),
 			CONTROL_CMD, VENDOR, value, index, NULL, 0, 1000);
 	if (err < 0) {
-		pr_err("Failed to send command control message %x.%x: err=%d.\n",
+		printk(KERN_ERR "Failed to send command control message %x.%x: err=%d.\n",
 				value, index, err);
 		return err;
 	}
@@ -221,7 +221,7 @@ static int ds_send_control_mode(struct ds_device *dev, u16 value, u16 index)
 	err = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, dev->ep[EP_CONTROL]),
 			MODE_CMD, VENDOR, value, index, NULL, 0, 1000);
 	if (err < 0) {
-		pr_err("Failed to send mode control message %x.%x: err=%d.\n",
+		printk(KERN_ERR "Failed to send mode control message %x.%x: err=%d.\n",
 				value, index, err);
 		return err;
 	}
@@ -236,7 +236,7 @@ static int ds_send_control(struct ds_device *dev, u16 value, u16 index)
 	err = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, dev->ep[EP_CONTROL]),
 			COMM_CMD, VENDOR, value, index, NULL, 0, 1000);
 	if (err < 0) {
-		pr_err("Failed to send control message %x.%x: err=%d.\n",
+		printk(KERN_ERR "Failed to send control message %x.%x: err=%d.\n",
 				value, index, err);
 		return err;
 	}
@@ -253,10 +253,9 @@ static int ds_recv_status_nodump(struct ds_device *dev, struct ds_status *st,
 
 	count = 0;
 	err = usb_interrupt_msg(dev->udev, usb_rcvintpipe(dev->udev,
-		dev->ep[EP_STATUS]), buf, size, &count, 1000);
+		dev->ep[EP_STATUS]), buf, size, &count, 100);
 	if (err < 0) {
-		pr_err("Failed to read 1-wire data from 0x%x: err=%d.\n",
-		       dev->ep[EP_STATUS], err);
+		printk(KERN_ERR "Failed to read 1-wire data from 0x%x: err=%d.\n", dev->ep[EP_STATUS], err);
 		return err;
 	}
 
@@ -268,17 +267,17 @@ static int ds_recv_status_nodump(struct ds_device *dev, struct ds_status *st,
 
 static inline void ds_print_msg(unsigned char *buf, unsigned char *str, int off)
 {
-	pr_info("%45s: %8x\n", str, buf[off]);
+	printk(KERN_INFO "%45s: %8x\n", str, buf[off]);
 }
 
 static void ds_dump_status(struct ds_device *dev, unsigned char *buf, int count)
 {
 	int i;
 
-	pr_info("0x%x: count=%d, status: ", dev->ep[EP_STATUS], count);
+	printk(KERN_INFO "0x%x: count=%d, status: ", dev->ep[EP_STATUS], count);
 	for (i=0; i<count; ++i)
-		pr_info("%02x ", buf[i]);
-	pr_info("\n");
+		printk("%02x ", buf[i]);
+	printk(KERN_INFO "\n");
 
 	if (count >= 16) {
 		ds_print_msg(buf, "enable flag", 0);
@@ -306,21 +305,21 @@ static void ds_dump_status(struct ds_device *dev, unsigned char *buf, int count)
 		}
 		ds_print_msg(buf, "Result Register Value: ", i);
 		if (buf[i] & RR_NRS)
-			pr_info("NRS: Reset no presence or ...\n");
+			printk(KERN_INFO "NRS: Reset no presence or ...\n");
 		if (buf[i] & RR_SH)
-			pr_info("SH: short on reset or set path\n");
+			printk(KERN_INFO "SH: short on reset or set path\n");
 		if (buf[i] & RR_APP)
-			pr_info("APP: alarming presence on reset\n");
+			printk(KERN_INFO "APP: alarming presence on reset\n");
 		if (buf[i] & RR_VPP)
-			pr_info("VPP: 12V expected not seen\n");
+			printk(KERN_INFO "VPP: 12V expected not seen\n");
 		if (buf[i] & RR_CMP)
-			pr_info("CMP: compare error\n");
+			printk(KERN_INFO "CMP: compare error\n");
 		if (buf[i] & RR_CRC)
-			pr_info("CRC: CRC error detected\n");
+			printk(KERN_INFO "CRC: CRC error detected\n");
 		if (buf[i] & RR_RDP)
-			pr_info("RDP: redirected page\n");
+			printk(KERN_INFO "RDP: redirected page\n");
 		if (buf[i] & RR_EOS)
-			pr_info("EOS: end of search error\n");
+			printk(KERN_INFO "EOS: end of search error\n");
 	}
 }
 
@@ -331,13 +330,15 @@ static void ds_reset_device(struct ds_device *dev)
 	 * the strong pullup.
 	 */
 	if (ds_send_control_mode(dev, MOD_PULSE_EN, PULSE_SPUE))
-		pr_err("ds_reset_device: Error allowing strong pullup\n");
+		printk(KERN_ERR "ds_reset_device: "
+			"Error allowing strong pullup\n");
 	/* Chip strong pullup time was cleared. */
 	if (dev->spu_sleep) {
 		/* lower 4 bits are 0, see ds_set_pullup */
 		u8 del = dev->spu_sleep>>4;
 		if (ds_send_control(dev, COMM_SET_DURATION | COMM_IM, del))
-			pr_err("ds_reset_device: Error setting duration\n");
+			printk(KERN_ERR "ds_reset_device: "
+				"Error setting duration\n");
 	}
 }
 
@@ -362,7 +363,7 @@ static int ds_recv_data(struct ds_device *dev, unsigned char *buf, int size)
 		u8 buf[ST_SIZE];
 		int count;
 
-		pr_info("Clearing ep0x%x.\n", dev->ep[EP_DATA_IN]);
+		printk(KERN_INFO "Clearing ep0x%x.\n", dev->ep[EP_DATA_IN]);
 		usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, dev->ep[EP_DATA_IN]));
 
 		count = ds_recv_status_nodump(dev, &st, buf, sizeof(buf));
@@ -390,7 +391,7 @@ static int ds_send_data(struct ds_device *dev, unsigned char *buf, int len)
 	count = 0;
 	err = usb_bulk_msg(dev->udev, usb_sndbulkpipe(dev->udev, dev->ep[EP_DATA_OUT]), buf, len, &count, 1000);
 	if (err < 0) {
-		pr_err("Failed to write 1-wire data to ep0x%x: "
+		printk(KERN_ERR "Failed to write 1-wire data to ep0x%x: "
 			"err=%d.\n", dev->ep[EP_DATA_OUT], err);
 		return err;
 	}
@@ -474,7 +475,7 @@ static int ds_wait_status(struct ds_device *dev, struct ds_status *st)
 	} while (!(st->status & ST_IDLE) && !(err < 0) && ++count < 100);
 
 	if (err >= 16 && st->status & ST_EPOF) {
-		pr_info("Resetting device after ST_EPOF.\n");
+		printk(KERN_INFO "Resetting device after ST_EPOF.\n");
 		ds_reset_device(dev);
 		/* Always dump the device status. */
 		count = 101;
@@ -991,7 +992,7 @@ static int ds_probe(struct usb_interface *intf,
 
 	dev = kzalloc(sizeof(struct ds_device), GFP_KERNEL);
 	if (!dev) {
-		pr_info("Failed to allocate new DS9490R structure.\n");
+		printk(KERN_INFO "Failed to allocate new DS9490R structure.\n");
 		return -ENOMEM;
 	}
 	dev->udev = usb_get_dev(udev);
@@ -1023,8 +1024,7 @@ static int ds_probe(struct usb_interface *intf,
 
 	iface_desc = &intf->altsetting[alt];
 	if (iface_desc->desc.bNumEndpoints != NUM_EP-1) {
-		pr_info("Num endpoints=%d. It is not DS9490R.\n",
-			iface_desc->desc.bNumEndpoints);
+		printk(KERN_INFO "Num endpoints=%d. It is not DS9490R.\n", iface_desc->desc.bNumEndpoints);
 		err = -EINVAL;
 		goto err_out_clear;
 	}

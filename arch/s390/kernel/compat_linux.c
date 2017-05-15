@@ -51,7 +51,7 @@
 #include <linux/slab.h>
 
 #include <asm/types.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <net/scm.h>
 #include <net/sock.h>
@@ -189,7 +189,7 @@ static int groups16_to_user(u16 __user *grouplist, struct group_info *group_info
 	kgid_t kgid;
 
 	for (i = 0; i < group_info->ngroups; i++) {
-		kgid = group_info->gid[i];
+		kgid = GROUP_AT(group_info, i);
 		group = (u16)from_kgid_munged(user_ns, kgid);
 		if (put_user(group, grouplist+i))
 			return -EFAULT;
@@ -213,7 +213,7 @@ static int groups16_from_user(struct group_info *group_info, u16 __user *groupli
 		if (!gid_valid(kgid))
 			return -EINVAL;
 
-		group_info->gid[i] = kgid;
+		GROUP_AT(group_info, i) = kgid;
 	}
 
 	return 0;
@@ -249,7 +249,7 @@ COMPAT_SYSCALL_DEFINE2(s390_setgroups16, int, gidsetsize, u16 __user *, grouplis
 	struct group_info *group_info;
 	int retval;
 
-	if (!may_setgroups())
+	if (!capable(CAP_SETGID))
 		return -EPERM;
 	if ((unsigned)gidsetsize > NGROUPS_MAX)
 		return -EINVAL;

@@ -18,7 +18,7 @@
 #include <linux/pci.h>
 #include <linux/pci_ids.h>
 #include <linux/edac.h>
-#include "edac_module.h"
+#include "edac_core.h"
 
 #define I82875P_REVISION	" Ver: 2.0.2"
 #define EDAC_MOD_STR		"i82875p_edac"
@@ -576,7 +576,9 @@ fail1:
 	pci_unregister_driver(&i82875p_driver);
 
 fail0:
-	pci_dev_put(mci_pdev);
+	if (mci_pdev != NULL)
+		pci_dev_put(mci_pdev);
+
 	return pci_rc;
 }
 

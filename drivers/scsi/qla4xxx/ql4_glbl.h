@@ -23,7 +23,7 @@ void qla4xxx_process_aen(struct scsi_qla_host *ha, uint8_t process_aen);
 int qla4xxx_get_dhcp_ip_address(struct scsi_qla_host *ha);
 int qla4xxx_abort_task(struct scsi_qla_host *ha, struct srb *srb);
 int qla4xxx_reset_lun(struct scsi_qla_host *ha, struct ddb_entry *ddb_entry,
-		      uint64_t lun);
+		      int lun);
 int qla4xxx_reset_target(struct scsi_qla_host *ha,
 			 struct ddb_entry *ddb_entry);
 int qla4xxx_get_flash(struct scsi_qla_host *ha, dma_addr_t dma_addr,
@@ -76,7 +76,7 @@ int qla4xxx_process_ddb_changed(struct scsi_qla_host *ha, uint32_t fw_ddb_index,
 		uint32_t state, uint32_t conn_error);
 void qla4xxx_dump_buffer(void *b, uint32_t size);
 int qla4xxx_send_marker_iocb(struct scsi_qla_host *ha,
-	struct ddb_entry *ddb_entry, uint64_t lun, uint16_t mrkr_mod);
+	struct ddb_entry *ddb_entry, int lun, uint16_t mrkr_mod);
 int qla4xxx_set_flash(struct scsi_qla_host *ha, dma_addr_t dma_addr,
 		      uint32_t offset, uint32_t length, uint32_t options);
 int qla4xxx_mailbox_command(struct scsi_qla_host *ha, uint8_t inCount,
@@ -134,6 +134,7 @@ int qla4_8xxx_get_flash_info(struct scsi_qla_host *ha);
 void qla4_82xx_enable_intrs(struct scsi_qla_host *ha);
 void qla4_82xx_disable_intrs(struct scsi_qla_host *ha);
 int qla4_8xxx_enable_msix(struct scsi_qla_host *ha);
+void qla4_8xxx_disable_msix(struct scsi_qla_host *ha);
 irqreturn_t qla4_8xxx_msi_handler(int irq, void *dev_id);
 irqreturn_t qla4_8xxx_default_intr_handler(int irq, void *dev_id);
 irqreturn_t qla4_8xxx_msix_rsp_q(int irq, void *dev_id);

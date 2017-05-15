@@ -11,7 +11,7 @@
  */
 
 #ifndef __DA732X_H_
-#define __DA732X_H_
+#define __DA732X_H
 
 #include <sound/soc.h>
 

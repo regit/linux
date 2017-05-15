@@ -130,7 +130,7 @@ static int rx_submit(struct usbpn_dev *pnd, struct urb *req, gfp_t gfp_flags)
 	struct page *page;
 	int err;
 
-	page = __dev_alloc_page(gfp_flags | __GFP_NOMEMALLOC);
+	page = __skb_alloc_page(gfp_flags | __GFP_NOMEMALLOC, NULL);
 	if (!page)
 		return -ENOMEM;
 
@@ -212,7 +212,7 @@ resubmit:
 	if (page)
 		put_page(page);
 	if (req)
-		rx_submit(pnd, req, GFP_ATOMIC);
+		rx_submit(pnd, req, GFP_ATOMIC | __GFP_COLD);
 }
 
 static int usbpn_close(struct net_device *dev);
@@ -231,7 +231,7 @@ static int usbpn_open(struct net_device *dev)
 	for (i = 0; i < rxq_size; i++) {
 		struct urb *req = usb_alloc_urb(0, GFP_KERNEL);
 
-		if (!req || rx_submit(pnd, req, GFP_KERNEL)) {
+		if (!req || rx_submit(pnd, req, GFP_KERNEL | __GFP_COLD)) {
 			usb_free_urb(req);
 			usbpn_close(dev);
 			return -ENOMEM;
@@ -276,11 +276,21 @@ static int usbpn_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	return -ENOIOCTLCMD;
 }
 
+static int usbpn_set_mtu(struct net_device *dev, int new_mtu)
+{
+	if ((new_mtu < PHONET_MIN_MTU) || (new_mtu > PHONET_MAX_MTU))
+		return -EINVAL;
+
+	dev->mtu = new_mtu;
+	return 0;
+}
+
 static const struct net_device_ops usbpn_ops = {
 	.ndo_open	= usbpn_open,
 	.ndo_stop	= usbpn_close,
 	.ndo_start_xmit = usbpn_xmit,
 	.ndo_do_ioctl	= usbpn_ioctl,
+	.ndo_change_mtu = usbpn_set_mtu,
 };
 
 static void usbpn_setup(struct net_device *dev)
@@ -291,8 +301,6 @@ static void usbpn_setup(struct net_device *dev)
 	dev->type		= ARPHRD_PHONET;
 	dev->flags		= IFF_POINTOPOINT | IFF_NOARP;
 	dev->mtu		= PHONET_MAX_MTU;
-	dev->min_mtu		= PHONET_MIN_MTU;
-	dev->max_mtu		= PHONET_MAX_MTU;
 	dev->hard_header_len	= 1;
 	dev->dev_addr[0]	= PN_MEDIA_USB;
 	dev->addr_len		= 1;
@@ -332,13 +340,32 @@ static int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *i
 	u8 *data;
 	int phonet = 0;
 	int len, err;
-	struct usb_cdc_parsed_header hdr;
 
 	data = intf->altsetting->extra;
 	len = intf->altsetting->extralen;
-	cdc_parse_cdc_header(&hdr, intf, data, len);
-	union_header = hdr.usb_cdc_union_desc;
-	phonet = hdr.phonet_magic_present;
+	while (len >= 3) {
+		u8 dlen = data[0];
+		if (dlen < 3)
+			return -EINVAL;
+
+		/* bDescriptorType */
+		if (data[1] == USB_DT_CS_INTERFACE) {
+			/* bDescriptorSubType */
+			switch (data[2]) {
+			case USB_CDC_UNION_TYPE:
+				if (union_header || dlen < 5)
+					break;
+				union_header =
+					(struct usb_cdc_union_desc *)data;
+				break;
+			case 0xAB:
+				phonet = 1;
+				break;
+			}
+		}
+		data += dlen;
+		len -= dlen;
+	}
 
 	if (!union_header || !phonet)
 		return -EINVAL;
@@ -360,7 +387,7 @@ static int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *i
 		return -EINVAL;
 
 	dev = alloc_netdev(sizeof(*pnd) + sizeof(pnd->urbs[0]) * rxq_size,
-			   ifname, NET_NAME_UNKNOWN, usbpn_setup);
+				ifname, usbpn_setup);
 	if (!dev)
 		return -ENOMEM;
 

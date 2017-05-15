@@ -124,7 +124,6 @@ do_sync_gen_syndrome(struct page **blocks, unsigned int offset, int disks,
 {
 	void **srcs;
 	int i;
-	int start = -1, stop = disks - 3;
 
 	if (submit->scribble)
 		srcs = submit->scribble;
@@ -135,21 +134,10 @@ do_sync_gen_syndrome(struct page **blocks, unsigned int offset, int disks,
 		if (blocks[i] == NULL) {
 			BUG_ON(i > disks - 3); /* P or Q can't be zero */
 			srcs[i] = (void*)raid6_empty_zero_page;
-		} else {
+		} else
 			srcs[i] = page_address(blocks[i]) + offset;
-			if (i < disks - 2) {
-				stop = i;
-				if (start == -1)
-					start = i;
-			}
-		}
 	}
-	if (submit->flags & ASYNC_TX_PQ_XOR_DST) {
-		BUG_ON(!raid6_call.xor_syndrome);
-		if (start >= 0)
-			raid6_call.xor_syndrome(disks, start, stop, len, srcs);
-	} else
-		raid6_call.gen_syndrome(disks, len, srcs);
+	raid6_call.gen_syndrome(disks, len, srcs);
 	async_tx_sync_epilog(submit);
 }
 
@@ -188,10 +176,9 @@ async_gen_syndrome(struct page **blocks, unsigned int offset, int disks,
 	BUG_ON(disks > 255 || !(P(blocks, disks) || Q(blocks, disks)));
 
 	if (device)
-		unmap = dmaengine_get_unmap_data(device->dev, disks, GFP_NOWAIT);
+		unmap = dmaengine_get_unmap_data(device->dev, disks, GFP_NOIO);
 
-	/* XORing P/Q is only implemented in software */
-	if (unmap && !(submit->flags & ASYNC_TX_PQ_XOR_DST) &&
+	if (unmap &&
 	    (src_cnt <= dma_maxpq(device, 0) ||
 	     dma_maxpq(device, DMA_PREP_CONTINUE) > 0) &&
 	    is_dma_pq_aligned(device, offset, 0, len)) {
@@ -307,7 +294,7 @@ async_syndrome_val(struct page **blocks, unsigned int offset, int disks,
 	BUG_ON(disks < 4);
 
 	if (device)
-		unmap = dmaengine_get_unmap_data(device->dev, disks, GFP_NOWAIT);
+		unmap = dmaengine_get_unmap_data(device->dev, disks, GFP_NOIO);
 
 	if (unmap && disks <= dma_maxpq(device, 0) &&
 	    is_dma_pq_aligned(device, offset, 0, len)) {
@@ -368,6 +355,8 @@ async_syndrome_val(struct page **blocks, unsigned int offset, int disks,
 
 		dma_set_unmap(tx, unmap);
 		async_tx_submit(chan, tx, submit);
+
+		return tx;
 	} else {
 		struct page *p_src = P(blocks, disks);
 		struct page *q_src = Q(blocks, disks);
@@ -422,11 +411,9 @@ async_syndrome_val(struct page **blocks, unsigned int offset, int disks,
 		submit->cb_param = cb_param_orig;
 		submit->flags = flags_orig;
 		async_tx_sync_epilog(submit);
-		tx = NULL;
-	}
-	dmaengine_unmap_put(unmap);
 
-	return tx;
+		return NULL;
+	}
 }
 EXPORT_SYMBOL_GPL(async_syndrome_val);
 
@@ -444,7 +431,7 @@ static int __init async_pq_init(void)
 
 static void __exit async_pq_exit(void)
 {
-	__free_page(pq_scribble_page);
+	put_page(pq_scribble_page);
 }
 
 module_init(async_pq_init);

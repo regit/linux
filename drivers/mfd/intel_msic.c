@@ -12,7 +12,7 @@
 #include <linux/err.h>
 #include <linux/gpio.h>
 #include <linux/io.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/intel_msic.h>
 #include <linux/platform_device.h>
@@ -27,7 +27,7 @@
 
 /*
  * MSIC interrupt tree is readable from SRAM at INTEL_MSIC_IRQ_PHYS_BASE.
- * Since IRQ block starts from address 0x002 we need to subtract that from
+ * Since IRQ block starts from address 0x002 we need to substract that from
  * the actual IRQ status register address.
  */
 #define MSIC_IRQ_STATUS(x)	(INTEL_MSIC_IRQ_PHYS_BASE + ((x) - 2))
@@ -447,6 +447,12 @@ static struct platform_driver intel_msic_driver = {
 	.remove		= intel_msic_remove,
 	.driver		= {
 		.name	= "intel_msic",
+		.owner	= THIS_MODULE,
 	},
 };
-builtin_platform_driver(intel_msic_driver);
+
+module_platform_driver(intel_msic_driver);
+
+MODULE_DESCRIPTION("Driver for Intel MSIC");
+MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
+MODULE_LICENSE("GPL");

@@ -38,6 +38,7 @@
 #include <mach/fb.h>
 #include <linux/platform_data/i2c-s3c2410.h>
 
+#include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/cpu.h>
 #include <plat/samsung-time.h>
@@ -150,4 +151,5 @@ MACHINE_START(SMDK2443, "SMDK2443")
 	.map_io		= smdk2443_map_io,
 	.init_machine	= smdk2443_machine_init,
 	.init_time	= smdk2443_init_time,
+	.restart	= s3c2443_restart,
 MACHINE_END

@@ -10,11 +10,6 @@
 	aliases {
 		rtc0 = "/i2c@7000c500/rtc@56";
 		rtc1 = "/rtc@7000e000";
-		serial0 = &uarta;
-	};
-
-	chosen {
-		stdout-path = "serial0:115200n8";
 	};
 
 	memory {
@@ -323,12 +318,8 @@
 
 	pcie-controller@80003000 {
 		status = "okay";
-
-		avdd-pex-supply = <&pci_vdd_reg>;
-		vdd-pex-supply = <&pci_vdd_reg>;
-		avdd-pex-pll-supply = <&pci_vdd_reg>;
-		avdd-plle-supply = <&pci_vdd_reg>;
-		vddio-pex-clk-supply = <&pci_clk_reg>;
+		pex-clk-supply = <&pci_clk_reg>;
+		vdd-supply = <&pci_vdd_reg>;
 
 		pci@1,0 {
 			status = "okay";
@@ -383,7 +374,7 @@
 
 		clk32k_in: clock@0 {
 			compatible = "fixed-clock";
-			reg = <0>;
+			reg=<0>;
 			#clock-cells = <0>;
 			clock-frequency = <32768>;
 		};
@@ -396,7 +387,7 @@
 			label = "Power";
 			gpios = <&gpio TEGRA_GPIO(X, 6) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 	};
 

@@ -35,7 +35,7 @@
 #include <asm/time.h>
 #include <asm/spu.h>
 #include <asm/spu_info.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "spufs.h"
 #include "sputrace.h"
@@ -236,14 +236,32 @@ static int
 spufs_mem_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct spu_context *ctx	= vma->vm_file->private_data;
+	unsigned long address = (unsigned long)vmf->virtual_address;
 	unsigned long pfn, offset;
+
+#ifdef CONFIG_SPU_FS_64K_LS
+	struct spu_state *csa = &ctx->csa;
+	int psize;
+
+	/* Check what page size we are using */
+	psize = get_slice_psize(vma->vm_mm, address);
+
+	/* Some sanity checking */
+	BUG_ON(csa->use_big_pages != (psize == MMU_PAGE_64K));
+
+	/* Wow, 64K, cool, we need to align the address though */
+	if (csa->use_big_pages) {
+		BUG_ON(vma->vm_start & 0xffff);
+		address &= ~0xfffful;
+	}
+#endif /* CONFIG_SPU_FS_64K_LS */
 
 	offset = vmf->pgoff << PAGE_SHIFT;
 	if (offset >= LS_SIZE)
 		return VM_FAULT_SIGBUS;
 
 	pr_debug("spufs_mem_mmap_fault address=0x%lx, offset=0x%lx\n",
-			vmf->address, offset);
+			address, offset);
 
 	if (spu_acquire(ctx))
 		return VM_FAULT_NOPAGE;
@@ -255,7 +273,7 @@ spufs_mem_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 		vma->vm_page_prot = pgprot_noncached_wc(vma->vm_page_prot);
 		pfn = (ctx->spu->local_store_phys + offset) >> PAGE_SHIFT;
 	}
-	vm_insert_pfn(vma, vmf->address, pfn);
+	vm_insert_pfn(vma, address, pfn);
 
 	spu_release(ctx);
 
@@ -292,6 +310,22 @@ static const struct vm_operations_struct spufs_mem_mmap_vmops = {
 
 static int spufs_mem_mmap(struct file *file, struct vm_area_struct *vma)
 {
+#ifdef CONFIG_SPU_FS_64K_LS
+	struct spu_context	*ctx = file->private_data;
+	struct spu_state	*csa = &ctx->csa;
+
+	/* Sanity check VMA alignment */
+	if (csa->use_big_pages) {
+		pr_debug("spufs_mem_mmap 64K, start=0x%lx, end=0x%lx,"
+			 " pgoff=0x%lx\n", vma->vm_start, vma->vm_end,
+			 vma->vm_pgoff);
+		if (vma->vm_start & 0xffff)
+			return -EINVAL;
+		if (vma->vm_pgoff & 0xf)
+			return -EINVAL;
+	}
+#endif /* CONFIG_SPU_FS_64K_LS */
+
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
@@ -302,6 +336,25 @@ static int spufs_mem_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+#ifdef CONFIG_SPU_FS_64K_LS
+static unsigned long spufs_get_unmapped_area(struct file *file,
+		unsigned long addr, unsigned long len, unsigned long pgoff,
+		unsigned long flags)
+{
+	struct spu_context	*ctx = file->private_data;
+	struct spu_state	*csa = &ctx->csa;
+
+	/* If not using big pages, fallback to normal MM g_u_a */
+	if (!csa->use_big_pages)
+		return current->mm->get_unmapped_area(file, addr, len,
+						      pgoff, flags);
+
+	/* Else, try to obtain a 64K pages slice */
+	return slice_get_unmapped_area(addr, len, flags,
+				       MMU_PAGE_64K, 1);
+}
+#endif /* CONFIG_SPU_FS_64K_LS */
+
 static const struct file_operations spufs_mem_fops = {
 	.open			= spufs_mem_open,
 	.release		= spufs_mem_release,
@@ -309,6 +362,9 @@ static const struct file_operations spufs_mem_fops = {
 	.write			= spufs_mem_write,
 	.llseek			= generic_file_llseek,
 	.mmap			= spufs_mem_mmap,
+#ifdef CONFIG_SPU_FS_64K_LS
+	.get_unmapped_area	= spufs_get_unmapped_area,
+#endif
 };
 
 static int spufs_ps_fault(struct vm_area_struct *vma,
@@ -354,7 +410,8 @@ static int spufs_ps_fault(struct vm_area_struct *vma,
 		down_read(&current->mm->mmap_sem);
 	} else {
 		area = ctx->spu->problem_phys + ps_offs;
-		vm_insert_pfn(vma, vmf->address, (area + offset) >> PAGE_SHIFT);
+		vm_insert_pfn(vma, (unsigned long)vmf->virtual_address,
+					(area + offset) >> PAGE_SHIFT);
 		spu_context_trace(spufs_ps_fault__insert, ctx, ctx->spu);
 	}
 
@@ -864,7 +921,7 @@ void spufs_wbox_callback(struct spu *spu)
  * - end of the mapped area
  *
  * If the file is opened without O_NONBLOCK, we wait here until
- * space is available, but return when we have been able to
+ * space is availabyl, but return when we have been able to
  * write something.
  */
 static ssize_t spufs_wbox_write(struct file *file, const char __user *buf,
@@ -1797,9 +1854,9 @@ static int spufs_mfc_fsync(struct file *file, loff_t start, loff_t end, int data
 	struct inode *inode = file_inode(file);
 	int err = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (!err) {
-		inode_lock(inode);
+		mutex_lock(&inode->i_mutex);
 		err = spufs_mfc_flush(file, NULL);
-		inode_unlock(inode);
+		mutex_unlock(&inode->i_mutex);
 	}
 	return err;
 }
@@ -2281,6 +2338,7 @@ static const char *ctx_state_names[] = {
 static unsigned long long spufs_acct_time(struct spu_context *ctx,
 		enum spu_utilization_state state)
 {
+	struct timespec ts;
 	unsigned long long time = ctx->stats.times[state];
 
 	/*
@@ -2293,7 +2351,8 @@ static unsigned long long spufs_acct_time(struct spu_context *ctx,
 	 * of the spu context.
 	 */
 	if (ctx->spu && ctx->stats.util_state == state) {
-		time += ktime_get_ns() - ctx->stats.tstamp;
+		ktime_get_ts(&ts);
+		time += timespec_to_ns(&ts) - ctx->stats.tstamp;
 	}
 
 	return time / NSEC_PER_MSEC;

@@ -126,7 +126,7 @@ static void wl1271_tx_regulate_link(struct wl1271 *wl,
 	if (WARN_ON(!test_bit(hlid, wlvif->links_map)))
 		return;
 
-	fw_ps = test_bit(hlid, &wl->ap_fw_ps_map);
+	fw_ps = test_bit(hlid, (unsigned long *)&wl->ap_fw_ps_map);
 	tx_pkts = wl->links[hlid].allocated_pkts;
 
 	/*
@@ -453,7 +453,7 @@ static int wl1271_prepare_tx_frame(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 }
 
 u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set,
-				enum nl80211_band rate_band)
+				enum ieee80211_band rate_band)
 {
 	struct ieee80211_supported_band *band;
 	u32 enabled_rates = 0;

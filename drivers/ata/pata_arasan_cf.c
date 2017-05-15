@@ -4,7 +4,7 @@
  * Arasan Compact Flash host controller source file
  *
  * Copyright (C) 2011 ST Microelectronics
- * Viresh Kumar <vireshk@kernel.org>
+ * Viresh Kumar <viresh.linux@gmail.com>
  *
  * This file is licensed under the terms of the GNU General Public
  * License version 2. This program is licensed "as is" without any
@@ -420,7 +420,7 @@ dma_xfer(struct arasan_cf_dev *acdev, dma_addr_t src, dma_addr_t dest, u32 len)
 
 	/* Wait for DMA to complete */
 	if (!wait_for_completion_timeout(&acdev->dma_completion, TIMEOUT)) {
-		dmaengine_terminate_all(chan);
+		chan->device->device_control(chan, DMA_TERMINATE_ALL, 0);
 		dev_err(acdev->host->dev, "wait_for_completion_timeout\n");
 		return -ETIMEDOUT;
 	}
@@ -565,7 +565,7 @@ chan_request_fail:
 	qc->ap->hsm_task_state = HSM_ST_ERR;
 
 	cf_ctrl_reset(acdev);
-	spin_unlock_irqrestore(&acdev->host->lock, flags);
+	spin_unlock_irqrestore(qc->ap->lock, flags);
 sff_intr:
 	dma_complete(acdev);
 }
@@ -834,7 +834,7 @@ static int arasan_cf_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	acdev->clk = devm_clk_get(&pdev->dev, NULL);
+	acdev->clk = clk_get(&pdev->dev, NULL);
 	if (IS_ERR(acdev->clk)) {
 		dev_warn(&pdev->dev, "Clock not found\n");
 		return PTR_ERR(acdev->clk);
@@ -843,8 +843,9 @@ static int arasan_cf_probe(struct platform_device *pdev)
 	/* allocate host */
 	host = ata_host_alloc(&pdev->dev, 1);
 	if (!host) {
+		ret = -ENOMEM;
 		dev_warn(&pdev->dev, "alloc host fail\n");
-		return -ENOMEM;
+		goto free_clk;
 	}
 
 	ap = host->ports[0];
@@ -893,7 +894,7 @@ static int arasan_cf_probe(struct platform_device *pdev)
 
 	ret = cf_init(acdev);
 	if (ret)
-		return ret;
+		goto free_clk;
 
 	cf_card_detect(acdev, 0);
 
@@ -903,7 +904,8 @@ static int arasan_cf_probe(struct platform_device *pdev)
 		return 0;
 
 	cf_exit(acdev);
-
+free_clk:
+	clk_put(acdev->clk);
 	return ret;
 }
 
@@ -914,6 +916,7 @@ static int arasan_cf_remove(struct platform_device *pdev)
 
 	ata_host_detach(host);
 	cf_exit(acdev);
+	clk_put(acdev->clk);
 
 	return 0;
 }
@@ -925,7 +928,8 @@ static int arasan_cf_suspend(struct device *dev)
 	struct arasan_cf_dev *acdev = host->ports[0]->private_data;
 
 	if (acdev->dma_chan)
-		dmaengine_terminate_all(acdev->dma_chan);
+		acdev->dma_chan->device->device_control(acdev->dma_chan,
+				DMA_TERMINATE_ALL, 0);
 
 	cf_exit(acdev);
 	return ata_host_suspend(host, PMSG_SUSPEND);
@@ -958,6 +962,7 @@ static struct platform_driver arasan_cf_driver = {
 	.remove		= arasan_cf_remove,
 	.driver		= {
 		.name	= DRIVER_NAME,
+		.owner	= THIS_MODULE,
 		.pm	= &arasan_cf_pm_ops,
 		.of_match_table = of_match_ptr(arasan_cf_id_table),
 	},
@@ -965,7 +970,7 @@ static struct platform_driver arasan_cf_driver = {
 
 module_platform_driver(arasan_cf_driver);
 
-MODULE_AUTHOR("Viresh Kumar <vireshk@kernel.org>");
+MODULE_AUTHOR("Viresh Kumar <viresh.linux@gmail.com>");
 MODULE_DESCRIPTION("Arasan ATA Compact Flash driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:" DRIVER_NAME);

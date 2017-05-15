@@ -9,6 +9,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307, USA.
  */
 
 #include <linux/module.h>
@@ -773,6 +777,13 @@ static int pch_i2c_probe(struct pci_dev *pdev,
 	/* Set the number of I2C channel instance */
 	adap_info->ch_num = id->driver_data;
 
+	ret = request_irq(pdev->irq, pch_i2c_handler, IRQF_SHARED,
+		  KBUILD_MODNAME, adap_info);
+	if (ret) {
+		pch_pci_err(pdev, "request_irq FAILED\n");
+		goto err_request_irq;
+	}
+
 	for (i = 0; i < adap_info->ch_num; i++) {
 		pch_adap = &adap_info->pch_data[i].pch_adapter;
 		adap_info->pch_i2c_suspended = false;
@@ -788,19 +799,7 @@ static int pch_i2c_probe(struct pci_dev *pdev,
 		/* base_addr + offset; */
 		adap_info->pch_data[i].pch_base_address = base_addr + 0x100 * i;
 
-		pch_adap->dev.of_node = pdev->dev.of_node;
 		pch_adap->dev.parent = &pdev->dev;
-	}
-
-	ret = request_irq(pdev->irq, pch_i2c_handler, IRQF_SHARED,
-		  KBUILD_MODNAME, adap_info);
-	if (ret) {
-		pch_pci_err(pdev, "request_irq FAILED\n");
-		goto err_request_irq;
-	}
-
-	for (i = 0; i < adap_info->ch_num; i++) {
-		pch_adap = &adap_info->pch_data[i].pch_adapter;
 
 		pch_i2c_init(&adap_info->pch_data[i]);
 

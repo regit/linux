@@ -31,10 +31,12 @@
 #include <linux/platform_data/pinctrl-single.h>
 
 #include "core.h"
-#include "devicetree.h"
 #include "pinconf.h"
 
 #define DRIVER_NAME			"pinctrl-single"
+#define PCS_MUX_PINS_NAME		"pinctrl-single,pins"
+#define PCS_MUX_BITS_NAME		"pinctrl-single,bits"
+#define PCS_REG_NAME_LEN		((sizeof(unsigned long) * 2) + 3)
 #define PCS_OFF_DISABLED		~0U
 
 /**
@@ -140,6 +142,20 @@ struct pcs_data {
 };
 
 /**
+ * struct pcs_name - register name for a pin
+ * @name:	name of the pinctrl register
+ *
+ * REVISIT: We may want to make names optional in the pinctrl
+ * framework as some drivers may not care about pin names to
+ * avoid kernel bloat. The pin names can be deciphered by user
+ * space tools using debugfs based on the register address and
+ * SoC packaging information.
+ */
+struct pcs_name {
+	char name[PCS_REG_NAME_LEN];
+};
+
+/**
  * struct pcs_soc_data - SoC specific settings
  * @flags:	initial SoC specific PCS_FEAT_xxx values
  * @irq:	optional interrupt for the controller
@@ -161,11 +177,8 @@ struct pcs_soc_data {
  * @base:	virtual address of the controller
  * @size:	size of the ioremapped area
  * @dev:	device entry
- * @np:		device tree node
  * @pctl:	pin controller device
  * @flags:	mask of PCS_FEAT_xxx values
- * @missing_nr_pinctrl_cells: for legacy binding, may go away
- * @socdata:	soc specific data
  * @lock:	spinlock for register access
  * @mutex:	mutex protecting the lists
  * @width:	bits per mux register
@@ -173,8 +186,8 @@ struct pcs_soc_data {
  * @fshift:	function register shift
  * @foff:	value to turn mux off
  * @fmax:	max number of functions in fmask
- * @bits_per_mux: number of bits per mux
- * @bits_per_pin: number of bits per pin
+ * @bits_per_pin:number of bits per pin
+ * @names:	array of register names for pins
  * @pins:	physical pins on the SoC
  * @pgtree:	pingroup index radix tree
  * @ftree:	function index radix tree
@@ -195,13 +208,11 @@ struct pcs_device {
 	void __iomem *base;
 	unsigned size;
 	struct device *dev;
-	struct device_node *np;
 	struct pinctrl_dev *pctl;
 	unsigned flags;
 #define PCS_QUIRK_SHARED_IRQ	(1 << 2)
 #define PCS_FEAT_IRQ		(1 << 1)
 #define PCS_FEAT_PINCONF	(1 << 0)
-	struct property *missing_nr_pinctrl_cells;
 	struct pcs_soc_data socdata;
 	raw_spinlock_t lock;
 	struct mutex mutex;
@@ -212,6 +223,7 @@ struct pcs_device {
 	unsigned fmax;
 	bool bits_per_mux;
 	unsigned bits_per_pin;
+	struct pcs_name *names;
 	struct pcs_data pins;
 	struct radix_tree_root pgtree;
 	struct radix_tree_root ftree;
@@ -241,13 +253,6 @@ static enum pin_config_param pcs_bias[] = {
 	PIN_CONFIG_BIAS_PULL_DOWN,
 	PIN_CONFIG_BIAS_PULL_UP,
 };
-
-/*
- * This lock class tells lockdep that irqchip core that this single
- * pinctrl can be in a different category than its parents, so it won't
- * report false recursion.
- */
-static struct lock_class_key pcs_lock_class;
 
 /*
  * REVISIT: Reads and writes could eventually use regmap or something
@@ -342,17 +347,13 @@ static void pcs_pin_dbg_show(struct pinctrl_dev *pctldev,
 {
 	struct pcs_device *pcs;
 	unsigned val, mux_bytes;
-	unsigned long offset;
-	size_t pa;
 
 	pcs = pinctrl_dev_get_drvdata(pctldev);
 
 	mux_bytes = pcs->width / BITS_PER_BYTE;
-	offset = pin * mux_bytes;
-	val = pcs->read(pcs->base + offset);
-	pa = pcs->res->start + offset;
+	val = pcs->read(pcs->base + pin * mux_bytes);
 
-	seq_printf(s, "%zx %08x %s ", pa, val, DRIVER_NAME);
+	seq_printf(s, "%08x %s " , val, DRIVER_NAME);
 }
 
 static void pcs_dt_free_map(struct pinctrl_dev *pctldev,
@@ -446,7 +447,7 @@ static int pcs_get_function(struct pinctrl_dev *pctldev, unsigned pin,
 	return 0;
 }
 
-static int pcs_set_mux(struct pinctrl_dev *pctldev, unsigned fselector,
+static int pcs_enable(struct pinctrl_dev *pctldev, unsigned fselector,
 	unsigned group)
 {
 	struct pcs_device *pcs;
@@ -487,6 +488,61 @@ static int pcs_set_mux(struct pinctrl_dev *pctldev, unsigned fselector,
 	return 0;
 }
 
+static void pcs_disable(struct pinctrl_dev *pctldev, unsigned fselector,
+					unsigned group)
+{
+	struct pcs_device *pcs;
+	struct pcs_function *func;
+	int i;
+
+	pcs = pinctrl_dev_get_drvdata(pctldev);
+	/* If function mask is null, needn't disable it. */
+	if (!pcs->fmask)
+		return;
+
+	func = radix_tree_lookup(&pcs->ftree, fselector);
+	if (!func) {
+		dev_err(pcs->dev, "%s could not find function%i\n",
+			__func__, fselector);
+		return;
+	}
+
+	/*
+	 * Ignore disable if function-off is not specified. Some hardware
+	 * does not have clearly defined disable function. For pin specific
+	 * off modes, you can use alternate named states as described in
+	 * pinctrl-bindings.txt.
+	 */
+	if (pcs->foff == PCS_OFF_DISABLED) {
+		dev_dbg(pcs->dev, "ignoring disable for %s function%i\n",
+			func->name, fselector);
+		return;
+	}
+
+	dev_dbg(pcs->dev, "disabling function%i %s\n",
+		fselector, func->name);
+
+	for (i = 0; i < func->nvals; i++) {
+		struct pcs_func_vals *vals;
+		unsigned long flags;
+		unsigned val, mask;
+
+		vals = &func->vals[i];
+		raw_spin_lock_irqsave(&pcs->lock, flags);
+		val = pcs->read(vals->reg);
+
+		if (pcs->bits_per_mux)
+			mask = vals->mask;
+		else
+			mask = pcs->fmask;
+
+		val &= ~mask;
+		val |= pcs->foff << pcs->fshift;
+		pcs->write(val, vals->reg);
+		raw_spin_unlock_irqrestore(&pcs->lock, flags);
+	}
+}
+
 static int pcs_request_gpio(struct pinctrl_dev *pctldev,
 			    struct pinctrl_gpio_range *range, unsigned pin)
 {
@@ -518,7 +574,8 @@ static const struct pinmux_ops pcs_pinmux_ops = {
 	.get_functions_count = pcs_get_functions_count,
 	.get_function_name = pcs_get_function_name,
 	.get_function_groups = pcs_get_function_groups,
-	.set_mux = pcs_set_mux,
+	.enable = pcs_enable,
+	.disable = pcs_disable,
 	.gpio_request_enable = pcs_request_gpio,
 };
 
@@ -755,6 +812,7 @@ static int pcs_add_pin(struct pcs_device *pcs, unsigned offset,
 {
 	struct pcs_soc_data *pcs_soc = &pcs->socdata;
 	struct pinctrl_pin_desc *pin;
+	struct pcs_name *pn;
 	int i;
 
 	i = pcs->pins.cur;
@@ -777,6 +835,10 @@ static int pcs_add_pin(struct pcs_device *pcs, unsigned offset,
 	}
 
 	pin = &pcs->pins.pa[i];
+	pn = &pcs->names[i];
+	sprintf(pn->name, "%lx.%d",
+		(unsigned long)pcs->res->start + offset, pin_pos);
+	pin->name = pn->name;
 	pin->number = i;
 	pcs->pins.cur++;
 
@@ -812,6 +874,12 @@ static int pcs_allocate_pin_table(struct pcs_device *pcs)
 				sizeof(*pcs->pins.pa) * nr_pins,
 				GFP_KERNEL);
 	if (!pcs->pins.pa)
+		return -ENOMEM;
+
+	pcs->names = devm_kzalloc(pcs->dev,
+				sizeof(struct pcs_name) * nr_pins,
+				GFP_KERNEL);
+	if (!pcs->names)
 		return -ENOMEM;
 
 	pcs->desc.pins = pcs->pins.pa;
@@ -1127,16 +1195,20 @@ static int pcs_parse_one_pinctrl_entry(struct pcs_device *pcs,
 						unsigned *num_maps,
 						const char **pgnames)
 {
-	const char *name = "pinctrl-single,pins";
 	struct pcs_func_vals *vals;
-	int rows, *pins, found = 0, res = -ENOMEM, i;
+	const __be32 *mux;
+	int size, rows, *pins, index = 0, found = 0, res = -ENOMEM;
 	struct pcs_function *function;
 
-	rows = pinctrl_count_index_with_args(np, name);
-	if (rows <= 0) {
-		dev_err(pcs->dev, "Ivalid number of rows: %d\n", rows);
+	mux = of_get_property(np, PCS_MUX_PINS_NAME, &size);
+	if ((!mux) || (size < sizeof(*mux) * 2)) {
+		dev_err(pcs->dev, "bad data for mux %s\n",
+			np->name);
 		return -EINVAL;
 	}
+
+	size /= sizeof(*mux);	/* Number of elements in array */
+	rows = size / 2;
 
 	vals = devm_kzalloc(pcs->dev, sizeof(*vals) * rows, GFP_KERNEL);
 	if (!vals)
@@ -1146,28 +1218,14 @@ static int pcs_parse_one_pinctrl_entry(struct pcs_device *pcs,
 	if (!pins)
 		goto free_vals;
 
-	for (i = 0; i < rows; i++) {
-		struct of_phandle_args pinctrl_spec;
-		unsigned int offset;
+	while (index < size) {
+		unsigned offset, val;
 		int pin;
 
-		res = pinctrl_parse_index_with_args(np, name, i, &pinctrl_spec);
-		if (res)
-			return res;
-
-		if (pinctrl_spec.args_count < 2) {
-			dev_err(pcs->dev, "invalid args_count for spec: %i\n",
-				pinctrl_spec.args_count);
-			break;
-		}
-
-		/* Index plus one value cell */
-		offset = pinctrl_spec.args[0];
+		offset = be32_to_cpup(mux + index++);
+		val = be32_to_cpup(mux + index++);
 		vals[found].reg = pcs->base + offset;
-		vals[found].val = pinctrl_spec.args[1];
-
-		dev_dbg(pcs->dev, "%s index: 0x%x value: 0x%x\n",
-			pinctrl_spec.np->name, offset, pinctrl_spec.args[1]);
+		vals[found].val = val;
 
 		pin = pcs_get_pin_by_offset(pcs, offset);
 		if (pin < 0) {
@@ -1181,10 +1239,8 @@ static int pcs_parse_one_pinctrl_entry(struct pcs_device *pcs,
 
 	pgnames[0] = np->name;
 	function = pcs_add_function(pcs, np, np->name, vals, found, pgnames, 1);
-	if (!function) {
-		res = -ENOMEM;
+	if (!function)
 		goto free_pins;
-	}
 
 	res = pcs_add_pingroup(pcs, np, np->name, pins, found);
 	if (res < 0)
@@ -1219,24 +1275,36 @@ free_vals:
 	return res;
 }
 
+#define PARAMS_FOR_BITS_PER_MUX 3
+
 static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 						struct device_node *np,
 						struct pinctrl_map **map,
 						unsigned *num_maps,
 						const char **pgnames)
 {
-	const char *name = "pinctrl-single,bits";
 	struct pcs_func_vals *vals;
-	int rows, *pins, found = 0, res = -ENOMEM, i;
+	const __be32 *mux;
+	int size, rows, *pins, index = 0, found = 0, res = -ENOMEM;
 	int npins_in_row;
 	struct pcs_function *function;
 
-	rows = pinctrl_count_index_with_args(np, name);
-	if (rows <= 0) {
-		dev_err(pcs->dev, "Invalid number of rows: %d\n", rows);
+	mux = of_get_property(np, PCS_MUX_BITS_NAME, &size);
+
+	if (!mux) {
+		dev_err(pcs->dev, "no valid property for %s\n", np->name);
 		return -EINVAL;
 	}
 
+	if (size < (sizeof(*mux) * PARAMS_FOR_BITS_PER_MUX)) {
+		dev_err(pcs->dev, "bad data for %s\n", np->name);
+		return -EINVAL;
+	}
+
+	/* Number of elements in array */
+	size /= sizeof(*mux);
+
+	rows = size / PARAMS_FOR_BITS_PER_MUX;
 	npins_in_row = pcs->width / pcs->bits_per_pin;
 
 	vals = devm_kzalloc(pcs->dev, sizeof(*vals) * rows * npins_in_row,
@@ -1249,36 +1317,21 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 	if (!pins)
 		goto free_vals;
 
-	for (i = 0; i < rows; i++) {
-		struct of_phandle_args pinctrl_spec;
+	while (index < size) {
 		unsigned offset, val;
 		unsigned mask, bit_pos, val_pos, mask_pos, submask;
 		unsigned pin_num_from_lsb;
 		int pin;
 
-		res = pinctrl_parse_index_with_args(np, name, i, &pinctrl_spec);
-		if (res)
-			return res;
-
-		if (pinctrl_spec.args_count < 3) {
-			dev_err(pcs->dev, "invalid args_count for spec: %i\n",
-				pinctrl_spec.args_count);
-			break;
-		}
-
-		/* Index plus two value cells */
-		offset = pinctrl_spec.args[0];
-		val = pinctrl_spec.args[1];
-		mask = pinctrl_spec.args[2];
-
-		dev_dbg(pcs->dev, "%s index: 0x%x value: 0x%x mask: 0x%x\n",
-			pinctrl_spec.np->name, offset, val, mask);
+		offset = be32_to_cpup(mux + index++);
+		val = be32_to_cpup(mux + index++);
+		mask = be32_to_cpup(mux + index++);
 
 		/* Parse pins in each row from LSB */
 		while (mask) {
-			bit_pos = __ffs(mask);
+			bit_pos = ffs(mask);
 			pin_num_from_lsb = bit_pos / pcs->bits_per_pin;
-			mask_pos = ((pcs->fmask) << bit_pos);
+			mask_pos = ((pcs->fmask) << (bit_pos - 1));
 			val_pos = val & mask_pos;
 			submask = mask & mask_pos;
 
@@ -1315,10 +1368,8 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 
 	pgnames[0] = np->name;
 	function = pcs_add_function(pcs, np, np->name, vals, found, pgnames, 1);
-	if (!function) {
-		res = -ENOMEM;
+	if (!function)
 		goto free_pins;
-	}
 
 	res = pcs_add_pingroup(pcs, np, np->name, pins, found);
 	if (res < 0)
@@ -1489,16 +1540,24 @@ static void pcs_irq_free(struct pcs_device *pcs)
 static void pcs_free_resources(struct pcs_device *pcs)
 {
 	pcs_irq_free(pcs);
-	pinctrl_unregister(pcs->pctl);
+
+	if (pcs->pctl)
+		pinctrl_unregister(pcs->pctl);
+
 	pcs_free_funcs(pcs);
 	pcs_free_pingroups(pcs);
-#if IS_BUILTIN(CONFIG_PINCTRL_SINGLE)
-	if (pcs->missing_nr_pinctrl_cells)
-		of_remove_property(pcs->np, pcs->missing_nr_pinctrl_cells);
-#endif
 }
 
-static const struct of_device_id pcs_of_match[];
+#define PCS_GET_PROP_U32(name, reg, err)				\
+	do {								\
+		ret = of_property_read_u32(np, name, reg);		\
+		if (ret) {						\
+			dev_err(pcs->dev, err);				\
+			return ret;					\
+		}							\
+	} while (0);
+
+static struct of_device_id pcs_of_match[];
 
 static int pcs_add_gpio_func(struct device_node *node, struct pcs_device *pcs)
 {
@@ -1573,9 +1632,6 @@ static inline void pcs_irq_set(struct pcs_soc_data *pcs_soc,
 		else
 			mask &= ~soc_mask;
 		pcs->write(mask, pcswi->reg);
-
-		/* flush posted write */
-		mask = pcs->read(pcswi->reg);
 		raw_spin_unlock(&pcs->lock);
 	}
 
@@ -1679,14 +1735,15 @@ static irqreturn_t pcs_irq_handler(int irq, void *d)
  * Use this if you have a separate interrupt for each
  * pinctrl-single instance.
  */
-static void pcs_irq_chain_handler(struct irq_desc *desc)
+static void pcs_irq_chain_handler(unsigned int irq, struct irq_desc *desc)
 {
 	struct pcs_soc_data *pcs_soc = irq_desc_get_handler_data(desc);
 	struct irq_chip *chip;
+	int res;
 
-	chip = irq_desc_get_chip(desc);
+	chip = irq_get_chip(irq);
 	chained_irq_enter(chip, desc);
-	pcs_irq_handle(pcs_soc);
+	res = pcs_irq_handle(pcs_soc);
 	/* REVISIT: export and add handle_bad_irq(irq, desc)? */
 	chained_irq_exit(chip, desc);
 
@@ -1716,13 +1773,17 @@ static int pcs_irqdomain_map(struct irq_domain *d, unsigned int irq,
 	irq_set_chip_data(irq, pcs_soc);
 	irq_set_chip_and_handler(irq, &pcs->chip,
 				 handle_level_irq);
-	irq_set_lockdep_class(irq, &pcs_lock_class);
+
+#ifdef CONFIG_ARM
+	set_irq_flags(irq, IRQF_VALID);
+#else
 	irq_set_noprobe(irq);
+#endif
 
 	return 0;
 }
 
-static const struct irq_domain_ops pcs_irqdomain_ops = {
+static struct irq_domain_ops pcs_irqdomain_ops = {
 	.map = pcs_irqdomain_map,
 	.xlate = irq_domain_xlate_onecell,
 };
@@ -1756,17 +1817,16 @@ static int pcs_irq_init_chained_handler(struct pcs_device *pcs,
 		int res;
 
 		res = request_irq(pcs_soc->irq, pcs_irq_handler,
-				  IRQF_SHARED | IRQF_NO_SUSPEND |
-				  IRQF_NO_THREAD,
+				  IRQF_SHARED | IRQF_NO_SUSPEND,
 				  name, pcs_soc);
 		if (res) {
 			pcs_soc->irq = -1;
 			return res;
 		}
 	} else {
-		irq_set_chained_handler_and_data(pcs_soc->irq,
-						 pcs_irq_chain_handler,
-						 pcs_soc);
+		irq_set_handler_data(pcs_soc->irq, pcs_soc);
+		irq_set_chained_handler(pcs_soc->irq,
+					pcs_irq_chain_handler);
 	}
 
 	/*
@@ -1813,55 +1873,6 @@ static int pinctrl_single_resume(struct platform_device *pdev)
 }
 #endif
 
-/**
- * pcs_quirk_missing_pinctrl_cells - handle legacy binding
- * @pcs: pinctrl driver instance
- * @np: device tree node
- * @cells: number of cells
- *
- * Handle legacy binding with no #pinctrl-cells. This should be
- * always two pinctrl-single,bit-per-mux and one for others.
- * At some point we may want to consider removing this.
- */
-static int pcs_quirk_missing_pinctrl_cells(struct pcs_device *pcs,
-					   struct device_node *np,
-					   int cells)
-{
-	struct property *p;
-	const char *name = "#pinctrl-cells";
-	int error;
-	u32 val;
-
-	error = of_property_read_u32(np, name, &val);
-	if (!error)
-		return 0;
-
-	dev_warn(pcs->dev, "please update dts to use %s = <%i>\n",
-		 name, cells);
-
-	p = devm_kzalloc(pcs->dev, sizeof(*p), GFP_KERNEL);
-	if (!p)
-		return -ENOMEM;
-
-	p->length = sizeof(__be32);
-	p->value = devm_kzalloc(pcs->dev, sizeof(__be32), GFP_KERNEL);
-	if (!p->value)
-		return -ENOMEM;
-	*(__be32 *)p->value = cpu_to_be32(cells);
-
-	p->name = devm_kstrdup(pcs->dev, name, GFP_KERNEL);
-	if (!p->name)
-		return -ENOMEM;
-
-	pcs->missing_nr_pinctrl_cells = p;
-
-#if IS_BUILTIN(CONFIG_PINCTRL_SINGLE)
-	error = of_add_property(np, pcs->missing_nr_pinctrl_cells);
-#endif
-
-	return error;
-}
-
 static int pcs_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -1882,7 +1893,6 @@ static int pcs_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	pcs->dev = &pdev->dev;
-	pcs->np = np;
 	raw_spin_lock_init(&pcs->lock);
 	mutex_init(&pcs->mutex);
 	INIT_LIST_HEAD(&pcs->pingroups);
@@ -1892,18 +1902,13 @@ static int pcs_probe(struct platform_device *pdev)
 	pcs->flags = soc->flags;
 	memcpy(&pcs->socdata, soc, sizeof(*soc));
 
-	ret = of_property_read_u32(np, "pinctrl-single,register-width",
-				   &pcs->width);
-	if (ret) {
-		dev_err(pcs->dev, "register width not specified\n");
-
-		return ret;
-	}
+	PCS_GET_PROP_U32("pinctrl-single,register-width", &pcs->width,
+			 "register width not specified\n");
 
 	ret = of_property_read_u32(np, "pinctrl-single,function-mask",
 				   &pcs->fmask);
 	if (!ret) {
-		pcs->fshift = __ffs(pcs->fmask);
+		pcs->fshift = ffs(pcs->fmask) - 1;
 		pcs->fmax = pcs->fmask >> pcs->fshift;
 	} else {
 		/* If mask property doesn't exist, function mux is invalid. */
@@ -1919,13 +1924,6 @@ static int pcs_probe(struct platform_device *pdev)
 
 	pcs->bits_per_mux = of_property_read_bool(np,
 						  "pinctrl-single,bit-per-mux");
-	ret = pcs_quirk_missing_pinctrl_cells(pcs, np,
-					      pcs->bits_per_mux ? 2 : 1);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to patch #pinctrl-cells\n");
-
-		return ret;
-	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -1980,9 +1978,9 @@ static int pcs_probe(struct platform_device *pdev)
 		goto free;
 
 	pcs->pctl = pinctrl_register(&pcs->desc, pcs->dev, pcs);
-	if (IS_ERR(pcs->pctl)) {
+	if (!pcs->pctl) {
 		dev_err(pcs->dev, "could not register single pinctrl driver\n");
-		ret = PTR_ERR(pcs->pctl);
+		ret = -EINVAL;
 		goto free;
 	}
 
@@ -2040,17 +2038,6 @@ static const struct pcs_soc_data pinctrl_single_omap_wkup = {
 	.irq_status_mask = (1 << 15),	/* OMAP_WAKEUP_EVENT */
 };
 
-static const struct pcs_soc_data pinctrl_single_dra7 = {
-	.irq_enable_mask = (1 << 24),	/* WAKEUPENABLE */
-	.irq_status_mask = (1 << 25),	/* WAKEUPEVENT */
-};
-
-static const struct pcs_soc_data pinctrl_single_am437x = {
-	.flags = PCS_QUIRK_SHARED_IRQ,
-	.irq_enable_mask = (1 << 29),   /* OMAP_WAKEUP_EN */
-	.irq_status_mask = (1 << 30),   /* OMAP_WAKEUP_EVENT */
-};
-
 static const struct pcs_soc_data pinctrl_single = {
 };
 
@@ -2058,12 +2045,10 @@ static const struct pcs_soc_data pinconf_single = {
 	.flags = PCS_FEAT_PINCONF,
 };
 
-static const struct of_device_id pcs_of_match[] = {
+static struct of_device_id pcs_of_match[] = {
 	{ .compatible = "ti,omap3-padconf", .data = &pinctrl_single_omap_wkup },
 	{ .compatible = "ti,omap4-padconf", .data = &pinctrl_single_omap_wkup },
 	{ .compatible = "ti,omap5-padconf", .data = &pinctrl_single_omap_wkup },
-	{ .compatible = "ti,dra7-padconf", .data = &pinctrl_single_dra7 },
-	{ .compatible = "ti,am437-padconf", .data = &pinctrl_single_am437x },
 	{ .compatible = "pinctrl-single", .data = &pinctrl_single },
 	{ .compatible = "pinconf-single", .data = &pinconf_single },
 	{ },
@@ -2074,6 +2059,7 @@ static struct platform_driver pcs_driver = {
 	.probe		= pcs_probe,
 	.remove		= pcs_remove,
 	.driver = {
+		.owner		= THIS_MODULE,
 		.name		= DRIVER_NAME,
 		.of_match_table	= pcs_of_match,
 	},

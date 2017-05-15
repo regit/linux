@@ -48,7 +48,7 @@
 #include <linux/random.h>
 #include <linux/scatterlist.h>
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "DAC960.h"
 
 #define DAC960_GAM_MINOR	252
@@ -2954,7 +2954,7 @@ DAC960_DetectController(struct pci_dev *PCI_Device,
 	case DAC960_PD_Controller:
 	  if (!request_region(Controller->IO_Address, 0x80,
 			      Controller->FullModelName)) {
-		DAC960_Error("IO port 0x%lx busy for Controller at\n",
+		DAC960_Error("IO port 0x%d busy for Controller at\n",
 			     Controller, Controller->IO_Address);
 		goto Failure;
 	  }
@@ -2990,7 +2990,7 @@ DAC960_DetectController(struct pci_dev *PCI_Device,
 	case DAC960_P_Controller:
 	  if (!request_region(Controller->IO_Address, 0x80,
 			      Controller->FullModelName)){
-		DAC960_Error("IO port 0x%lx busy for Controller at\n",
+		DAC960_Error("IO port 0x%d busy for Controller at\n",
 		   	     Controller, Controller->IO_Address);
 		goto Failure;
 	  }
@@ -6741,11 +6741,11 @@ static long DAC960_gam_ioctl(struct file *file, unsigned int Request,
 	ErrorCode = -ENOMEM;
 	if (DataTransferLength > 0)
 	  {
-	    DataTransferBuffer = pci_zalloc_consistent(Controller->PCIDevice,
-                                                       DataTransferLength,
-                                                       &DataTransferBufferDMA);
+	    DataTransferBuffer = pci_alloc_consistent(Controller->PCIDevice,
+				DataTransferLength, &DataTransferBufferDMA);
 	    if (DataTransferBuffer == NULL)
 	    	break;
+	    memset(DataTransferBuffer, 0, DataTransferLength);
 	  }
 	else if (DataTransferLength < 0)
 	  {
@@ -6877,11 +6877,11 @@ static long DAC960_gam_ioctl(struct file *file, unsigned int Request,
     	ErrorCode = -ENOMEM;
 	if (DataTransferLength > 0)
 	  {
-	    DataTransferBuffer = pci_zalloc_consistent(Controller->PCIDevice,
-                                                       DataTransferLength,
-                                                       &DataTransferBufferDMA);
+	    DataTransferBuffer = pci_alloc_consistent(Controller->PCIDevice,
+				DataTransferLength, &DataTransferBufferDMA);
 	    if (DataTransferBuffer == NULL)
 	    	break;
+	    memset(DataTransferBuffer, 0, DataTransferLength);
 	  }
 	else if (DataTransferLength < 0)
 	  {
@@ -6899,14 +6899,14 @@ static long DAC960_gam_ioctl(struct file *file, unsigned int Request,
 	RequestSenseLength = UserCommand.RequestSenseLength;
 	if (RequestSenseLength > 0)
 	  {
-	    RequestSenseBuffer = pci_zalloc_consistent(Controller->PCIDevice,
-                                                       RequestSenseLength,
-                                                       &RequestSenseBufferDMA);
+	    RequestSenseBuffer = pci_alloc_consistent(Controller->PCIDevice,
+			RequestSenseLength, &RequestSenseBufferDMA);
 	    if (RequestSenseBuffer == NULL)
 	      {
 		ErrorCode = -ENOMEM;
 		goto Failure2;
 	      }
+	    memset(RequestSenseBuffer, 0, RequestSenseLength);
 	  }
 	spin_lock_irqsave(&Controller->queue_lock, flags);
 	while ((Command = DAC960_AllocateCommand(Controller)) == NULL)

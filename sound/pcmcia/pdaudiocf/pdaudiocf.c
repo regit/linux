@@ -61,7 +61,6 @@ static void snd_pdacf_detach(struct pcmcia_device *p_dev);
 
 static void pdacf_release(struct pcmcia_device *link)
 {
-	free_irq(link->irq, link->priv);
 	pcmcia_disable_device(link);
 }
 
@@ -221,13 +220,11 @@ static int pdacf_config(struct pcmcia_device *link)
 
 	ret = pcmcia_request_io(link);
 	if (ret)
-		goto failed_preirq;
+		goto failed;
 
-	ret = request_threaded_irq(link->irq, pdacf_interrupt,
-				   pdacf_threaded_irq,
-				   IRQF_SHARED, link->devname, link->priv);
+	ret = pcmcia_request_irq(link, pdacf_interrupt);
 	if (ret)
-		goto failed_preirq;
+		goto failed;
 
 	ret = pcmcia_enable_device(link);
 	if (ret)
@@ -239,9 +236,7 @@ static int pdacf_config(struct pcmcia_device *link)
 
 	return 0;
 
- failed:
-	free_irq(link->irq, link->priv);
-failed_preirq:
+failed:
 	pcmcia_disable_device(link);
 	return -ENODEV;
 }

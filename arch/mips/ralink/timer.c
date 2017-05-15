@@ -1,14 +1,12 @@
 /*
- * Ralink RT2880 timer
- * Author: John Crispin
- *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation.
  *
- * Copyright (C) 2013 John Crispin <john@phrozen.org>
+ * Copyright (C) 2013 John Crispin <blogic@openwrt.org>
 */
 
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
 #include <linux/timer.h>
@@ -60,7 +58,7 @@ static irqreturn_t rt_timer_irq(int irq, void *_rt)
 
 static int rt_timer_request(struct rt_timer *rt)
 {
-	int err = request_irq(rt->irq, rt_timer_irq, 0,
+	int err = request_irq(rt->irq, rt_timer_irq, IRQF_DISABLED,
 						dev_name(rt->dev), rt);
 	if (err) {
 		dev_err(rt->dev, "failed to request irq\n");
@@ -154,17 +152,34 @@ static int rt_timer_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int rt_timer_remove(struct platform_device *pdev)
+{
+	struct rt_timer *rt = platform_get_drvdata(pdev);
+
+	rt_timer_disable(rt);
+	rt_timer_free(rt);
+
+	return 0;
+}
+
 static const struct of_device_id rt_timer_match[] = {
 	{ .compatible = "ralink,rt2880-timer" },
 	{},
 };
+MODULE_DEVICE_TABLE(of, rt_timer_match);
 
 static struct platform_driver rt_timer_driver = {
 	.probe = rt_timer_probe,
+	.remove = rt_timer_remove,
 	.driver = {
-		.name			= "rt-timer",
-		.of_match_table		= rt_timer_match,
-		.suppress_bind_attrs	= true,
+		.name		= "rt-timer",
+		.owner          = THIS_MODULE,
+		.of_match_table	= rt_timer_match
 	},
 };
-builtin_platform_driver(rt_timer_driver);
+
+module_platform_driver(rt_timer_driver);
+
+MODULE_DESCRIPTION("Ralink RT2880 timer");
+MODULE_AUTHOR("John Crispin <blogic@openwrt.org");
+MODULE_LICENSE("GPL");

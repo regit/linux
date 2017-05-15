@@ -25,11 +25,7 @@
 #include <asm/exception-64s.h>
 
 #if defined(CONFIG_PPC_BOOK3S_64)
-#ifdef PPC64_ELF_ABI_v2
-#define FUNC(name) 		name
-#else
 #define FUNC(name) 		GLUE(.,name)
-#endif
 #define GET_SHADOW_VCPU(reg)    addi	reg, r13, PACA_SVCPU
 
 #elif defined(CONFIG_PPC_BOOK3S_32)

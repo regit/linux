@@ -66,7 +66,7 @@ int inotify_handle_event(struct fsnotify_group *group,
 			 struct inode *inode,
 			 struct fsnotify_mark *inode_mark,
 			 struct fsnotify_mark *vfsmount_mark,
-			 u32 mask, const void *data, int data_type,
+			 u32 mask, void *data, int data_type,
 			 const unsigned char *file_name, u32 cookie)
 {
 	struct inotify_inode_mark *i_mark;
@@ -80,7 +80,7 @@ int inotify_handle_event(struct fsnotify_group *group,
 
 	if ((inode_mark->mask & FS_EXCL_UNLINK) &&
 	    (data_type == FSNOTIFY_EVENT_PATH)) {
-		const struct path *path = data;
+		struct path *path = data;
 
 		if (d_unlinked(path->dentry))
 			return 0;
@@ -108,7 +108,7 @@ int inotify_handle_event(struct fsnotify_group *group,
 	if (len)
 		strcpy(event->name, file_name);
 
-	ret = fsnotify_add_event(group, fsn_event, inotify_merge);
+	ret = fsnotify_add_notify_event(group, fsn_event, inotify_merge);
 	if (ret) {
 		/* Our event wasn't used in the end. Free it. */
 		fsnotify_destroy_event(group, fsn_event);
@@ -156,7 +156,7 @@ static int idr_callback(int id, void *p, void *data)
 	 */
 	if (fsn_mark)
 		printk(KERN_WARNING "fsn_mark->group=%p inode=%p wd=%d\n",
-			fsn_mark->group, fsn_mark->inode, i_mark->wd);
+			fsn_mark->group, fsn_mark->i.inode, i_mark->wd);
 	return 0;
 }
 
@@ -165,10 +165,8 @@ static void inotify_free_group_priv(struct fsnotify_group *group)
 	/* ideally the idr is empty and we won't hit the BUG in the callback */
 	idr_for_each(&group->inotify_data.idr, idr_callback, group);
 	idr_destroy(&group->inotify_data.idr);
-	if (group->inotify_data.user) {
-		atomic_dec(&group->inotify_data.user->inotify_devs);
-		free_uid(group->inotify_data.user);
-	}
+	atomic_dec(&group->inotify_data.user->inotify_devs);
+	free_uid(group->inotify_data.user);
 }
 
 static void inotify_free_event(struct fsnotify_event *fsn_event)

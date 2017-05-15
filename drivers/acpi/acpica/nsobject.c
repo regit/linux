@@ -6,7 +6,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -237,16 +237,6 @@ void acpi_ns_detach_object(struct acpi_namespace_node *node)
 		    (node->object->common.type != ACPI_TYPE_LOCAL_DATA)) {
 			node->object = node->object->common.next_object;
 		}
-
-		/*
-		 * Detach the object from any data objects (which are still held by
-		 * the namespace node)
-		 */
-		if (obj_desc->common.next_object &&
-		    ((obj_desc->common.next_object)->common.type ==
-		     ACPI_TYPE_LOCAL_DATA)) {
-			obj_desc->common.next_object = NULL;
-		}
 	}
 
 	/* Reset the node type to untyped */
@@ -399,7 +389,7 @@ acpi_ns_attach_data(struct acpi_namespace_node *node,
  ******************************************************************************/
 
 acpi_status
-acpi_ns_detach_data(struct acpi_namespace_node *node,
+acpi_ns_detach_data(struct acpi_namespace_node * node,
 		    acpi_object_handler handler)
 {
 	union acpi_operand_object *obj_desc;
@@ -444,7 +434,7 @@ acpi_ns_detach_data(struct acpi_namespace_node *node,
  ******************************************************************************/
 
 acpi_status
-acpi_ns_get_attached_data(struct acpi_namespace_node *node,
+acpi_ns_get_attached_data(struct acpi_namespace_node * node,
 			  acpi_object_handler handler, void **data)
 {
 	union acpi_operand_object *obj_desc;

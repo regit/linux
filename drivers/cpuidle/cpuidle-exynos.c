@@ -1,10 +1,7 @@
-/*
- * Copyright (c) 2011-2014 Samsung Electronics Co., Ltd.
- *		http://www.samsung.com
+/* linux/arch/arm/mach-exynos/cpuidle.c
  *
- * Coupled cpuidle support based on the work of:
- *	Colin Cross <ccross@android.com>
- *	Daniel Lezcano <daniel.lezcano@linaro.org>
+ * Copyright (c) 2011 Samsung Electronics Co., Ltd.
+ *		http://www.samsung.com
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -14,46 +11,30 @@
 #include <linux/cpuidle.h>
 #include <linux/cpu_pm.h>
 #include <linux/export.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/of.h>
-#include <linux/platform_data/cpuidle-exynos.h>
 
+#include <asm/proc-fns.h>
 #include <asm/suspend.h>
 #include <asm/cpuidle.h>
 
-static atomic_t exynos_idle_barrier;
-
-static struct cpuidle_exynos_data *exynos_cpuidle_pdata;
 static void (*exynos_enter_aftr)(void);
 
-static int exynos_enter_coupled_lowpower(struct cpuidle_device *dev,
-					 struct cpuidle_driver *drv,
-					 int index)
+static int idle_finisher(unsigned long flags)
 {
-	int ret;
+	exynos_enter_aftr();
+	cpu_do_idle();
 
-	exynos_cpuidle_pdata->pre_enter_aftr();
+	return 1;
+}
 
-	/*
-	 * Waiting all cpus to reach this point at the same moment
-	 */
-	cpuidle_coupled_parallel_barrier(dev, &exynos_idle_barrier);
-
-	/*
-	 * Both cpus will reach this point at the same time
-	 */
-	ret = dev->cpu ? exynos_cpuidle_pdata->cpu1_powerdown()
-		       : exynos_cpuidle_pdata->cpu0_enter_aftr();
-	if (ret)
-		index = ret;
-
-	/*
-	 * Waiting all cpus to finish the power sequence before going further
-	 */
-	cpuidle_coupled_parallel_barrier(dev, &exynos_idle_barrier);
-
-	exynos_cpuidle_pdata->post_enter_aftr();
+static int exynos_enter_core0_aftr(struct cpuidle_device *dev,
+				struct cpuidle_driver *drv,
+				int index)
+{
+	cpu_pm_enter();
+	cpu_suspend(0, idle_finisher);
+	cpu_pm_exit();
 
 	return index;
 }
@@ -70,10 +51,8 @@ static int exynos_enter_lowpower(struct cpuidle_device *dev,
 
 	if (new_index == 0)
 		return arm_cpuidle_simple_enter(dev, drv, new_index);
-
-	exynos_enter_aftr();
-
-	return new_index;
+	else
+		return exynos_enter_core0_aftr(dev, drv, new_index);
 }
 
 static struct cpuidle_driver exynos_idle_driver = {
@@ -85,25 +64,7 @@ static struct cpuidle_driver exynos_idle_driver = {
 			.enter			= exynos_enter_lowpower,
 			.exit_latency		= 300,
 			.target_residency	= 100000,
-			.name			= "C1",
-			.desc			= "ARM power down",
-		},
-	},
-	.state_count = 2,
-	.safe_state_index = 0,
-};
-
-static struct cpuidle_driver exynos_coupled_idle_driver = {
-	.name			= "exynos_coupled_idle",
-	.owner			= THIS_MODULE,
-	.states = {
-		[0] = ARM_CPUIDLE_WFI_STATE,
-		[1] = {
-			.enter			= exynos_enter_coupled_lowpower,
-			.exit_latency		= 5000,
-			.target_residency	= 10000,
-			.flags			= CPUIDLE_FLAG_COUPLED |
-						  CPUIDLE_FLAG_TIMER_STOP,
+			.flags			= CPUIDLE_FLAG_TIME_VALID,
 			.name			= "C1",
 			.desc			= "ARM power down",
 		},
@@ -116,18 +77,9 @@ static int exynos_cpuidle_probe(struct platform_device *pdev)
 {
 	int ret;
 
-	if (IS_ENABLED(CONFIG_SMP) &&
-	    of_machine_is_compatible("samsung,exynos4210")) {
-		exynos_cpuidle_pdata = pdev->dev.platform_data;
+	exynos_enter_aftr = (void *)(pdev->dev.platform_data);
 
-		ret = cpuidle_register(&exynos_coupled_idle_driver,
-				       cpu_possible_mask);
-	} else {
-		exynos_enter_aftr = (void *)(pdev->dev.platform_data);
-
-		ret = cpuidle_register(&exynos_idle_driver, NULL);
-	}
-
+	ret = cpuidle_register(&exynos_idle_driver, NULL);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register cpuidle driver\n");
 		return ret;
@@ -140,6 +92,8 @@ static struct platform_driver exynos_cpuidle_driver = {
 	.probe	= exynos_cpuidle_probe,
 	.driver = {
 		.name = "exynos_cpuidle",
+		.owner = THIS_MODULE,
 	},
 };
-builtin_platform_driver(exynos_cpuidle_driver);
+
+module_platform_driver(exynos_cpuidle_driver);

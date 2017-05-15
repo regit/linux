@@ -1,7 +1,7 @@
 /*
  * Linux driver for digital TV devices equipped with B2C2 FlexcopII(b)/III
  * flexcop.c - main module part
- * Copyright (C) 2004-9 Patrick Boettcher <patrick.boettcher@posteo.de>
+ * Copyright (C) 2004-9 Patrick Boettcher <patrick.boettcher@desy.de>
  * based on skystar2-driver Copyright (C) 2003 Vadim Catana, skystar@moldova.cc
  *
  * Acknowledgements:
@@ -34,7 +34,7 @@
 #include "flexcop.h"
 
 #define DRIVER_NAME "B2C2 FlexcopII/II(b)/III digital TV receiver chip"
-#define DRIVER_AUTHOR "Patrick Boettcher <patrick.boettcher@posteo.de"
+#define DRIVER_AUTHOR "Patrick Boettcher <patrick.boettcher@desy.de"
 
 #ifdef CONFIG_DVB_B2C2_FLEXCOP_DEBUG
 #define DEBSTATUS ""
@@ -46,7 +46,8 @@ int b2c2_flexcop_debug;
 EXPORT_SYMBOL_GPL(b2c2_flexcop_debug);
 module_param_named(debug, b2c2_flexcop_debug,  int, 0644);
 MODULE_PARM_DESC(debug,
-		"set debug level (1=info,2=tuner,4=i2c,8=ts,16=sram,32=reg (|-able))."
+		"set debug level (1=info,2=tuner,4=i2c,8=ts,"
+		"16=sram,32=reg (|-able))."
 		DEBSTATUS);
 #undef DEBSTATUS
 

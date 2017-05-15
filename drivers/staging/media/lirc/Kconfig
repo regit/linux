@@ -18,6 +18,12 @@ config LIRC_BT829
 	help
 	  Driver for the IR interface on BT829-based hardware
 
+config LIRC_IGORPLUGUSB
+	tristate "Igor Cesko's USB IR Receiver"
+	depends on LIRC && USB
+	help
+	  Driver for Igor Cesko's USB IR Receiver
+
 config LIRC_IMON
 	tristate "Legacy SoundGraph iMON Receiver and Display"
 	depends on LIRC && USB
@@ -37,6 +43,19 @@ config LIRC_SASEM
 	depends on LIRC && USB
 	help
 	  Driver for the Sasem OnAir Remocon-V or Dign HV5 HTPC IR/VFD Module
+
+config LIRC_SERIAL
+	tristate "Homebrew Serial Port Receiver"
+	depends on LIRC
+	help
+	  Driver for Homebrew Serial Port Receivers
+
+config LIRC_SERIAL_TRANSMITTER
+	bool "Serial Port Transmitter"
+	default y
+	depends on LIRC_SERIAL
+	help
+	  Serial Port Transmitter support
 
 config LIRC_SIR
 	tristate "Built-in SIR IrDA port"

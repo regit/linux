@@ -111,7 +111,7 @@ static int zl10039_write(struct zl10039_state *state,
 
 	if (1 + count > sizeof(buf)) {
 		printk(KERN_WARNING
-		       "%s: i2c wr reg=%04x: len=%zu is too big!\n",
+		       "%s: i2c wr reg=%04x: len=%zd is too big!\n",
 		       KBUILD_MODNAME, reg, count);
 		return -EINVAL;
 	}
@@ -152,7 +152,8 @@ static int zl10039_init(struct dvb_frontend *fe)
 	/* Reset logic */
 	ret = zl10039_writereg(state, GENERAL, 0x40);
 	if (ret < 0) {
-		dprintk("Note: i2c write error normal when resetting the tuner\n");
+		dprintk("Note: i2c write error normal when resetting the "
+			"tuner\n");
 	}
 	/* Wake up */
 	ret = zl10039_writereg(state, GENERAL, 0x01);
@@ -244,16 +245,17 @@ error:
 	return ret;
 }
 
-static void zl10039_release(struct dvb_frontend *fe)
+static int zl10039_release(struct dvb_frontend *fe)
 {
 	struct zl10039_state *state = fe->tuner_priv;
 
 	dprintk("%s\n", __func__);
 	kfree(state);
 	fe->tuner_priv = NULL;
+	return 0;
 }
 
-static const struct dvb_tuner_ops zl10039_ops = {
+static struct dvb_tuner_ops zl10039_ops = {
 	.release = zl10039_release,
 	.init = zl10039_init,
 	.sleep = zl10039_sleep,

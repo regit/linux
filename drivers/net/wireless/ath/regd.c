@@ -116,7 +116,7 @@ static const struct ieee80211_regdomain ath_world_regdom_67_68_6A_6C = {
 
 static bool dynamic_country_user_possible(struct ath_regulatory *reg)
 {
-	if (IS_ENABLED(CONFIG_ATH_REG_DYNAMIC_USER_CERT_TESTING))
+	if (config_enabled(CONFIG_ATH_REG_DYNAMIC_USER_CERT_TESTING))
 		return true;
 
 	switch (reg->country_code) {
@@ -188,7 +188,7 @@ static bool dynamic_country_user_possible(struct ath_regulatory *reg)
 
 static bool ath_reg_dyn_country_user_allow(struct ath_regulatory *reg)
 {
-	if (!IS_ENABLED(CONFIG_ATH_REG_DYNAMIC_USER_REG_HINTS))
+	if (!config_enabled(CONFIG_ATH_REG_DYNAMIC_USER_REG_HINTS))
 		return false;
 	if (!dynamic_country_user_possible(reg))
 		return false;
@@ -336,12 +336,12 @@ ath_reg_apply_beaconing_flags(struct wiphy *wiphy,
 			      struct ath_regulatory *reg,
 			      enum nl80211_reg_initiator initiator)
 {
-	enum nl80211_band band;
+	enum ieee80211_band band;
 	struct ieee80211_supported_band *sband;
 	struct ieee80211_channel *ch;
 	unsigned int i;
 
-	for (band = 0; band < NUM_NL80211_BANDS; band++) {
+	for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
 		if (!wiphy->bands[band])
 			continue;
 		sband = wiphy->bands[band];
@@ -374,7 +374,7 @@ ath_reg_apply_ir_flags(struct wiphy *wiphy,
 {
 	struct ieee80211_supported_band *sband;
 
-	sband = wiphy->bands[NL80211_BAND_2GHZ];
+	sband = wiphy->bands[IEEE80211_BAND_2GHZ];
 	if (!sband)
 		return;
 
@@ -402,10 +402,10 @@ static void ath_reg_apply_radar_flags(struct wiphy *wiphy)
 	struct ieee80211_channel *ch;
 	unsigned int i;
 
-	if (!wiphy->bands[NL80211_BAND_5GHZ])
+	if (!wiphy->bands[IEEE80211_BAND_5GHZ])
 		return;
 
-	sband = wiphy->bands[NL80211_BAND_5GHZ];
+	sband = wiphy->bands[IEEE80211_BAND_5GHZ];
 
 	for (i = 0; i < sband->n_channels; i++) {
 		ch = &sband->channels[i];
@@ -449,7 +449,7 @@ static void ath_reg_apply_world_flags(struct wiphy *wiphy,
 	}
 }
 
-u16 ath_regd_find_country_by_name(char *alpha2)
+static u16 ath_regd_find_country_by_name(char *alpha2)
 {
 	unsigned int i;
 
@@ -460,7 +460,6 @@ u16 ath_regd_find_country_by_name(char *alpha2)
 
 	return -1;
 }
-EXPORT_SYMBOL(ath_regd_find_country_by_name);
 
 static int __ath_reg_dyn_country(struct wiphy *wiphy,
 				 struct ath_regulatory *reg,
@@ -516,7 +515,6 @@ void ath_reg_notifier_apply(struct wiphy *wiphy,
 	if (!request)
 		return;
 
-	reg->region = request->dfs_region;
 	switch (request->initiator) {
 	case NL80211_REGDOM_SET_BY_CORE:
 		/*
@@ -773,7 +771,7 @@ ath_regd_init(struct ath_regulatory *reg,
 EXPORT_SYMBOL(ath_regd_init);
 
 u32 ath_regd_get_band_ctl(struct ath_regulatory *reg,
-			  enum nl80211_band band)
+			  enum ieee80211_band band)
 {
 	if (!reg->regpair ||
 	    (reg->country_code == CTRY_DEFAULT &&
@@ -781,23 +779,10 @@ u32 ath_regd_get_band_ctl(struct ath_regulatory *reg,
 		return SD_NO_CTL;
 	}
 
-	if (ath_regd_get_eepromRD(reg) == CTRY_DEFAULT) {
-		switch (reg->region) {
-		case NL80211_DFS_FCC:
-			return CTL_FCC;
-		case NL80211_DFS_ETSI:
-			return CTL_ETSI;
-		case NL80211_DFS_JP:
-			return CTL_MKK;
-		default:
-			break;
-		}
-	}
-
 	switch (band) {
-	case NL80211_BAND_2GHZ:
+	case IEEE80211_BAND_2GHZ:
 		return reg->regpair->reg_2ghz_ctl;
-	case NL80211_BAND_5GHZ:
+	case IEEE80211_BAND_5GHZ:
 		return reg->regpair->reg_5ghz_ctl;
 	default:
 		return NO_CTL;

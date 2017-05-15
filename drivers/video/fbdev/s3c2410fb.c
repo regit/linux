@@ -601,12 +601,12 @@ static int s3c2410fb_debug_store(struct device *dev,
 	if (len < 1)
 		return -EINVAL;
 
-	if (strncasecmp(buf, "on", 2) == 0 ||
-	    strncasecmp(buf, "1", 1) == 0) {
+	if (strnicmp(buf, "on", 2) == 0 ||
+	    strnicmp(buf, "1", 1) == 0) {
 		debug = 1;
 		dev_dbg(dev, "s3c2410fb: Debug On");
-	} else if (strncasecmp(buf, "off", 3) == 0 ||
-		   strncasecmp(buf, "0", 1) == 0) {
+	} else if (strnicmp(buf, "off", 3) == 0 ||
+		   strnicmp(buf, "0", 1) == 0) {
 		debug = 0;
 		dev_dbg(dev, "s3c2410fb: Debug Off");
 	} else {
@@ -616,7 +616,7 @@ static int s3c2410fb_debug_store(struct device *dev,
 	return len;
 }
 
-static DEVICE_ATTR(debug, 0664, s3c2410fb_debug_show, s3c2410fb_debug_store);
+static DEVICE_ATTR(debug, 0666, s3c2410fb_debug_show, s3c2410fb_debug_store);
 
 static struct fb_ops s3c2410fb_ops = {
 	.owner		= THIS_MODULE,
@@ -645,8 +645,8 @@ static int s3c2410fb_map_video_memory(struct fb_info *info)
 
 	dprintk("map_video_memory(fbi=%p) map_size %u\n", fbi, map_size);
 
-	info->screen_base = dma_alloc_wc(fbi->dev, map_size, &map_dma,
-					 GFP_KERNEL);
+	info->screen_base = dma_alloc_writecombine(fbi->dev, map_size,
+						   &map_dma, GFP_KERNEL);
 
 	if (info->screen_base) {
 		/* prevent initial garbage on screen */
@@ -667,8 +667,8 @@ static inline void s3c2410fb_unmap_video_memory(struct fb_info *info)
 {
 	struct s3c2410fb_info *fbi = info->par;
 
-	dma_free_wc(fbi->dev, PAGE_ALIGN(info->fix.smem_len),
-		    info->screen_base, info->fix.smem_start);
+	dma_free_writecombine(fbi->dev, PAGE_ALIGN(info->fix.smem_len),
+			      info->screen_base, info->fix.smem_start);
 }
 
 static inline void modify_gpio(void __iomem *reg,
@@ -767,7 +767,7 @@ static irqreturn_t s3c2410fb_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-#ifdef CONFIG_ARM_S3C24XX_CPUFREQ
+#ifdef CONFIG_CPU_FREQ
 
 static int s3c2410fb_cpufreq_transition(struct notifier_block *nb,
 					unsigned long val, void *data)
@@ -932,7 +932,7 @@ static int s3c24xxfb_probe(struct platform_device *pdev,
 		goto release_irq;
 	}
 
-	clk_prepare_enable(info->clk);
+	clk_enable(info->clk);
 	dprintk("got and enabled clock\n");
 
 	usleep_range(1000, 1100);
@@ -996,7 +996,7 @@ static int s3c24xxfb_probe(struct platform_device *pdev,
 free_video_memory:
 	s3c2410fb_unmap_video_memory(fbinfo);
 release_clock:
-	clk_disable_unprepare(info->clk);
+	clk_disable(info->clk);
 	clk_put(info->clk);
 release_irq:
 	free_irq(irq, info);
@@ -1038,7 +1038,7 @@ static int s3c2410fb_remove(struct platform_device *pdev)
 	s3c2410fb_unmap_video_memory(fbinfo);
 
 	if (info->clk) {
-		clk_disable_unprepare(info->clk);
+		clk_disable(info->clk);
 		clk_put(info->clk);
 		info->clk = NULL;
 	}
@@ -1070,7 +1070,7 @@ static int s3c2410fb_suspend(struct platform_device *dev, pm_message_t state)
 	 * before the clock goes off again (bjd) */
 
 	usleep_range(1000, 1100);
-	clk_disable_unprepare(info->clk);
+	clk_disable(info->clk);
 
 	return 0;
 }
@@ -1080,7 +1080,7 @@ static int s3c2410fb_resume(struct platform_device *dev)
 	struct fb_info	   *fbinfo = platform_get_drvdata(dev);
 	struct s3c2410fb_info *info = fbinfo->par;
 
-	clk_prepare_enable(info->clk);
+	clk_enable(info->clk);
 	usleep_range(1000, 1100);
 
 	s3c2410fb_init_registers(fbinfo);
@@ -1104,6 +1104,7 @@ static struct platform_driver s3c2410fb_driver = {
 	.resume		= s3c2410fb_resume,
 	.driver		= {
 		.name	= "s3c2410-lcd",
+		.owner	= THIS_MODULE,
 	},
 };
 
@@ -1114,6 +1115,7 @@ static struct platform_driver s3c2412fb_driver = {
 	.resume		= s3c2410fb_resume,
 	.driver		= {
 		.name	= "s3c2412-lcd",
+		.owner	= THIS_MODULE,
 	},
 };
 

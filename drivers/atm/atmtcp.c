@@ -10,7 +10,7 @@
 #include <linux/bitops.h>
 #include <linux/init.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/atomic.h>
 
 
@@ -299,7 +299,6 @@ static int atmtcp_c_send(struct atm_vcc *vcc,struct sk_buff *skb)
 	out_vcc = find_vcc(dev, ntohs(hdr->vpi), ntohs(hdr->vci));
 	read_unlock(&vcc_sklist_lock);
 	if (!out_vcc) {
-		result = -EUNATCH;
 		atomic_inc(&vcc->stats->tx_err);
 		goto done;
 	}

@@ -16,11 +16,8 @@
 
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clk/ti.h>
-
-#include "clock.h"
 
 static struct ti_dt_clk am33xx_clks[] = {
 	DT_CLK(NULL, "clk_32768_ck", "clk_32768_ck"),
@@ -108,9 +105,6 @@ static struct ti_dt_clk am33xx_clks[] = {
 	DT_CLK("48300200.ehrpwm", "tbclk", "ehrpwm0_tbclk"),
 	DT_CLK("48302200.ehrpwm", "tbclk", "ehrpwm1_tbclk"),
 	DT_CLK("48304200.ehrpwm", "tbclk", "ehrpwm2_tbclk"),
-	DT_CLK("48300200.pwm", "tbclk", "ehrpwm0_tbclk"),
-	DT_CLK("48302200.pwm", "tbclk", "ehrpwm1_tbclk"),
-	DT_CLK("48304200.pwm", "tbclk", "ehrpwm2_tbclk"),
 	{ .node_name = NULL },
 };
 

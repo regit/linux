@@ -141,7 +141,7 @@ static void st_send_frame(unsigned char chnl_id, struct st_data_s *st_gdata)
  * This function is being called with spin lock held, protocol drivers are
  * only expected to complete their waits and do nothing more than that.
  */
-static void st_reg_complete(struct st_data_s *st_gdata, int err)
+static void st_reg_complete(struct st_data_s *st_gdata, char err)
 {
 	unsigned char i = 0;
 	pr_info(" %s ", __func__);
@@ -153,9 +153,8 @@ static void st_reg_complete(struct st_data_s *st_gdata, int err)
 				(st_gdata->list[i]->priv_data, err);
 			pr_info("protocol %d's cb sent %d\n", i, err);
 			if (err) { /* cleanup registered protocol */
+				st_gdata->protos_registered--;
 				st_gdata->is_registered[i] = false;
-				if (st_gdata->protos_registered)
-					st_gdata->protos_registered--;
 			}
 		}
 	}
@@ -343,26 +342,12 @@ void st_int_recv(void *disc_data,
 			/* Unknow packet? */
 		default:
 			type = *ptr;
-
-			/* Default case means non-HCILL packets,
-			 * possibilities are packets for:
-			 * (a) valid protocol -  Supported Protocols within
-			 *     the ST_MAX_CHANNELS.
-			 * (b) registered protocol - Checked by
-			 *     "st_gdata->list[type] == NULL)" are supported
-			 *     protocols only.
-			 *  Rules out any invalid protocol and
-			 *  unregistered protocols with channel ID < 16.
-			 */
-
-			if ((type >= ST_MAX_CHANNELS) ||
-					(st_gdata->list[type] == NULL)) {
-				pr_err("chip/interface misbehavior: "
-						"dropping frame starting "
-						"with 0x%02x\n", type);
+			if (st_gdata->list[type] == NULL) {
+				pr_err("chip/interface misbehavior dropping"
+					" frame starting with 0x%02x", type);
 				goto done;
-			}
 
+			}
 			st_gdata->rx_skb = alloc_skb(
 					st_gdata->list[type]->max_frame_size,
 					GFP_ATOMIC);
@@ -460,13 +445,6 @@ static void st_int_enqueue(struct st_data_s *st_gdata, struct sk_buff *skb)
  * - TTY layer when write's finished
  * - st_write (in context of the protocol stack)
  */
-static void work_fn_write_wakeup(struct work_struct *work)
-{
-	struct st_data_s *st_gdata = container_of(work, struct st_data_s,
-			work_write_wakeup);
-
-	st_tx_wakeup((void *)st_gdata);
-}
 void st_tx_wakeup(struct st_data_s *st_data)
 {
 	struct sk_buff *skb;
@@ -632,6 +610,7 @@ long st_register(struct st_proto_s *new_proto)
 		spin_unlock_irqrestore(&st_gdata->lock, flags);
 		return err;
 	}
+	pr_debug("done %s(%d) ", __func__, new_proto->chnl_id);
 }
 EXPORT_SYMBOL_GPL(st_register);
 
@@ -660,11 +639,13 @@ long st_unregister(struct st_proto_s *proto)
 		return -EPROTONOSUPPORT;
 	}
 
-	if (st_gdata->protos_registered)
-		st_gdata->protos_registered--;
-
+	st_gdata->protos_registered--;
 	remove_channel_from_table(st_gdata, proto);
 	spin_unlock_irqrestore(&st_gdata->lock, flags);
+
+	/* paranoid check */
+	if (st_gdata->protos_registered < ST_EMPTY)
+		st_gdata->protos_registered = ST_EMPTY;
 
 	if ((st_gdata->protos_registered == ST_EMPTY) &&
 	    (!test_bit(ST_REG_PENDING, &st_gdata->st_state))) {
@@ -818,12 +799,8 @@ static void st_tty_wakeup(struct tty_struct *tty)
 	/* don't do an wakeup for now */
 	clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 
-	/*
-	 * schedule the internal wakeup instead of calling directly to
-	 * avoid lockup (port->lock needed in tty->ops->write is
-	 * already taken here
-	 */
-	schedule_work(&st_gdata->work_write_wakeup);
+	/* call our internal wakeup */
+	st_tx_wakeup((void *)st_gdata);
 }
 
 static void st_tty_flush_buffer(struct tty_struct *tty)
@@ -891,9 +868,6 @@ int st_core_init(struct st_data_s **core_data)
 			pr_err("unable to un-register ldisc");
 		return err;
 	}
-
-	INIT_WORK(&st_gdata->work_write_wakeup, work_fn_write_wakeup);
-
 	*core_data = st_gdata;
 	return 0;
 }
@@ -920,3 +894,5 @@ void st_core_exit(struct st_data_s *st_gdata)
 		kfree(st_gdata);
 	}
 }
+
+

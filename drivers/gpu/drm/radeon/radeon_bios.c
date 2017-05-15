@@ -30,6 +30,7 @@
 #include "radeon.h"
 #include "atom.h"
 
+#include <linux/vga_switcheroo.h>
 #include <linux/slab.h>
 #include <linux/acpi.h>
 /*
@@ -75,7 +76,7 @@ static bool igp_read_bios_from_vram(struct radeon_device *rdev)
 
 static bool radeon_read_bios(struct radeon_device *rdev)
 {
-	uint8_t __iomem *bios, val1, val2;
+	uint8_t __iomem *bios;
 	size_t size;
 
 	rdev->bios = NULL;
@@ -85,19 +86,15 @@ static bool radeon_read_bios(struct radeon_device *rdev)
 		return false;
 	}
 
-	val1 = readb(&bios[0]);
-	val2 = readb(&bios[1]);
-
-	if (size == 0 || val1 != 0x55 || val2 != 0xaa) {
+	if (size == 0 || bios[0] != 0x55 || bios[1] != 0xaa) {
 		pci_unmap_rom(rdev->pdev, bios);
 		return false;
 	}
-	rdev->bios = kzalloc(size, GFP_KERNEL);
+	rdev->bios = kmemdup(bios, size, GFP_KERNEL);
 	if (rdev->bios == NULL) {
 		pci_unmap_rom(rdev->pdev, bios);
 		return false;
 	}
-	memcpy_fromio(rdev->bios, bios, size);
 	pci_unmap_rom(rdev->pdev, bios);
 	return true;
 }
@@ -603,9 +600,8 @@ static bool radeon_acpi_vfct_bios(struct radeon_device *rdev)
 	GOP_VBIOS_CONTENT *vbios;
 	VFCT_IMAGE_HEADER *vhdr;
 
-	if (!ACPI_SUCCESS(acpi_get_table("VFCT", 1, &hdr)))
+	if (!ACPI_SUCCESS(acpi_get_table_with_size("VFCT", 1, &hdr, &tbl_size)))
 		return false;
-	tbl_size = hdr->length;
 	if (tbl_size < sizeof(UEFI_ACPI_VFCT)) {
 		DRM_ERROR("ACPI VFCT table present but broken (too short #1)\n");
 		goto out_unmap;
@@ -662,10 +658,12 @@ bool radeon_get_bios(struct radeon_device *rdev)
 		r = igp_read_bios_from_vram(rdev);
 	if (r == false)
 		r = radeon_read_bios(rdev);
-	if (r == false)
+	if (r == false) {
 		r = radeon_read_disabled_bios(rdev);
-	if (r == false)
+	}
+	if (r == false) {
 		r = radeon_read_platform_bios(rdev);
+	}
 	if (r == false || rdev->bios == NULL) {
 		DRM_ERROR("Unable to locate a BIOS ROM\n");
 		rdev->bios = NULL;

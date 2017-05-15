@@ -45,7 +45,7 @@ static int cs42l51_i2c_remove(struct i2c_client *i2c)
 static struct i2c_driver cs42l51_i2c_driver = {
 	.driver = {
 		.name = "cs42l51",
-		.of_match_table = cs42l51_of_match,
+		.owner = THIS_MODULE,
 	},
 	.probe = cs42l51_i2c_probe,
 	.remove = cs42l51_i2c_remove,

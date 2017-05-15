@@ -24,11 +24,11 @@ check_preempt_curr_stop(struct rq *rq, struct task_struct *p, int flags)
 }
 
 static struct task_struct *
-pick_next_task_stop(struct rq *rq, struct task_struct *prev, struct pin_cookie cookie)
+pick_next_task_stop(struct rq *rq, struct task_struct *prev)
 {
 	struct task_struct *stop = rq->stop;
 
-	if (!stop || !task_on_rq_queued(stop))
+	if (!stop || !stop->on_rq)
 		return NULL;
 
 	put_prev_task(rq, prev);
@@ -102,10 +102,6 @@ get_rr_interval_stop(struct rq *rq, struct task_struct *task)
 	return 0;
 }
 
-static void update_curr_stop(struct rq *rq)
-{
-}
-
 /*
  * Simple, special scheduling class for the per-CPU stop tasks:
  */
@@ -123,7 +119,6 @@ const struct sched_class stop_sched_class = {
 
 #ifdef CONFIG_SMP
 	.select_task_rq		= select_task_rq_stop,
-	.set_cpus_allowed	= set_cpus_allowed_common,
 #endif
 
 	.set_curr_task          = set_curr_task_stop,
@@ -133,5 +128,4 @@ const struct sched_class stop_sched_class = {
 
 	.prio_changed		= prio_changed_stop,
 	.switched_to		= switched_to_stop,
-	.update_curr		= update_curr_stop,
 };

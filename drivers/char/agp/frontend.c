@@ -38,7 +38,7 @@
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/sched.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include "agp.h"
 
@@ -156,7 +156,7 @@ static pgprot_t agp_convert_mmap_flags(int prot)
 {
 	unsigned long prot_bits;
 
-	prot_bits = calc_vm_prot_bits(prot, 0) | VM_SHARED;
+	prot_bits = calc_vm_prot_bits(prot) | VM_SHARED;
 	return vm_get_page_prot(prot_bits);
 }
 
@@ -710,6 +710,19 @@ static int agp_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
+
+static ssize_t agp_read(struct file *file, char __user *buf,
+			size_t count, loff_t * ppos)
+{
+	return -EINVAL;
+}
+
+static ssize_t agp_write(struct file *file, const char __user *buf,
+			 size_t count, loff_t * ppos)
+{
+	return -EINVAL;
+}
+
 static int agpioc_info_wrap(struct agp_file_private *priv, void __user *arg)
 {
 	struct agp_info userinfo;
@@ -1034,6 +1047,8 @@ static const struct file_operations agp_fops =
 {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
+	.read		= agp_read,
+	.write		= agp_write,
 	.unlocked_ioctl	= agp_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= compat_agp_ioctl,

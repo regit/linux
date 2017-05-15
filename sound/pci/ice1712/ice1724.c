@@ -94,7 +94,7 @@ MODULE_PARM_DESC(model, "Use the given board model.");
 
 
 /* Both VT1720 and VT1724 have the same PCI IDs */
-static const struct pci_device_id snd_vt1724_ids[] = {
+static DEFINE_PCI_DEVICE_TABLE(snd_vt1724_ids) = {
 	{ PCI_VDEVICE(ICE, PCI_DEVICE_ID_VT1724), 0 },
 	{ 0, }
 };
@@ -620,7 +620,9 @@ static const unsigned int stdclock_rate_list[16] = {
 
 static unsigned int stdclock_get_rate(struct snd_ice1712 *ice)
 {
-	return stdclock_rate_list[inb(ICEMT1724(ice, RATE)) & 15];
+	unsigned int rate;
+	rate = stdclock_rate_list[inb(ICEMT1724(ice, RATE)) & 15];
+	return rate;
 }
 
 static void stdclock_set_rate(struct snd_ice1712 *ice, unsigned int rate)
@@ -1111,7 +1113,7 @@ static int snd_vt1724_capture_pro_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static const struct snd_pcm_ops snd_vt1724_playback_pro_ops = {
+static struct snd_pcm_ops snd_vt1724_playback_pro_ops = {
 	.open =		snd_vt1724_playback_pro_open,
 	.close =	snd_vt1724_playback_pro_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1122,7 +1124,7 @@ static const struct snd_pcm_ops snd_vt1724_playback_pro_ops = {
 	.pointer =	snd_vt1724_playback_pro_pointer,
 };
 
-static const struct snd_pcm_ops snd_vt1724_capture_pro_ops = {
+static struct snd_pcm_ops snd_vt1724_capture_pro_ops = {
 	.open =		snd_vt1724_capture_pro_open,
 	.close =	snd_vt1724_capture_pro_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1290,7 +1292,7 @@ static int snd_vt1724_capture_spdif_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static const struct snd_pcm_ops snd_vt1724_playback_spdif_ops = {
+static struct snd_pcm_ops snd_vt1724_playback_spdif_ops = {
 	.open =		snd_vt1724_playback_spdif_open,
 	.close =	snd_vt1724_playback_spdif_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1301,7 +1303,7 @@ static const struct snd_pcm_ops snd_vt1724_playback_spdif_ops = {
 	.pointer =	snd_vt1724_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_vt1724_capture_spdif_ops = {
+static struct snd_pcm_ops snd_vt1724_capture_spdif_ops = {
 	.open =		snd_vt1724_capture_spdif_open,
 	.close =	snd_vt1724_capture_spdif_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1435,7 +1437,7 @@ static int snd_vt1724_playback_indep_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static const struct snd_pcm_ops snd_vt1724_playback_indep_ops = {
+static struct snd_pcm_ops snd_vt1724_playback_indep_ops = {
 	.open =		snd_vt1724_playback_indep_open,
 	.close =	snd_vt1724_playback_indep_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -2047,7 +2049,13 @@ static int snd_vt1724_pro_route_info(struct snd_kcontrol *kcontrol,
 		"IEC958 In L", "IEC958 In R", /* 3-4 */
 	};
 
-	return snd_ctl_enum_info(uinfo, 1, 5, texts);
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->count = 1;
+	uinfo->value.enumerated.items = 5;
+	if (uinfo->value.enumerated.item >= uinfo->value.enumerated.items)
+		uinfo->value.enumerated.item = uinfo->value.enumerated.items - 1;
+	strcpy(uinfo->value.enumerated.name, texts[uinfo->value.enumerated.item]);
+	return 0;
 }
 
 static inline int analog_route_shift(int idx)
@@ -2495,8 +2503,11 @@ static int snd_vt1724_build_controls(struct snd_ice1712 *ice)
 			return err;
 	}
 
-	return snd_ctl_add(ice->card,
-			   snd_ctl_new1(&snd_vt1724_mixer_pro_peak, ice));
+	err = snd_ctl_add(ice->card, snd_ctl_new1(&snd_vt1724_mixer_pro_peak, ice));
+	if (err < 0)
+		return err;
+
+	return 0;
 }
 
 static int snd_vt1724_free(struct snd_ice1712 *ice)
@@ -2796,6 +2807,7 @@ static void snd_vt1724_remove(struct pci_dev *pci)
 #ifdef CONFIG_PM_SLEEP
 static int snd_vt1724_suspend(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct snd_ice1712 *ice = card->private_data;
 
@@ -2818,16 +2830,31 @@ static int snd_vt1724_suspend(struct device *dev)
 
 	if (ice->pm_suspend)
 		ice->pm_suspend(ice);
+
+	pci_disable_device(pci);
+	pci_save_state(pci);
+	pci_set_power_state(pci, PCI_D3hot);
 	return 0;
 }
 
 static int snd_vt1724_resume(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct snd_ice1712 *ice = card->private_data;
 
 	if (!ice->pm_suspend_enabled)
 		return 0;
+
+	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+
+	if (pci_enable_device(pci) < 0) {
+		snd_card_disconnect(card);
+		return -EIO;
+	}
+
+	pci_set_master(pci);
 
 	snd_vt1724_chip_reset(ice);
 
@@ -2857,7 +2884,8 @@ static int snd_vt1724_resume(struct device *dev)
 	outb(ice->pm_saved_spdif_cfg, ICEREG1724(ice, SPDIF_CFG));
 	outl(ice->pm_saved_route, ICEMT1724(ice, ROUTE_PLAYBACK));
 
-	snd_ac97_resume(ice->ac97);
+	if (ice->ac97)
+		snd_ac97_resume(ice->ac97);
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D0);
 	return 0;

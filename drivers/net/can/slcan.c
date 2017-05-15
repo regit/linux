@@ -56,6 +56,9 @@
 #include <linux/can.h>
 #include <linux/can/skb.h>
 
+static __initconst const char banner[] =
+	KERN_INFO "slcan: serial line CAN interface driver\n";
+
 MODULE_ALIAS_LDISC(N_SLCAN);
 MODULE_DESCRIPTION("serial line CAN interface");
 MODULE_LICENSE("GPL");
@@ -214,14 +217,13 @@ static void slc_bump(struct slcan *sl)
 
 	can_skb_reserve(skb);
 	can_skb_prv(skb)->ifindex = sl->dev->ifindex;
-	can_skb_prv(skb)->skbcnt = 0;
 
 	memcpy(skb_put(skb, sizeof(struct can_frame)),
 	       &cf, sizeof(struct can_frame));
+	netif_rx_ni(skb);
 
 	sl->dev->stats.rx_packets++;
 	sl->dev->stats.rx_bytes += cf.can_dlc;
-	netif_rx_ni(skb);
 }
 
 /* parse tty input stream */
@@ -354,7 +356,7 @@ static netdev_tx_t slc_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct slcan *sl = netdev_priv(dev);
 
-	if (skb->len != CAN_MTU)
+	if (skb->len != sizeof(struct can_frame))
 		goto out;
 
 	spin_lock(&sl->lock);
@@ -442,7 +444,7 @@ static void slc_setup(struct net_device *dev)
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 10;
 
-	dev->mtu		= CAN_MTU;
+	dev->mtu		= sizeof(struct can_frame);
 	dev->type		= ARPHRD_CAN;
 
 	/* New-style flags. */
@@ -527,7 +529,7 @@ static struct slcan *slc_alloc(dev_t line)
 		return NULL;
 
 	sprintf(name, "slcan%d", i);
-	dev = alloc_netdev(sizeof(*sl), name, NET_NAME_UNKNOWN, slc_setup);
+	dev = alloc_netdev(sizeof(*sl), name, slc_setup);
 	if (!dev)
 		return NULL;
 
@@ -700,8 +702,8 @@ static int __init slcan_init(void)
 	if (maxdev < 4)
 		maxdev = 4; /* Sanity */
 
-	pr_info("slcan: serial line CAN interface driver\n");
-	pr_info("slcan: %d dynamic interface channels.\n", maxdev);
+	printk(banner);
+	printk(KERN_INFO "slcan: %d dynamic interface channels.\n", maxdev);
 
 	slcan_devs = kzalloc(sizeof(struct net_device *)*maxdev, GFP_KERNEL);
 	if (!slcan_devs)

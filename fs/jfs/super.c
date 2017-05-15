@@ -31,7 +31,7 @@
 #include <linux/exportfs.h>
 #include <linux/crc32.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/seq_file.h>
 #include <linux/blkdev.h>
 
@@ -84,7 +84,7 @@ static void jfs_handle_error(struct super_block *sb)
 		panic("JFS (device %s): panic forced after error\n",
 			sb->s_id);
 	else if (sbi->flag & JFS_ERR_REMOUNT_RO) {
-		jfs_err("ERROR: (device %s): remounting filesystem as read-only",
+		jfs_err("ERROR: (device %s): remounting filesystem as read-only\n",
 			sb->s_id);
 		sb->s_flags |= MS_RDONLY;
 	}
@@ -102,7 +102,7 @@ void jfs_error(struct super_block *sb, const char *fmt, ...)
 	vaf.fmt = fmt;
 	vaf.va = &args;
 
-	pr_err("ERROR: (device %s): %ps: %pV\n",
+	pr_err("ERROR: (device %s): %pf: %pV\n",
 	       sb->s_id, __builtin_return_address(0), &vaf);
 
 	va_end(args);
@@ -117,9 +117,6 @@ static struct inode *jfs_alloc_inode(struct super_block *sb)
 	jfs_inode = kmem_cache_alloc(jfs_inode_cachep, GFP_NOFS);
 	if (!jfs_inode)
 		return NULL;
-#ifdef CONFIG_QUOTA
-	memset(&jfs_inode->i_dquot, 0, sizeof(jfs_inode->i_dquot));
-#endif
 	return &jfs_inode->vfs_inode;
 }
 
@@ -496,6 +493,9 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	jfs_info("In jfs_read_super: s_flags=0x%lx", sb->s_flags);
 
+	if (!new_valid_dev(sb->s_bdev->bd_dev))
+		return -EOVERFLOW;
+
 	sbi = kzalloc(sizeof(struct jfs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -537,7 +537,6 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 #ifdef CONFIG_QUOTA
 	sb->dq_op = &dquot_operations;
 	sb->s_qcop = &dquot_quotactl_ops;
-	sb->s_quota_types = QTYPE_MASK_USR | QTYPE_MASK_GRP;
 #endif
 
 	/*
@@ -551,7 +550,7 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 	inode->i_ino = 0;
 	inode->i_size = sb->s_bdev->bd_inode->i_size;
 	inode->i_mapping->a_ops = &jfs_metapage_aops;
-	hlist_add_fake(&inode->i_hash);
+	insert_inode_hash(inode);
 	mapping_set_gfp_mask(inode->i_mapping, GFP_NOFS);
 
 	sbi->direct_inode = inode;
@@ -596,7 +595,7 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 	 * Page cache is indexed by long.
 	 * I would use MAX_LFS_FILESIZE, but it's only half as big
 	 */
-	sb->s_maxbytes = min(((u64) PAGE_SIZE << 32) - 1,
+	sb->s_maxbytes = min(((u64) PAGE_CACHE_SIZE << 32) - 1,
 			     (u64)sb->s_maxbytes);
 #endif
 	sb->s_time_gran = 1;
@@ -616,7 +615,8 @@ out_mount_failed:
 	iput(sbi->direct_inode);
 	sbi->direct_inode = NULL;
 out_unload:
-	unload_nls(sbi->nls_tab);
+	if (sbi->nls_tab)
+		unload_nls(sbi->nls_tab);
 out_kfree:
 	kfree(sbi);
 	return ret;
@@ -641,7 +641,7 @@ static int jfs_freeze(struct super_block *sb)
 		}
 		rc = updateSuper(sb, FM_CLEAN);
 		if (rc) {
-			jfs_err("jfs_freeze: updateSuper failed");
+			jfs_err("jfs_freeze: updateSuper failed\n");
 			/*
 			 * Don't fail here. Everything succeeded except
 			 * marking the superblock clean, so there's really
@@ -792,7 +792,7 @@ static ssize_t jfs_quota_write(struct super_block *sb, int type,
 	struct buffer_head tmp_bh;
 	struct buffer_head *bh;
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 	while (towrite > 0) {
 		tocopy = sb->s_blocksize - offset < towrite ?
 				sb->s_blocksize - offset : towrite;
@@ -824,22 +824,18 @@ static ssize_t jfs_quota_write(struct super_block *sb, int type,
 	}
 out:
 	if (len == towrite) {
-		inode_unlock(inode);
+		mutex_unlock(&inode->i_mutex);
 		return err;
 	}
 	if (inode->i_size < off+len-towrite)
 		i_size_write(inode, off+len-towrite);
 	inode->i_version++;
-	inode->i_mtime = inode->i_ctime = current_time(inode);
+	inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	mark_inode_dirty(inode);
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 	return len - towrite;
 }
 
-static struct dquot **jfs_get_dquots(struct inode *inode)
-{
-	return JFS_IP(inode)->i_dquot;
-}
 #endif
 
 static const struct super_operations jfs_super_operations = {
@@ -858,7 +854,6 @@ static const struct super_operations jfs_super_operations = {
 #ifdef CONFIG_QUOTA
 	.quota_read	= jfs_quota_read,
 	.quota_write	= jfs_quota_write,
-	.get_dquots	= jfs_get_dquots,
 #endif
 };
 
@@ -898,7 +893,7 @@ static int __init init_jfs_fs(void)
 
 	jfs_inode_cachep =
 	    kmem_cache_create("jfs_ip", sizeof(struct jfs_inode_info), 0,
-			    SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD|SLAB_ACCOUNT,
+			    SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD,
 			    init_once);
 	if (jfs_inode_cachep == NULL)
 		return -ENOMEM;

@@ -14,19 +14,18 @@
  * in the LICENSE file that accompanied this code).
  *
  * You should have received a copy of the GNU General Public License
- * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * version 2 along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA
  *
  * GPL HEADER END
  */
 /*
- * Copyright (c) 2013, 2014, Intel Corporation.
+ * Copyright (c) 2013, Intel Corporation.
  * Use is subject to license terms.
  *
  * Author: di wang <di.wang@intel.com>
  */
-
-#define DEFAULT_LINKEA_SIZE	4096
 
 struct linkea_data {
 	/**
@@ -45,35 +44,14 @@ int linkea_data_new(struct linkea_data *ldata, struct lu_buf *buf);
 int linkea_init(struct linkea_data *ldata);
 void linkea_entry_unpack(const struct link_ea_entry *lee, int *reclen,
 			 struct lu_name *lname, struct lu_fid *pfid);
-int linkea_entry_pack(struct link_ea_entry *lee, const struct lu_name *lname,
-		      const struct lu_fid *pfid);
 int linkea_add_buf(struct linkea_data *ldata, const struct lu_name *lname,
 		   const struct lu_fid *pfid);
 void linkea_del_buf(struct linkea_data *ldata, const struct lu_name *lname);
 int linkea_links_find(struct linkea_data *ldata, const struct lu_name *lname,
 		      const struct lu_fid  *pfid);
 
-static inline void linkea_first_entry(struct linkea_data *ldata)
-{
-	LASSERT(ldata);
-	LASSERT(ldata->ld_leh);
+#define LINKEA_NEXT_ENTRY(ldata)	\
+	(struct link_ea_entry *)((char *)ldata.ld_lee + ldata.ld_reclen)
 
-	if (ldata->ld_leh->leh_reccount == 0)
-		ldata->ld_lee = NULL;
-	else
-		ldata->ld_lee = (struct link_ea_entry *)(ldata->ld_leh + 1);
-}
-
-static inline void linkea_next_entry(struct linkea_data *ldata)
-{
-	LASSERT(ldata);
-	LASSERT(ldata->ld_leh);
-
-	if (ldata->ld_lee) {
-		ldata->ld_lee = (struct link_ea_entry *)((char *)ldata->ld_lee +
-							 ldata->ld_reclen);
-		if ((char *)ldata->ld_lee >= ((char *)ldata->ld_leh +
-					      ldata->ld_leh->leh_len))
-			ldata->ld_lee = NULL;
-	}
-}
+#define LINKEA_FIRST_ENTRY(ldata)	\
+	(struct link_ea_entry *)(ldata.ld_leh + 1)

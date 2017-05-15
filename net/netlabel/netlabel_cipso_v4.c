@@ -59,7 +59,14 @@ struct netlbl_domhsh_walk_arg {
 };
 
 /* NetLabel Generic NETLINK CIPSOv4 family */
-static struct genl_family netlbl_cipsov4_gnl_family;
+static struct genl_family netlbl_cipsov4_gnl_family = {
+	.id = GENL_ID_GENERATE,
+	.hdrsize = 0,
+	.name = NETLBL_NLTYPE_CIPSOV4_NAME,
+	.version = NETLBL_PROTO_VERSION,
+	.maxattr = NLBL_CIPSOV4_A_MAX,
+};
+
 /* NetLabel Netlink attribute policy */
 static const struct nla_policy netlbl_cipsov4_genl_policy[NLBL_CIPSOV4_A_MAX + 1] = {
 	[NLBL_CIPSOV4_A_DOI] = { .type = NLA_U32 },
@@ -317,7 +324,8 @@ static int netlbl_cipsov4_add_std(struct genl_info *info,
 	return 0;
 
 add_std_failure:
-	cipso_v4_doi_free(doi_def);
+	if (doi_def)
+		cipso_v4_doi_free(doi_def);
 	return ret_val;
 }
 
@@ -633,8 +641,7 @@ static int netlbl_cipsov4_listall_cb(struct cipso_v4_doi *doi_def, void *arg)
 	if (ret_val != 0)
 		goto listall_cb_failure;
 
-	genlmsg_end(cb_arg->skb, data);
-	return 0;
+	return genlmsg_end(cb_arg->skb, data);
 
 listall_cb_failure:
 	genlmsg_cancel(cb_arg->skb, data);
@@ -760,16 +767,6 @@ static const struct genl_ops netlbl_cipsov4_ops[] = {
 	},
 };
 
-static struct genl_family netlbl_cipsov4_gnl_family __ro_after_init = {
-	.hdrsize = 0,
-	.name = NETLBL_NLTYPE_CIPSOV4_NAME,
-	.version = NETLBL_PROTO_VERSION,
-	.maxattr = NLBL_CIPSOV4_A_MAX,
-	.module = THIS_MODULE,
-	.ops = netlbl_cipsov4_ops,
-	.n_ops = ARRAY_SIZE(netlbl_cipsov4_ops),
-};
-
 /*
  * NetLabel Generic NETLINK Protocol Functions
  */
@@ -784,5 +781,6 @@ static struct genl_family netlbl_cipsov4_gnl_family __ro_after_init = {
  */
 int __init netlbl_cipsov4_genl_init(void)
 {
-	return genl_register_family(&netlbl_cipsov4_gnl_family);
+	return genl_register_family_with_ops(&netlbl_cipsov4_gnl_family,
+					     netlbl_cipsov4_ops);
 }

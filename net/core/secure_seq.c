@@ -12,7 +12,6 @@
 #include <net/secure_seq.h>
 
 #if IS_ENABLED(CONFIG_IPV6) || IS_ENABLED(CONFIG_INET)
-#include <net/tcp.h>
 #define NET_SECRET_SIZE (MD5_MESSAGE_BYTES / 4)
 
 static u32 net_secret[NET_SECRET_SIZE] ____cacheline_aligned;
@@ -36,13 +35,13 @@ static u32 seq_scale(u32 seq)
 	 *	overlaps less than one time per MSL (2 minutes).
 	 *	Choosing a clock of 64 ns period is OK. (period of 274 s)
 	 */
-	return seq + (ktime_get_real_ns() >> 6);
+	return seq + (ktime_to_ns(ktime_get_real()) >> 6);
 }
 #endif
 
 #if IS_ENABLED(CONFIG_IPV6)
-u32 secure_tcpv6_sequence_number(const __be32 *saddr, const __be32 *daddr,
-				 __be16 sport, __be16 dport, u32 *tsoff)
+__u32 secure_tcpv6_sequence_number(const __be32 *saddr, const __be32 *daddr,
+				   __be16 sport, __be16 dport)
 {
 	u32 secret[MD5_MESSAGE_BYTES / 4];
 	u32 hash[MD5_DIGEST_WORDS];
@@ -59,7 +58,6 @@ u32 secure_tcpv6_sequence_number(const __be32 *saddr, const __be32 *daddr,
 
 	md5_transform(hash, secret);
 
-	*tsoff = sysctl_tcp_timestamps == 1 ? hash[1] : 0;
 	return seq_scale(hash[0]);
 }
 EXPORT_SYMBOL(secure_tcpv6_sequence_number);
@@ -88,8 +86,8 @@ EXPORT_SYMBOL(secure_ipv6_port_ephemeral);
 
 #ifdef CONFIG_INET
 
-u32 secure_tcp_sequence_number(__be32 saddr, __be32 daddr,
-			       __be16 sport, __be16 dport, u32 *tsoff)
+__u32 secure_tcp_sequence_number(__be32 saddr, __be32 daddr,
+				 __be16 sport, __be16 dport)
 {
 	u32 hash[MD5_DIGEST_WORDS];
 
@@ -101,7 +99,6 @@ u32 secure_tcp_sequence_number(__be32 saddr, __be32 daddr,
 
 	md5_transform(hash, net_secret);
 
-	*tsoff = sysctl_tcp_timestamps == 1 ? hash[1] : 0;
 	return seq_scale(hash[0]);
 }
 
@@ -138,7 +135,7 @@ u64 secure_dccp_sequence_number(__be32 saddr, __be32 daddr,
 	md5_transform(hash, net_secret);
 
 	seq = hash[0] | (((u64)hash[1]) << 32);
-	seq += ktime_get_real_ns();
+	seq += ktime_to_ns(ktime_get_real());
 	seq &= (1ull << 48) - 1;
 
 	return seq;
@@ -157,7 +154,7 @@ u64 secure_dccpv6_sequence_number(__be32 *saddr, __be32 *daddr,
 	net_secret_init();
 	memcpy(hash, saddr, 16);
 	for (i = 0; i < 4; i++)
-		secret[i] = net_secret[i] + (__force u32)daddr[i];
+		secret[i] = net_secret[i] + daddr[i];
 	secret[4] = net_secret[4] +
 		(((__force u16)sport << 16) + (__force u16)dport);
 	for (i = 5; i < MD5_MESSAGE_BYTES / 4; i++)
@@ -166,7 +163,7 @@ u64 secure_dccpv6_sequence_number(__be32 *saddr, __be32 *daddr,
 	md5_transform(hash, secret);
 
 	seq = hash[0] | (((u64)hash[1]) << 32);
-	seq += ktime_get_real_ns();
+	seq += ktime_to_ns(ktime_get_real());
 	seq &= (1ull << 48) - 1;
 
 	return seq;

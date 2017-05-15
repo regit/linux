@@ -224,17 +224,12 @@ static void efx_unmap_rx_buffer(struct efx_nic *efx,
 	}
 }
 
-static void efx_free_rx_buffers(struct efx_rx_queue *rx_queue,
-				struct efx_rx_buffer *rx_buf,
-				unsigned int num_bufs)
+static void efx_free_rx_buffer(struct efx_rx_buffer *rx_buf)
 {
-	do {
-		if (rx_buf->page) {
-			put_page(rx_buf->page);
-			rx_buf->page = NULL;
-		}
-		rx_buf = efx_rx_buf_next(rx_queue, rx_buf);
-	} while (--num_bufs);
+	if (rx_buf->page) {
+		put_page(rx_buf->page);
+		rx_buf->page = NULL;
+	}
 }
 
 /* Attempt to recycle the page if there is an RX recycle ring; the page can
@@ -283,7 +278,7 @@ static void efx_fini_rx_buffer(struct efx_rx_queue *rx_queue,
 	/* If this is the last buffer in a page, unmap and free it. */
 	if (rx_buf->flags & EFX_RX_BUF_LAST_IN_PAGE) {
 		efx_unmap_rx_buffer(rx_queue->efx, rx_buf);
-		efx_free_rx_buffers(rx_queue, rx_buf, 1);
+		efx_free_rx_buffer(rx_buf);
 	}
 	rx_buf->page = NULL;
 }
@@ -309,7 +304,10 @@ static void efx_discard_rx_packet(struct efx_channel *channel,
 
 	efx_recycle_rx_pages(channel, rx_buf, n_frags);
 
-	efx_free_rx_buffers(rx_queue, rx_buf, n_frags);
+	do {
+		efx_free_rx_buffer(rx_buf);
+		rx_buf = efx_rx_buf_next(rx_queue, rx_buf);
+	} while (--n_frags);
 }
 
 /**
@@ -335,7 +333,7 @@ void efx_fast_push_rx_descriptors(struct efx_rx_queue *rx_queue, bool atomic)
 
 	/* Calculate current fill level, and exit if we don't need to fill */
 	fill_level = (rx_queue->added_count - rx_queue->removed_count);
-	EFX_WARN_ON_ONCE_PARANOID(fill_level > rx_queue->efx->rxq_entries);
+	EFX_BUG_ON_PARANOID(fill_level > rx_queue->efx->rxq_entries);
 	if (fill_level >= rx_queue->fast_fill_trigger)
 		goto out;
 
@@ -347,7 +345,7 @@ void efx_fast_push_rx_descriptors(struct efx_rx_queue *rx_queue, bool atomic)
 
 	batch_size = efx->rx_pages_per_batch * efx->rx_bufs_per_page;
 	space = rx_queue->max_fill - fill_level;
-	EFX_WARN_ON_ONCE_PARANOID(space < batch_size);
+	EFX_BUG_ON_PARANOID(space < batch_size);
 
 	netif_vdbg(rx_queue->efx, rx_status, rx_queue->efx->net_dev,
 		   "RX queue %d fast-filling descriptor ring from"
@@ -400,10 +398,21 @@ static void efx_rx_packet__check_len(struct efx_rx_queue *rx_queue,
 	 */
 	rx_buf->flags |= EFX_RX_PKT_DISCARD;
 
-	if (net_ratelimit())
-		netif_err(efx, rx_err, efx->net_dev,
-			  "RX queue %d overlength RX event (%#x > %#x)\n",
-			  efx_rx_queue_index(rx_queue), len, max_len);
+	if ((len > rx_buf->len) && EFX_WORKAROUND_8071(efx)) {
+		if (net_ratelimit())
+			netif_err(efx, rx_err, efx->net_dev,
+				  " RX queue %d seriously overlength "
+				  "RX event (0x%x > 0x%x+0x%x). Leaking\n",
+				  efx_rx_queue_index(rx_queue), len, max_len,
+				  efx->type->rx_buffer_padding);
+		efx_schedule_reset(efx, RESET_TYPE_RX_RECOVERY);
+	} else {
+		if (net_ratelimit())
+			netif_err(efx, rx_err, efx->net_dev,
+				  " RX queue %d overlength RX event "
+				  "(0x%x > 0x%x)\n",
+				  efx_rx_queue_index(rx_queue), len, max_len);
+	}
 
 	efx_rx_queue_channel(rx_queue)->n_rx_overlength++;
 }
@@ -422,10 +431,11 @@ efx_rx_packet_gro(struct efx_channel *channel, struct efx_rx_buffer *rx_buf,
 
 	skb = napi_get_frags(napi);
 	if (unlikely(!skb)) {
-		struct efx_rx_queue *rx_queue;
-
-		rx_queue = efx_channel_get_rx_queue(channel);
-		efx_free_rx_buffers(rx_queue, rx_buf, n_frags);
+		while (n_frags--) {
+			put_page(rx_buf->page);
+			rx_buf->page = NULL;
+			rx_buf = efx_rx_buf_next(&channel->rx_queue, rx_buf);
+		}
 		return;
 	}
 
@@ -470,12 +480,10 @@ static struct sk_buff *efx_rx_mk_skb(struct efx_channel *channel,
 	skb = netdev_alloc_skb(efx->net_dev,
 			       efx->rx_ip_align + efx->rx_prefix_size +
 			       hdr_len);
-	if (unlikely(skb == NULL)) {
-		atomic_inc(&efx->n_rx_noskb_drops);
+	if (unlikely(skb == NULL))
 		return NULL;
-	}
 
-	EFX_WARN_ON_ONCE_PARANOID(rx_buf->len < hdr_len);
+	EFX_BUG_ON_PARANOID(rx_buf->len < hdr_len);
 
 	memcpy(skb->data + efx->rx_ip_align, eh - efx->rx_prefix_size,
 	       efx->rx_prefix_size + hdr_len);
@@ -510,8 +518,6 @@ static struct sk_buff *efx_rx_mk_skb(struct efx_channel *channel,
 	/* Move past the ethernet header */
 	skb->protocol = eth_type_trans(skb, efx->net_dev);
 
-	skb_mark_napi_id(skb, &channel->napi_str);
-
 	return skb;
 }
 
@@ -521,8 +527,6 @@ void efx_rx_packet(struct efx_rx_queue *rx_queue, unsigned int index,
 	struct efx_nic *efx = rx_queue->efx;
 	struct efx_channel *channel = efx_rx_queue_channel(rx_queue);
 	struct efx_rx_buffer *rx_buf;
-
-	rx_queue->rx_packets++;
 
 	rx_buf = efx_rx_buffer(rx_queue, index);
 	rx_buf->flags |= flags;
@@ -611,10 +615,7 @@ static void efx_rx_deliver(struct efx_channel *channel, u8 *eh,
 
 	skb = efx_rx_mk_skb(channel, rx_buf, n_frags, eh, hdr_len);
 	if (unlikely(skb == NULL)) {
-		struct efx_rx_queue *rx_queue;
-
-		rx_queue = efx_channel_get_rx_queue(channel);
-		efx_free_rx_buffers(rx_queue, rx_buf, n_frags);
+		efx_free_rx_buffer(rx_buf);
 		return;
 	}
 	skb_record_rx_queue(skb, channel->rx_queue.core_index);
@@ -653,20 +654,15 @@ void __efx_rx_packet(struct efx_channel *channel)
 	 * loopback layer, and free the rx_buf here
 	 */
 	if (unlikely(efx->loopback_selftest)) {
-		struct efx_rx_queue *rx_queue;
-
 		efx_loopback_rx_packet(efx, eh, rx_buf->len);
-		rx_queue = efx_channel_get_rx_queue(channel);
-		efx_free_rx_buffers(rx_queue, rx_buf,
-				    channel->rx_pkt_n_frags);
+		efx_free_rx_buffer(rx_buf);
 		goto out;
 	}
 
 	if (unlikely(!(efx->net_dev->features & NETIF_F_RXCSUM)))
 		rx_buf->flags &= ~EFX_RX_PKT_CSUMMED;
 
-	if ((rx_buf->flags & EFX_RX_PKT_TCP) && !channel->type->receive_skb &&
-	    !efx_channel_busy_polling(channel))
+	if ((rx_buf->flags & EFX_RX_PKT_TCP) && !channel->type->receive_skb)
 		efx_rx_packet_gro(channel, rx_buf, channel->rx_pkt_n_frags, eh);
 	else
 		efx_rx_deliver(channel, eh, rx_buf, channel->rx_pkt_n_frags);
@@ -682,7 +678,7 @@ int efx_probe_rx_queue(struct efx_rx_queue *rx_queue)
 
 	/* Create the smallest power-of-two aligned ring */
 	entries = max(roundup_pow_of_two(efx->rxq_entries), EFX_MIN_DMAQ_SIZE);
-	EFX_WARN_ON_PARANOID(entries > EFX_MAX_DMAQ_SIZE);
+	EFX_BUG_ON_PARANOID(entries > EFX_MAX_DMAQ_SIZE);
 	rx_queue->ptr_mask = entries - 1;
 
 	netif_dbg(efx, probe, efx->net_dev,
@@ -831,18 +827,33 @@ int efx_filter_rfs(struct net_device *net_dev, const struct sk_buff *skb,
 	struct efx_nic *efx = netdev_priv(net_dev);
 	struct efx_channel *channel;
 	struct efx_filter_spec spec;
-	struct flow_keys fk;
+	const __be16 *ports;
+	__be16 ether_type;
+	int nhoff;
 	int rc;
 
-	if (flow_id == RPS_FLOW_ID_INVALID)
-		return -EINVAL;
+	/* The core RPS/RFS code has already parsed and validated
+	 * VLAN, IP and transport headers.  We assume they are in the
+	 * header area.
+	 */
 
-	if (!skb_flow_dissect_flow_keys(skb, &fk, 0))
-		return -EPROTONOSUPPORT;
+	if (skb->protocol == htons(ETH_P_8021Q)) {
+		const struct vlan_hdr *vh =
+			(const struct vlan_hdr *)skb->data;
 
-	if (fk.basic.n_proto != htons(ETH_P_IP) && fk.basic.n_proto != htons(ETH_P_IPV6))
-		return -EPROTONOSUPPORT;
-	if (fk.control.flags & FLOW_DIS_IS_FRAGMENT)
+		/* We can't filter on the IP 5-tuple and the vlan
+		 * together, so just strip the vlan header and filter
+		 * on the IP part.
+		 */
+		EFX_BUG_ON_PARANOID(skb_headlen(skb) < sizeof(*vh));
+		ether_type = vh->h_vlan_encapsulated_proto;
+		nhoff = sizeof(struct vlan_hdr);
+	} else {
+		ether_type = skb->protocol;
+		nhoff = 0;
+	}
+
+	if (ether_type != htons(ETH_P_IP) && ether_type != htons(ETH_P_IPV6))
 		return -EPROTONOSUPPORT;
 
 	efx_filter_init_rx(&spec, EFX_FILTER_PRI_HINT,
@@ -852,41 +863,56 @@ int efx_filter_rfs(struct net_device *net_dev, const struct sk_buff *skb,
 		EFX_FILTER_MATCH_ETHER_TYPE | EFX_FILTER_MATCH_IP_PROTO |
 		EFX_FILTER_MATCH_LOC_HOST | EFX_FILTER_MATCH_LOC_PORT |
 		EFX_FILTER_MATCH_REM_HOST | EFX_FILTER_MATCH_REM_PORT;
-	spec.ether_type = fk.basic.n_proto;
-	spec.ip_proto = fk.basic.ip_proto;
+	spec.ether_type = ether_type;
 
-	if (fk.basic.n_proto == htons(ETH_P_IP)) {
-		spec.rem_host[0] = fk.addrs.v4addrs.src;
-		spec.loc_host[0] = fk.addrs.v4addrs.dst;
+	if (ether_type == htons(ETH_P_IP)) {
+		const struct iphdr *ip =
+			(const struct iphdr *)(skb->data + nhoff);
+
+		EFX_BUG_ON_PARANOID(skb_headlen(skb) < nhoff + sizeof(*ip));
+		if (ip_is_fragment(ip))
+			return -EPROTONOSUPPORT;
+		spec.ip_proto = ip->protocol;
+		spec.rem_host[0] = ip->saddr;
+		spec.loc_host[0] = ip->daddr;
+		EFX_BUG_ON_PARANOID(skb_headlen(skb) < nhoff + 4 * ip->ihl + 4);
+		ports = (const __be16 *)(skb->data + nhoff + 4 * ip->ihl);
 	} else {
-		memcpy(spec.rem_host, &fk.addrs.v6addrs.src, sizeof(struct in6_addr));
-		memcpy(spec.loc_host, &fk.addrs.v6addrs.dst, sizeof(struct in6_addr));
+		const struct ipv6hdr *ip6 =
+			(const struct ipv6hdr *)(skb->data + nhoff);
+
+		EFX_BUG_ON_PARANOID(skb_headlen(skb) <
+				    nhoff + sizeof(*ip6) + 4);
+		spec.ip_proto = ip6->nexthdr;
+		memcpy(spec.rem_host, &ip6->saddr, sizeof(ip6->saddr));
+		memcpy(spec.loc_host, &ip6->daddr, sizeof(ip6->daddr));
+		ports = (const __be16 *)(ip6 + 1);
 	}
 
-	spec.rem_port = fk.ports.src;
-	spec.loc_port = fk.ports.dst;
+	spec.rem_port = ports[0];
+	spec.loc_port = ports[1];
 
 	rc = efx->type->filter_rfs_insert(efx, &spec);
 	if (rc < 0)
 		return rc;
 
 	/* Remember this so we can check whether to expire the filter later */
-	channel = efx_get_channel(efx, rxq_index);
-	channel->rps_flow_id[rc] = flow_id;
+	efx->rps_flow_id[rc] = flow_id;
+	channel = efx_get_channel(efx, skb_get_rx_queue(skb));
 	++channel->rfs_filters_added;
 
-	if (spec.ether_type == htons(ETH_P_IP))
+	if (ether_type == htons(ETH_P_IP))
 		netif_info(efx, rx_status, efx->net_dev,
 			   "steering %s %pI4:%u:%pI4:%u to queue %u [flow %u filter %d]\n",
 			   (spec.ip_proto == IPPROTO_TCP) ? "TCP" : "UDP",
-			   spec.rem_host, ntohs(spec.rem_port), spec.loc_host,
-			   ntohs(spec.loc_port), rxq_index, flow_id, rc);
+			   spec.rem_host, ntohs(ports[0]), spec.loc_host,
+			   ntohs(ports[1]), rxq_index, flow_id, rc);
 	else
 		netif_info(efx, rx_status, efx->net_dev,
 			   "steering %s [%pI6]:%u:[%pI6]:%u to queue %u [flow %u filter %d]\n",
 			   (spec.ip_proto == IPPROTO_TCP) ? "TCP" : "UDP",
-			   spec.rem_host, ntohs(spec.rem_port), spec.loc_host,
-			   ntohs(spec.loc_port), rxq_index, flow_id, rc);
+			   spec.rem_host, ntohs(ports[0]), spec.loc_host,
+			   ntohs(ports[1]), rxq_index, flow_id, rc);
 
 	return rc;
 }
@@ -894,34 +920,24 @@ int efx_filter_rfs(struct net_device *net_dev, const struct sk_buff *skb,
 bool __efx_filter_rfs_expire(struct efx_nic *efx, unsigned int quota)
 {
 	bool (*expire_one)(struct efx_nic *efx, u32 flow_id, unsigned int index);
-	unsigned int channel_idx, index, size;
+	unsigned int index, size;
 	u32 flow_id;
 
 	if (!spin_trylock_bh(&efx->filter_lock))
 		return false;
 
 	expire_one = efx->type->filter_rfs_expire_one;
-	channel_idx = efx->rps_expire_channel;
 	index = efx->rps_expire_index;
 	size = efx->type->max_rx_ip_filters;
 	while (quota--) {
-		struct efx_channel *channel = efx_get_channel(efx, channel_idx);
-		flow_id = channel->rps_flow_id[index];
-
-		if (flow_id != RPS_FLOW_ID_INVALID &&
-		    expire_one(efx, flow_id, index)) {
+		flow_id = efx->rps_flow_id[index];
+		if (expire_one(efx, flow_id, index))
 			netif_info(efx, rx_status, efx->net_dev,
-				   "expired filter %d [queue %u flow %u]\n",
-				   index, channel_idx, flow_id);
-			channel->rps_flow_id[index] = RPS_FLOW_ID_INVALID;
-		}
-		if (++index == size) {
-			if (++channel_idx == efx->n_channels)
-				channel_idx = 0;
+				   "expired filter %d [flow %u]\n",
+				   index, flow_id);
+		if (++index == size)
 			index = 0;
-		}
 	}
-	efx->rps_expire_channel = channel_idx;
 	efx->rps_expire_index = index;
 
 	spin_unlock_bh(&efx->filter_lock);

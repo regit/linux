@@ -31,7 +31,7 @@
 #include <linux/rcupdate.h>
 
 #include <asm/reg.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/hwrpb.h>
@@ -210,6 +210,14 @@ start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 }
 EXPORT_SYMBOL(start_thread);
 
+/*
+ * Free current thread data structures etc..
+ */
+void
+exit_thread(void)
+{
+}
+
 void
 flush_thread(void)
 {
@@ -228,11 +236,12 @@ release_thread(struct task_struct *dead_task)
 }
 
 /*
- * Copy architecture-specific thread state
+ * Copy an alpha thread..
  */
+
 int
 copy_thread(unsigned long clone_flags, unsigned long usp,
-	    unsigned long kthread_arg,
+	    unsigned long arg,
 	    struct task_struct *p)
 {
 	extern void ret_from_fork(void);
@@ -253,7 +262,7 @@ copy_thread(unsigned long clone_flags, unsigned long usp,
 			sizeof(struct switch_stack) + sizeof(struct pt_regs));
 		childstack->r26 = (unsigned long) ret_from_kernel_thread;
 		childstack->r9 = usp;	/* function */
-		childstack->r10 = kthread_arg;
+		childstack->r10 = arg;
 		childregs->hae = alpha_mv.hae_cache,
 		childti->pcb.usp = 0;
 		return 0;

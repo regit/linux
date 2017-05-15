@@ -10,7 +10,7 @@ struct pt_regs;
 
 extern struct dentry *powerpc_debugfs_root;
 
-#if defined(CONFIG_DEBUGGER) || defined(CONFIG_KEXEC_CORE)
+#if defined(CONFIG_DEBUGGER) || defined(CONFIG_KEXEC)
 
 extern int (*__debugger)(struct pt_regs *regs);
 extern int (*__debugger_ipi)(struct pt_regs *regs);

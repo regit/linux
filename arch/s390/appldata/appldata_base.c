@@ -28,7 +28,7 @@
 #include <linux/platform_device.h>
 #include <asm/appldata.h>
 #include <asm/vtimer.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/smp.h>
 
@@ -511,6 +511,7 @@ static const struct dev_pm_ops appldata_pm_ops = {
 static struct platform_driver appldata_pdrv = {
 	.driver = {
 		.name	= "appldata",
+		.owner	= THIS_MODULE,
 		.pm	= &appldata_pm_ops,
 	},
 };
@@ -542,7 +543,7 @@ static int __init appldata_init(void)
 		rc = PTR_ERR(appldata_pdev);
 		goto out_driver;
 	}
-	appldata_wq = alloc_ordered_workqueue("appldata", 0);
+	appldata_wq = create_singlethread_workqueue("appldata");
 	if (!appldata_wq) {
 		rc = -ENOMEM;
 		goto out_device;

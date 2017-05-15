@@ -143,7 +143,6 @@ static struct {
 	{ ATA_DEV_PMP_UNSUP,		"pmp" },
 	{ ATA_DEV_SEMB,			"semb" },
 	{ ATA_DEV_SEMB_UNSUP,		"semb" },
-	{ ATA_DEV_ZAC,			"zac" },
 	{ ATA_DEV_NONE,			"none" }
 };
 ata_bitfield_name_search(class, ata_class_names)
@@ -495,13 +494,12 @@ struct ata_show_ering_arg {
 static int ata_show_ering(struct ata_ering_entry *ent, void *void_arg)
 {
 	struct ata_show_ering_arg* arg = void_arg;
-	u64 seconds;
-	u32 rem;
+	struct timespec time;
 
-	seconds = div_u64_rem(ent->timestamp, HZ, &rem);
+	jiffies_to_timespec(ent->timestamp,&time);
 	arg->written += sprintf(arg->buf + arg->written,
-			        "[%5llu.%09lu]", seconds,
-				rem * NSEC_PER_SEC / HZ);
+			       "[%5lu.%06lu]",
+			       time.tv_sec, time.tv_nsec);
 	arg->written += get_ata_err_names(ent->err_mask,
 					  arg->buf + arg->written);
 	return 0;
@@ -560,29 +558,6 @@ show_ata_dev_gscr(struct device *dev,
 }
 
 static DEVICE_ATTR(gscr, S_IRUGO, show_ata_dev_gscr, NULL);
-
-static ssize_t
-show_ata_dev_trim(struct device *dev,
-		  struct device_attribute *attr, char *buf)
-{
-	struct ata_device *ata_dev = transport_class_to_dev(dev);
-	unsigned char *mode;
-
-	if (!ata_id_has_trim(ata_dev->id))
-		mode = "unsupported";
-	else if (ata_dev->horkage & ATA_HORKAGE_NOTRIM)
-		mode = "forced_unsupported";
-	else if (ata_dev->horkage & ATA_HORKAGE_NO_NCQ_TRIM)
-			mode = "forced_unqueued";
-	else if (ata_fpdma_dsm_supported(ata_dev))
-		mode = "queued";
-	else
-		mode = "unqueued";
-
-	return snprintf(buf, 20, "%s\n", mode);
-}
-
-static DEVICE_ATTR(trim, S_IRUGO, show_ata_dev_trim, NULL);
 
 static DECLARE_TRANSPORT_CLASS(ata_dev_class,
 			       "ata_device", NULL, NULL, NULL);
@@ -757,7 +732,6 @@ struct scsi_transport_template *ata_attach_transport(void)
 	SETUP_DEV_ATTRIBUTE(ering);
 	SETUP_DEV_ATTRIBUTE(id);
 	SETUP_DEV_ATTRIBUTE(gscr);
-	SETUP_DEV_ATTRIBUTE(trim);
 	BUG_ON(count > ATA_DEV_ATTRS);
 	i->dev_attrs[count] = NULL;
 

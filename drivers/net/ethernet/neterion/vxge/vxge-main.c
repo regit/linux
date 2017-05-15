@@ -63,7 +63,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("Neterion's X3100 Series 10GbE PCIe I/O"
 	"Virtualized Server Adapter");
 
-static const struct pci_device_id vxge_id_table[] = {
+static DEFINE_PCI_DEVICE_TABLE(vxge_id_table) = {
 	{PCI_VENDOR_ID_S2IO, PCI_DEVICE_ID_TITAN_WIN, PCI_ANY_ID,
 	PCI_ANY_ID},
 	{PCI_VENDOR_ID_S2IO, PCI_DEVICE_ID_TITAN_UNI, PCI_ANY_ID,
@@ -503,6 +503,7 @@ vxge_rx_1b_compl(struct __vxge_hw_ring *ringh, void *dtr,
 
 			skb_hwts = skb_hwtstamps(skb);
 			skb_hwts->hwtstamp = ns_to_ktime(ns);
+			skb_hwts->syststamp.tv64 = 0;
 		}
 
 		/* rth_hash_type and rth_it_hit are non-zero regardless of
@@ -890,8 +891,8 @@ vxge_xmit(struct sk_buff *skb, struct net_device *dev)
 		dev->name, __func__, __LINE__,
 		fifo_hw, dtr, dtr_priv);
 
-	if (skb_vlan_tag_present(skb)) {
-		u16 vlan_tag = skb_vlan_tag_get(skb);
+	if (vlan_tx_tag_present(skb)) {
+		u16 vlan_tag = vlan_tx_tag_get(skb);
 		vxge_hw_fifo_txdl_vlan_set(dtr, vlan_tag);
 	}
 
@@ -2223,6 +2224,8 @@ static irqreturn_t vxge_isr_napi(int irq, void *dev_id)
 	return IRQ_NONE;
 }
 
+#ifdef CONFIG_PCI_MSI
+
 static irqreturn_t vxge_tx_msix_handle(int irq, void *dev_id)
 {
 	struct vxge_fifo *fifo = (struct vxge_fifo *)dev_id;
@@ -2440,13 +2443,16 @@ static void vxge_rem_msix_isr(struct vxgedev *vdev)
 	if (vdev->config.intr_type == MSI_X)
 		pci_disable_msix(vdev->pdev);
 }
+#endif
 
 static void vxge_rem_isr(struct vxgedev *vdev)
 {
-	if (IS_ENABLED(CONFIG_PCI_MSI) &&
-	    vdev->config.intr_type == MSI_X) {
+#ifdef CONFIG_PCI_MSI
+	if (vdev->config.intr_type == MSI_X) {
 		vxge_rem_msix_isr(vdev);
-	} else if (vdev->config.intr_type == INTA) {
+	} else
+#endif
+	if (vdev->config.intr_type == INTA) {
 			synchronize_irq(vdev->pdev->irq);
 			free_irq(vdev->pdev->irq, vdev);
 	}
@@ -2455,10 +2461,11 @@ static void vxge_rem_isr(struct vxgedev *vdev)
 static int vxge_add_isr(struct vxgedev *vdev)
 {
 	int ret = 0;
+#ifdef CONFIG_PCI_MSI
 	int vp_idx = 0, intr_idx = 0, intr_cnt = 0, msix_idx = 0, irq_req = 0;
 	int pci_fun = PCI_FUNC(vdev->pdev->devfn);
 
-	if (IS_ENABLED(CONFIG_PCI_MSI) && vdev->config.intr_type == MSI_X)
+	if (vdev->config.intr_type == MSI_X)
 		ret = vxge_enable_msix(vdev);
 
 	if (ret) {
@@ -2469,7 +2476,7 @@ static int vxge_add_isr(struct vxgedev *vdev)
 		vdev->config.intr_type = INTA;
 	}
 
-	if (IS_ENABLED(CONFIG_PCI_MSI) && vdev->config.intr_type == MSI_X) {
+	if (vdev->config.intr_type == MSI_X) {
 		for (intr_idx = 0;
 		     intr_idx < (vdev->no_of_vpath *
 			VXGE_HW_VPATH_MSIX_ACTIVE); intr_idx++) {
@@ -2570,8 +2577,9 @@ static int vxge_add_isr(struct vxgedev *vdev)
 		vdev->vxge_entries[intr_cnt].in_use = 1;
 		vdev->vxge_entries[intr_cnt].arg = &vdev->vpaths[0];
 	}
-
 INTA_MODE:
+#endif
+
 	if (vdev->config.intr_type == INTA) {
 		snprintf(vdev->desc[0], VXGE_INTR_STRLEN,
 			"%s:vxge:INTA", vdev->ndev->name);
@@ -3074,6 +3082,11 @@ static int vxge_change_mtu(struct net_device *dev, int new_mtu)
 
 	vxge_debug_entryexit(vdev->level_trace,
 		"%s:%d", __func__, __LINE__);
+	if ((new_mtu < VXGE_HW_MIN_MTU) || (new_mtu > VXGE_HW_MAX_MTU)) {
+		vxge_debug_init(vdev->level_err,
+			"%s: mtu size is invalid", dev->name);
+		return -EPERM;
+	}
 
 	/* check if device is down already */
 	if (unlikely(!is_vxge_card_up(vdev))) {
@@ -3457,10 +3470,6 @@ static int vxge_device_register(struct __vxge_hw_device *hldev,
 			"%s : using High DMA", __func__);
 	}
 
-	/* MTU range: 68 - 9600 */
-	ndev->min_mtu = VXGE_HW_MIN_MTU;
-	ndev->max_mtu = VXGE_HW_MAX_MTU;
-
 	ret = register_netdev(ndev);
 	if (ret) {
 		vxge_debug_init(vxge_hw_device_trace_level_get(hldev),
@@ -3529,7 +3538,7 @@ static void vxge_device_unregister(struct __vxge_hw_device *hldev)
 	vxge_debug_entryexit(vdev->level_trace,	"%s: %s:%d", vdev->ndev->name,
 			     __func__, __LINE__);
 
-	strlcpy(buf, dev->name, IFNAMSIZ);
+	strncpy(buf, dev->name, IFNAMSIZ);
 
 	flush_work(&vdev->reset_task);
 
@@ -3881,12 +3890,12 @@ static void vxge_device_config_init(struct vxge_hw_device_config *device_config,
 	if (max_mac_vpath > VXGE_MAX_MAC_ADDR_COUNT)
 		max_mac_vpath = VXGE_MAX_MAC_ADDR_COUNT;
 
-	if (!IS_ENABLED(CONFIG_PCI_MSI)) {
-		vxge_debug_init(VXGE_ERR,
-			"%s: This Kernel does not support "
-			"MSI-X. Defaulting to INTA", VXGE_DRIVER_NAME);
-		*intr_type = INTA;
-	}
+#ifndef CONFIG_PCI_MSI
+	vxge_debug_init(VXGE_ERR,
+		"%s: This Kernel does not support "
+		"MSI-X. Defaulting to INTA", VXGE_DRIVER_NAME);
+	*intr_type = INTA;
+#endif
 
 	/* Configure whether MSI-X or IRQL. */
 	switch (*intr_type) {

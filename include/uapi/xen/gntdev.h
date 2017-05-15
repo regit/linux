@@ -33,13 +33,11 @@
 #ifndef __LINUX_PUBLIC_GNTDEV_H__
 #define __LINUX_PUBLIC_GNTDEV_H__
 
-#include <linux/types.h>
-
 struct ioctl_gntdev_grant_ref {
 	/* The domain ID of the grant to be mapped. */
-	__u32 domid;
+	uint32_t domid;
 	/* The grant reference of the grant to be mapped. */
-	__u32 ref;
+	uint32_t ref;
 };
 
 /*
@@ -52,11 +50,11 @@ _IOC(_IOC_NONE, 'G', 0, sizeof(struct ioctl_gntdev_map_grant_ref))
 struct ioctl_gntdev_map_grant_ref {
 	/* IN parameters */
 	/* The number of grants to be mapped. */
-	__u32 count;
-	__u32 pad;
+	uint32_t count;
+	uint32_t pad;
 	/* OUT parameters */
 	/* The offset to be used on a subsequent call to mmap(). */
-	__u64 index;
+	uint64_t index;
 	/* Variable IN parameter. */
 	/* Array of grant references, of size @count. */
 	struct ioctl_gntdev_grant_ref refs[1];
@@ -72,10 +70,10 @@ _IOC(_IOC_NONE, 'G', 1, sizeof(struct ioctl_gntdev_unmap_grant_ref))
 struct ioctl_gntdev_unmap_grant_ref {
 	/* IN parameters */
 	/* The offset was returned by the corresponding map operation. */
-	__u64 index;
+	uint64_t index;
 	/* The number of pages to be unmapped. */
-	__u32 count;
-	__u32 pad;
+	uint32_t count;
+	uint32_t pad;
 };
 
 /*
@@ -95,13 +93,13 @@ _IOC(_IOC_NONE, 'G', 2, sizeof(struct ioctl_gntdev_get_offset_for_vaddr))
 struct ioctl_gntdev_get_offset_for_vaddr {
 	/* IN parameters */
 	/* The virtual address of the first mapped page in a range. */
-	__u64 vaddr;
+	uint64_t vaddr;
 	/* OUT parameters */
 	/* The offset that was used in the initial mmap() operation. */
-	__u64 offset;
+	uint64_t offset;
 	/* The number of pages mapped in the VM area that begins at @vaddr. */
-	__u32 count;
-	__u32 pad;
+	uint32_t count;
+	uint32_t pad;
 };
 
 /*
@@ -115,7 +113,7 @@ _IOC(_IOC_NONE, 'G', 3, sizeof(struct ioctl_gntdev_set_max_grants))
 struct ioctl_gntdev_set_max_grants {
 	/* IN parameter */
 	/* The maximum number of grants that may be mapped at once. */
-	__u32 count;
+	uint32_t count;
 };
 
 /*
@@ -137,61 +135,11 @@ struct ioctl_gntdev_unmap_notify {
 	 * be cleared. Otherwise, it can be any byte in the page whose
 	 * notification we are adjusting.
 	 */
-	__u64 index;
+	uint64_t index;
 	/* Action(s) to take on unmap */
-	__u32 action;
+	uint32_t action;
 	/* Event channel to notify */
-	__u32 event_channel_port;
-};
-
-struct gntdev_grant_copy_segment {
-	union {
-		void __user *virt;
-		struct {
-			grant_ref_t ref;
-			__u16 offset;
-			domid_t domid;
-		} foreign;
-	} source, dest;
-	__u16 len;
-
-	__u16 flags;  /* GNTCOPY_* */
-	__s16 status; /* GNTST_* */
-};
-
-/*
- * Copy between grant references and local buffers.
- *
- * The copy is split into @count @segments, each of which can copy
- * to/from one grant reference.
- *
- * Each segment is similar to struct gnttab_copy in the hypervisor ABI
- * except the local buffer is specified using a virtual address
- * (instead of a GFN and offset).
- *
- * The local buffer may cross a Xen page boundary -- the driver will
- * split segments into multiple ops if required.
- *
- * Returns 0 if all segments have been processed and @status in each
- * segment is valid.  Note that one or more segments may have failed
- * (status != GNTST_okay).
- *
- * If the driver had to split a segment into two or more ops, @status
- * includes the status of the first failed op for that segment (or
- * GNTST_okay if all ops were successful).
- *
- * If -1 is returned, the status of all segments is undefined.
- *
- * EINVAL: A segment has local buffers for both source and
- *         destination.
- * EINVAL: A segment crosses the boundary of a foreign page.
- * EFAULT: A segment's local buffer is not accessible.
- */
-#define IOCTL_GNTDEV_GRANT_COPY \
-	_IOC(_IOC_NONE, 'G', 8, sizeof(struct ioctl_gntdev_grant_copy))
-struct ioctl_gntdev_grant_copy {
-	unsigned int count;
-	struct gntdev_grant_copy_segment __user *segments;
+	uint32_t event_channel_port;
 };
 
 /* Clear (set to zero) the byte specified by index */

@@ -234,7 +234,7 @@
 #include <linux/i8253.h>
 #include <linux/cpuidle.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/desc.h>
 #include <asm/olpc.h>
 #include <asm/paravirt.h>
@@ -378,6 +378,7 @@ static struct cpuidle_driver apm_idle_driver = {
 		{ /* entry 1 is for APM idle */
 			.name = "APM",
 			.desc = "APM idle",
+			.flags = CPUIDLE_FLAG_TIME_VALID,
 			.exit_latency = 250,	/* WAG */
 			.target_residency = 500,	/* WAG */
 			.enter = &apm_cpu_idle
@@ -840,6 +841,7 @@ static int apm_do_idle(void)
 	u32 eax;
 	u8 ret = 0;
 	int idled = 0;
+	int polling;
 	int err = 0;
 
 	if (!need_resched()) {
@@ -906,20 +908,20 @@ static int apm_cpu_idle(struct cpuidle_device *dev,
 	static int use_apm_idle; /* = 0 */
 	static unsigned int last_jiffies; /* = 0 */
 	static unsigned int last_stime; /* = 0 */
-	cputime_t stime, utime;
+	cputime_t stime;
 
 	int apm_idle_done = 0;
 	unsigned int jiffies_since_last_check = jiffies - last_jiffies;
 	unsigned int bucket;
 
 recalc:
-	task_cputime(current, &utime, &stime);
+	task_cputime(current, NULL, &stime);
 	if (jiffies_since_last_check > IDLE_CALC_LIMIT) {
 		use_apm_idle = 0;
 	} else if (jiffies_since_last_check > idle_period) {
 		unsigned int idle_percentage;
 
-		idle_percentage = cputime_to_jiffies(stime - last_stime);
+		idle_percentage = stime - last_stime;
 		idle_percentage *= 100;
 		idle_percentage /= jiffies_since_last_check;
 		use_apm_idle = (idle_percentage > idle_threshold);
@@ -1042,11 +1044,8 @@ static int apm_get_power_status(u_short *status, u_short *bat, u_short *life)
 
 	if (apm_info.get_power_status_broken)
 		return APM_32_UNSUPPORTED;
-	if (apm_bios_call(&call)) {
-		if (!call.err)
-			return APM_NO_ERROR;
+	if (apm_bios_call(&call))
 		return call.err;
-	}
 	*status = call.ebx;
 	*bat = call.ecx;
 	if (apm_info.get_power_status_swabinminutes) {
@@ -1091,7 +1090,7 @@ static int apm_get_battery_status(u_short which, u_short *status,
  *	@device: identity of device
  *	@enable: on/off
  *
- *	Activate or deactivate power management on either a specific device
+ *	Activate or deactive power management on either a specific device
  *	or the entire system (%APM_DEVICE_ALL).
  */
 
@@ -2270,7 +2269,7 @@ static int __init apm_init(void)
 
 	dmi_check_system(apm_dmi_table);
 
-	if (apm_info.bios.version == 0 || machine_is_olpc()) {
+	if (apm_info.bios.version == 0 || paravirt_enabled() || machine_is_olpc()) {
 		printk(KERN_INFO "apm: BIOS not found.\n");
 		return -ENODEV;
 	}

@@ -441,7 +441,8 @@ static void path_deinit(struct mmphw_path_plat *path_plat)
 	if (!path_plat)
 		return;
 
-	mmp_unregister_path(path_plat->path);
+	if (path_plat->path)
+		mmp_unregister_path(path_plat->path);
 }
 
 static int mmphw_probe(struct platform_device *pdev)
@@ -503,7 +504,8 @@ static int mmphw_probe(struct platform_device *pdev)
 	ctrl->reg_base = devm_ioremap_nocache(ctrl->dev,
 			res->start, resource_size(res));
 	if (ctrl->reg_base == NULL) {
-		dev_err(ctrl->dev, "%s: res %pR map failed\n", __func__, res);
+		dev_err(ctrl->dev, "%s: res %x - %x map failed\n", __func__,
+			res->start, res->end);
 		ret = -ENOMEM;
 		goto failed;
 	}
@@ -570,6 +572,7 @@ failed:
 static struct platform_driver mmphw_driver = {
 	.driver		= {
 		.name	= "mmp-disp",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= mmphw_probe,
 };

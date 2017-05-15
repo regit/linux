@@ -88,6 +88,7 @@ static int snd_ad1848_probe(struct device *dev, unsigned int n)
 {
 	struct snd_card *card;
 	struct snd_wss *chip;
+	struct snd_pcm *pcm;
 	int error;
 
 	error = snd_card_new(dev, index[n], id[n], THIS_MODULE, 0, &card);
@@ -102,7 +103,7 @@ static int snd_ad1848_probe(struct device *dev, unsigned int n)
 
 	card->private_data = chip;
 
-	error = snd_wss_pcm(chip, 0);
+	error = snd_wss_pcm(chip, 0, &pcm);
 	if (error < 0)
 		goto out;
 
@@ -111,10 +112,10 @@ static int snd_ad1848_probe(struct device *dev, unsigned int n)
 		goto out;
 
 	strcpy(card->driver, "AD1848");
-	strcpy(card->shortname, chip->pcm->name);
+	strcpy(card->shortname, pcm->name);
 
 	sprintf(card->longname, "%s at 0x%lx, irq %d, dma %d",
-		chip->pcm->name, chip->port, irq[n], dma1[n]);
+		pcm->name, chip->port, irq[n], dma1[n]);
 	if (thinkpad[n])
 		strcat(card->longname, " [Thinkpad]");
 
@@ -170,4 +171,15 @@ static struct isa_driver snd_ad1848_driver = {
 	}
 };
 
-module_isa_driver(snd_ad1848_driver, SNDRV_CARDS);
+static int __init alsa_card_ad1848_init(void)
+{
+	return isa_register_driver(&snd_ad1848_driver, SNDRV_CARDS);
+}
+
+static void __exit alsa_card_ad1848_exit(void)
+{
+	isa_unregister_driver(&snd_ad1848_driver);
+}
+
+module_init(alsa_card_ad1848_init);
+module_exit(alsa_card_ad1848_exit);

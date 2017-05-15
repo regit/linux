@@ -648,7 +648,7 @@ static int i2c_bfin_twi_probe(struct platform_device *pdev)
 	strlcpy(p_adap->name, pdev->name, sizeof(p_adap->name));
 	p_adap->algo = &bfin_twi_algorithm;
 	p_adap->algo_data = iface;
-	p_adap->class = I2C_CLASS_DEPRECATED;
+	p_adap->class = I2C_CLASS_HWMON | I2C_CLASS_SPD | I2C_CLASS_DEPRECATED;
 	p_adap->dev.parent = &pdev->dev;
 	p_adap->timeout = 5 * HZ;
 	p_adap->retries = 3;
@@ -685,12 +685,14 @@ static int i2c_bfin_twi_probe(struct platform_device *pdev)
 	write_CONTROL(iface, read_CONTROL(iface) | TWI_ENA);
 
 	rc = i2c_add_numbered_adapter(p_adap);
-	if (rc < 0)
+	if (rc < 0) {
+		dev_err(&pdev->dev, "Can't add i2c adapter!\n");
 		goto out_error;
+	}
 
 	platform_set_drvdata(pdev, iface);
 
-	dev_info(&pdev->dev, "Blackfin BF5xx on-chip I2C TWI Controller, "
+	dev_info(&pdev->dev, "Blackfin BF5xx on-chip I2C TWI Contoller, "
 		"regs_base@%p\n", iface->regs_base);
 
 	return 0;
@@ -715,6 +717,7 @@ static struct platform_driver i2c_bfin_twi_driver = {
 	.remove		= i2c_bfin_twi_remove,
 	.driver		= {
 		.name	= "i2c-bfin-twi",
+		.owner	= THIS_MODULE,
 		.pm	= I2C_BFIN_TWI_PM_OPS,
 	},
 };
@@ -733,6 +736,6 @@ subsys_initcall(i2c_bfin_twi_init);
 module_exit(i2c_bfin_twi_exit);
 
 MODULE_AUTHOR("Bryan Wu, Sonic Zhang");
-MODULE_DESCRIPTION("Blackfin BF5xx on-chip I2C TWI Controller Driver");
+MODULE_DESCRIPTION("Blackfin BF5xx on-chip I2C TWI Contoller Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:i2c-bfin-twi");

@@ -26,7 +26,7 @@
 #include <linux/coredump.h>
 #include <linux/slab.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/cacheflush.h>
 #include <asm/a.out-core.h>
 
@@ -127,8 +127,12 @@ static int set_brk(unsigned long start, unsigned long end)
 {
 	start = PAGE_ALIGN(start);
 	end = PAGE_ALIGN(end);
-	if (end > start)
-		return vm_brk(start, end - start);
+	if (end > start) {
+		unsigned long addr;
+		addr = vm_brk(start, end - start);
+		if (BAD_ADDR(addr))
+			return addr;
+	}
 	return 0;
 }
 
@@ -252,8 +256,11 @@ static int load_aout_binary(struct linux_binprm * bprm)
 		(current->mm->start_brk = N_BSSADDR(ex));
 
 	retval = setup_arg_pages(bprm, STACK_TOP, EXSTACK_DEFAULT);
-	if (retval < 0)
+	if (retval < 0) {
+		/* Someone check-me: is this error path enough? */
+		send_sig(SIGKILL, current, 0);
 		return retval;
+	}
 
 	install_exec_creds(bprm);
 
@@ -271,13 +278,17 @@ static int load_aout_binary(struct linux_binprm * bprm)
 		map_size = ex.a_text+ex.a_data;
 #endif
 		error = vm_brk(text_addr & PAGE_MASK, map_size);
-		if (error)
+		if (error != (text_addr & PAGE_MASK)) {
+			send_sig(SIGKILL, current, 0);
 			return error;
+		}
 
 		error = read_code(bprm->file, text_addr, pos,
 				  ex.a_text+ex.a_data);
-		if ((signed long)error < 0)
+		if ((signed long)error < 0) {
+			send_sig(SIGKILL, current, 0);
 			return error;
+		}
 	} else {
 		if ((ex.a_text & 0xfff || ex.a_data & 0xfff) &&
 		    (N_MAGIC(ex) != NMAGIC) && printk_ratelimit())
@@ -288,15 +299,12 @@ static int load_aout_binary(struct linux_binprm * bprm)
 		if ((fd_offset & ~PAGE_MASK) != 0 && printk_ratelimit())
 		{
 			printk(KERN_WARNING 
-			       "fd_offset is not page aligned. Please convert program: %pD\n",
-			       bprm->file);
+			       "fd_offset is not page aligned. Please convert program: %s\n",
+			       bprm->file->f_path.dentry->d_name.name);
 		}
 
 		if (!bprm->file->f_op->mmap||((fd_offset & ~PAGE_MASK) != 0)) {
-			error = vm_brk(N_TXTADDR(ex), ex.a_text+ex.a_data);
-			if (error)
-				return error;
-
+			vm_brk(N_TXTADDR(ex), ex.a_text+ex.a_data);
 			read_code(bprm->file, N_TXTADDR(ex), fd_offset,
 				  ex.a_text + ex.a_data);
 			goto beyond_if;
@@ -307,22 +315,28 @@ static int load_aout_binary(struct linux_binprm * bprm)
 			MAP_FIXED | MAP_PRIVATE | MAP_DENYWRITE | MAP_EXECUTABLE,
 			fd_offset);
 
-		if (error != N_TXTADDR(ex))
+		if (error != N_TXTADDR(ex)) {
+			send_sig(SIGKILL, current, 0);
 			return error;
+		}
 
 		error = vm_mmap(bprm->file, N_DATADDR(ex), ex.a_data,
 				PROT_READ | PROT_WRITE | PROT_EXEC,
 				MAP_FIXED | MAP_PRIVATE | MAP_DENYWRITE | MAP_EXECUTABLE,
 				fd_offset + ex.a_text);
-		if (error != N_DATADDR(ex))
+		if (error != N_DATADDR(ex)) {
+			send_sig(SIGKILL, current, 0);
 			return error;
+		}
 	}
 beyond_if:
 	set_binfmt(&aout_format);
 
 	retval = set_brk(current->mm->start_brk, current->mm->brk);
-	if (retval < 0)
+	if (retval < 0) {
+		send_sig(SIGKILL, current, 0);
 		return retval;
+	}
 
 	current->mm->start_stack =
 		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
@@ -374,13 +388,11 @@ static int load_aout_library(struct file *file)
 		if (printk_ratelimit())
 		{
 			printk(KERN_WARNING 
-			       "N_TXTOFF is not page aligned. Please convert library: %pD\n",
-			       file);
+			       "N_TXTOFF is not page aligned. Please convert library: %s\n",
+			       file->f_path.dentry->d_name.name);
 		}
-		retval = vm_brk(start_addr, ex.a_text + ex.a_data + ex.a_bss);
-		if (retval)
-			goto out;
-
+		vm_brk(start_addr, ex.a_text + ex.a_data + ex.a_bss);
+		
 		read_code(file, start_addr, N_TXTOFF(ex),
 			  ex.a_text + ex.a_data);
 		retval = 0;
@@ -398,8 +410,9 @@ static int load_aout_library(struct file *file)
 	len = PAGE_ALIGN(ex.a_text + ex.a_data);
 	bss = ex.a_text + ex.a_data + ex.a_bss;
 	if (bss > len) {
-		retval = vm_brk(start_addr + len, bss - len);
-		if (retval)
+		error = vm_brk(start_addr + len, bss - len);
+		retval = error;
+		if (error != start_addr + len)
 			goto out;
 	}
 	retval = 0;

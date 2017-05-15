@@ -46,7 +46,7 @@
  *	- Optimize position calculation for the 823x chips. 
  */
 
-#include <linux/io.h>
+#include <asm/io.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
@@ -72,7 +72,7 @@ MODULE_DESCRIPTION("VIA VT82xx audio");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{{VIA,VT82C686A/B/C,pci},{VIA,VT8233A/C,8235}}");
 
-#if IS_REACHABLE(CONFIG_GAMEPORT)
+#if defined(CONFIG_GAMEPORT) || (defined(MODULE) && defined(CONFIG_GAMEPORT_MODULE))
 #define SUPPORT_JOYSTICK 1
 #endif
 
@@ -404,7 +404,7 @@ struct via82xx {
 #endif
 };
 
-static const struct pci_device_id snd_via82xx_ids[] = {
+static DEFINE_PCI_DEVICE_TABLE(snd_via82xx_ids) = {
 	/* 0x1106, 0x3058 */
 	{ PCI_VDEVICE(VIA, PCI_DEVICE_ID_VIA_82C686_5), TYPE_CARD_VIA686, },	/* 686A */
 	/* 0x1106, 0x3059 */
@@ -1366,7 +1366,7 @@ static int snd_via8233_playback_close(struct snd_pcm_substream *substream)
 
 
 /* via686 playback callbacks */
-static const struct snd_pcm_ops snd_via686_playback_ops = {
+static struct snd_pcm_ops snd_via686_playback_ops = {
 	.open =		snd_via686_playback_open,
 	.close =	snd_via82xx_pcm_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1379,7 +1379,7 @@ static const struct snd_pcm_ops snd_via686_playback_ops = {
 };
 
 /* via686 capture callbacks */
-static const struct snd_pcm_ops snd_via686_capture_ops = {
+static struct snd_pcm_ops snd_via686_capture_ops = {
 	.open =		snd_via82xx_capture_open,
 	.close =	snd_via82xx_pcm_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1392,7 +1392,7 @@ static const struct snd_pcm_ops snd_via686_capture_ops = {
 };
 
 /* via823x DSX playback callbacks */
-static const struct snd_pcm_ops snd_via8233_playback_ops = {
+static struct snd_pcm_ops snd_via8233_playback_ops = {
 	.open =		snd_via8233_playback_open,
 	.close =	snd_via8233_playback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1405,7 +1405,7 @@ static const struct snd_pcm_ops snd_via8233_playback_ops = {
 };
 
 /* via823x multi-channel playback callbacks */
-static const struct snd_pcm_ops snd_via8233_multi_ops = {
+static struct snd_pcm_ops snd_via8233_multi_ops = {
 	.open =		snd_via8233_multi_open,
 	.close =	snd_via82xx_pcm_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1418,7 +1418,7 @@ static const struct snd_pcm_ops snd_via8233_multi_ops = {
 };
 
 /* via823x capture callbacks */
-static const struct snd_pcm_ops snd_via8233_capture_ops = {
+static struct snd_pcm_ops snd_via8233_capture_ops = {
 	.open =		snd_via82xx_capture_open,
 	.close =	snd_via82xx_pcm_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1610,10 +1610,16 @@ static int snd_via8233_capture_source_info(struct snd_kcontrol *kcontrol,
 	/* formerly they were "Line" and "Mic", but it looks like that they
 	 * have nothing to do with the actual physical connections...
 	 */
-	static const char * const texts[2] = {
+	static char *texts[2] = {
 		"Input1", "Input2"
 	};
-	return snd_ctl_enum_info(uinfo, 1, 2, texts);
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->count = 1;
+	uinfo->value.enumerated.items = 2;
+	if (uinfo->value.enumerated.item >= 2)
+		uinfo->value.enumerated.item = 1;
+	strcpy(uinfo->value.enumerated.name, texts[uinfo->value.enumerated.item]);
+	return 0;
 }
 
 static int snd_via8233_capture_source_get(struct snd_kcontrol *kcontrol,
@@ -1812,7 +1818,7 @@ static void snd_via82xx_mixer_free_ac97(struct snd_ac97 *ac97)
 	chip->ac97 = NULL;
 }
 
-static const struct ac97_quirk ac97_quirks[] = {
+static struct ac97_quirk ac97_quirks[] = {
 	{
 		.subvendor = 0x1106,
 		.subdevice = 0x4161,
@@ -2271,6 +2277,7 @@ static int snd_via82xx_chip_init(struct via82xx *chip)
  */
 static int snd_via82xx_suspend(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct via82xx *chip = card->private_data;
 	int i;
@@ -2290,14 +2297,27 @@ static int snd_via82xx_suspend(struct device *dev)
 		chip->capture_src_saved[1] = inb(chip->port + VIA_REG_CAPTURE_CHANNEL + 0x10);
 	}
 
+	pci_disable_device(pci);
+	pci_save_state(pci);
+	pci_set_power_state(pci, PCI_D3hot);
 	return 0;
 }
 
 static int snd_via82xx_resume(struct device *dev)
 {
+	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct via82xx *chip = card->private_data;
 	int i;
+
+	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		dev_err(dev, "pci_enable_device failed, disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
+	pci_set_master(pci);
 
 	snd_via82xx_chip_init(chip);
 

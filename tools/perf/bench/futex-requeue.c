@@ -8,22 +8,18 @@
  * requeues without waking up any tasks -- thus mimicking a regular futex_wait.
  */
 
-/* For the CLR_() macros */
-#include <pthread.h>
-
-#include <signal.h>
+#include "../perf.h"
+#include "../util/util.h"
 #include "../util/stat.h"
-#include <subcmd/parse-options.h>
-#include <linux/compiler.h>
-#include <linux/kernel.h>
-#include <linux/time64.h>
-#include <errno.h>
+#include "../util/parse-options.h"
+#include "../util/header.h"
 #include "bench.h"
 #include "futex.h"
 
 #include <err.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <pthread.h>
 
 static u_int32_t futex1 = 0, futex2 = 0;
 
@@ -33,19 +29,25 @@ static u_int32_t futex1 = 0, futex2 = 0;
  */
 static unsigned int nrequeue = 1;
 
+/*
+ * There can be significant variance from run to run,
+ * the more repeats, the more exact the overall avg and
+ * the better idea of the futex latency.
+ */
+static unsigned int repeat = 10;
+
 static pthread_t *worker;
-static bool done = false, silent = false, fshared = false;
+static bool done = 0, silent = 0;
 static pthread_mutex_t thread_lock;
 static pthread_cond_t thread_parent, thread_worker;
 static struct stats requeuetime_stats, requeued_stats;
 static unsigned int ncpus, threads_starting, nthreads = 0;
-static int futex_flag = 0;
 
 static const struct option options[] = {
 	OPT_UINTEGER('t', "threads",  &nthreads, "Specify amount of threads"),
 	OPT_UINTEGER('q', "nrequeue", &nrequeue, "Specify amount of threads to requeue at once"),
+	OPT_UINTEGER('r', "repeat",   &repeat,   "Specify amount of times to repeat the run"),
 	OPT_BOOLEAN( 's', "silent",   &silent,   "Silent mode: do not display data/details"),
-	OPT_BOOLEAN( 'S', "shared",   &fshared,  "Use shared futexes instead of private ones"),
 	OPT_END()
 };
 
@@ -63,7 +65,7 @@ static void print_summary(void)
 	printf("Requeued %d of %d threads in %.4f ms (+-%.2f%%)\n",
 	       requeued_avg,
 	       nthreads,
-	       requeuetime_avg / USEC_PER_MSEC,
+	       requeuetime_avg/1e3,
 	       rel_stddev_stats(requeuetime_stddev, requeuetime_avg));
 }
 
@@ -76,7 +78,7 @@ static void *workerfn(void *arg __maybe_unused)
 	pthread_cond_wait(&thread_worker, &thread_lock);
 	pthread_mutex_unlock(&thread_lock);
 
-	futex_wait(&futex1, 0, NULL, futex_flag);
+	futex_wait(&futex1, 0, NULL, FUTEX_PRIVATE_FLAG);
 	return NULL;
 }
 
@@ -128,22 +130,14 @@ int bench_futex_requeue(int argc, const char **argv,
 
 	if (!nthreads)
 		nthreads = ncpus;
-	else
-		nthreads = futexbench_sanitize_numeric(nthreads);
 
 	worker = calloc(nthreads, sizeof(*worker));
 	if (!worker)
 		err(EXIT_FAILURE, "calloc");
 
-	if (!fshared)
-		futex_flag = FUTEX_PRIVATE_FLAG;
-
-	if (nrequeue > nthreads)
-		nrequeue = nthreads;
-
-	printf("Run summary [PID %d]: Requeuing %d threads (from [%s] %p to %p), "
-	       "%d at a time.\n\n",  getpid(), nthreads,
-	       fshared ? "shared":"private", &futex1, &futex2, nrequeue);
+	printf("Run summary [PID %d]: Requeuing %d threads (from %p to %p), "
+	       "%d at a time.\n\n",
+	       getpid(), nthreads, &futex1, &futex2, nrequeue);
 
 	init_stats(&requeued_stats);
 	init_stats(&requeuetime_stats);
@@ -152,7 +146,7 @@ int bench_futex_requeue(int argc, const char **argv,
 	pthread_cond_init(&thread_parent, NULL);
 	pthread_cond_init(&thread_worker, NULL);
 
-	for (j = 0; j < bench_repeat && !done; j++) {
+	for (j = 0; j < repeat && !done; j++) {
 		unsigned int nrequeued = 0;
 		struct timeval start, end, runtime;
 
@@ -170,15 +164,13 @@ int bench_futex_requeue(int argc, const char **argv,
 
 		/* Ok, all threads are patiently blocked, start requeueing */
 		gettimeofday(&start, NULL);
-		while (nrequeued < nthreads) {
+		for (nrequeued = 0; nrequeued < nthreads; nrequeued += nrequeue)
 			/*
 			 * Do not wakeup any tasks blocked on futex1, allowing
 			 * us to really measure futex_wait functionality.
 			 */
-			nrequeued += futex_cmp_requeue(&futex1, 0, &futex2, 0,
-						       nrequeue, futex_flag);
-		}
-
+			futex_cmp_requeue(&futex1, 0, &futex2, 0, nrequeue,
+					  FUTEX_PRIVATE_FLAG);
 		gettimeofday(&end, NULL);
 		timersub(&end, &start, &runtime);
 
@@ -187,11 +179,11 @@ int bench_futex_requeue(int argc, const char **argv,
 
 		if (!silent) {
 			printf("[Run %d]: Requeued %d of %d threads in %.4f ms\n",
-			       j + 1, nrequeued, nthreads, runtime.tv_usec / (double)USEC_PER_MSEC);
+			       j + 1, nrequeued, nthreads, runtime.tv_usec/1e3);
 		}
 
 		/* everybody should be blocked on futex2, wake'em up */
-		nrequeued = futex_wake(&futex2, nrequeued, futex_flag);
+		nrequeued = futex_wake(&futex2, nthreads, FUTEX_PRIVATE_FLAG);
 		if (nthreads != nrequeued)
 			warnx("couldn't wakeup all tasks (%d/%d)", nrequeued, nthreads);
 
@@ -200,6 +192,7 @@ int bench_futex_requeue(int argc, const char **argv,
 			if (ret)
 				err(EXIT_FAILURE, "pthread_join");
 		}
+
 	}
 
 	/* cleanup & report results */

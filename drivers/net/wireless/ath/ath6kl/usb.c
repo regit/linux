@@ -802,8 +802,7 @@ static int ath6kl_usb_map_service_pipe(struct ath6kl *ar, u16 svc_id,
 		break;
 	case WMI_DATA_VI_SVC:
 
-		if (test_bit(ATH6KL_FW_CAPABILITY_MAP_LP_ENDPOINT,
-			     ar->fw_capabilities))
+		if (ar->hw.flags & ATH6KL_HW_MAP_LP_ENDPOINT)
 			*ul_pipe = ATH6KL_USB_PIPE_TX_DATA_LP;
 		else
 			*ul_pipe = ATH6KL_USB_PIPE_TX_DATA_MP;
@@ -815,8 +814,7 @@ static int ath6kl_usb_map_service_pipe(struct ath6kl *ar, u16 svc_id,
 		break;
 	case WMI_DATA_VO_SVC:
 
-		if (test_bit(ATH6KL_FW_CAPABILITY_MAP_LP_ENDPOINT,
-			     ar->fw_capabilities))
+		if (ar->hw.flags & ATH6KL_HW_MAP_LP_ENDPOINT)
 			*ul_pipe = ATH6KL_USB_PIPE_TX_DATA_LP;
 		else
 			*ul_pipe = ATH6KL_USB_PIPE_TX_DATA_MP;
@@ -1193,16 +1191,23 @@ static int ath6kl_usb_pm_resume(struct usb_interface *interface)
 	return 0;
 }
 
+static int ath6kl_usb_pm_reset_resume(struct usb_interface *intf)
+{
+	if (usb_get_intfdata(intf))
+		ath6kl_usb_remove(intf);
+	return 0;
+}
+
 #else
 
 #define ath6kl_usb_pm_suspend NULL
 #define ath6kl_usb_pm_resume NULL
+#define ath6kl_usb_pm_reset_resume NULL
 
 #endif
 
 /* table of devices that work with this driver */
 static struct usb_device_id ath6kl_usb_ids[] = {
-	{USB_DEVICE(0x0cf3, 0x9375)},
 	{USB_DEVICE(0x0cf3, 0x9374)},
 	{ /* Terminating entry */ },
 };
@@ -1214,13 +1219,33 @@ static struct usb_driver ath6kl_usb_driver = {
 	.probe = ath6kl_usb_probe,
 	.suspend = ath6kl_usb_pm_suspend,
 	.resume = ath6kl_usb_pm_resume,
+	.reset_resume = ath6kl_usb_pm_reset_resume,
 	.disconnect = ath6kl_usb_remove,
 	.id_table = ath6kl_usb_ids,
 	.supports_autosuspend = true,
 	.disable_hub_initiated_lpm = 1,
 };
 
-module_usb_driver(ath6kl_usb_driver);
+static int ath6kl_usb_init(void)
+{
+	int ret;
+
+	ret = usb_register(&ath6kl_usb_driver);
+	if (ret) {
+		ath6kl_err("usb registration failed: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void ath6kl_usb_exit(void)
+{
+	usb_deregister(&ath6kl_usb_driver);
+}
+
+module_init(ath6kl_usb_init);
+module_exit(ath6kl_usb_exit);
 
 MODULE_AUTHOR("Atheros Communications, Inc.");
 MODULE_DESCRIPTION("Driver support for Atheros AR600x USB devices");

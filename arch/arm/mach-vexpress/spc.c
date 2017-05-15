@@ -31,8 +31,6 @@
 
 #include <asm/cacheflush.h>
 
-#include "spc.h"
-
 #define SPCLOG "vexpress-spc: "
 
 #define PERF_LVL_A15		0x00
@@ -321,15 +319,17 @@ static int ve_spc_waitforcompletion(int req_type)
 
 static int ve_spc_set_performance(int cluster, u32 freq)
 {
-	u32 perf_cfg_reg;
+	u32 perf_cfg_reg, perf_stat_reg;
 	int ret, perf, req_type;
 
 	if (cluster_is_a15(cluster)) {
 		req_type = CA15_DVFS;
 		perf_cfg_reg = PERF_LVL_A15;
+		perf_stat_reg = PERF_REQ_A15;
 	} else {
 		req_type = CA7_DVFS;
 		perf_cfg_reg = PERF_LVL_A7;
+		perf_stat_reg = PERF_REQ_A7;
 	}
 
 	perf = ve_spc_find_performance_index(cluster, freq);
@@ -426,15 +426,9 @@ static int ve_spc_populate_opps(uint32_t cluster)
 
 static int ve_init_opp_table(struct device *cpu_dev)
 {
-	int cluster;
-	int idx, ret = 0, max_opp;
-	struct ve_spc_opp *opps;
-
-	cluster = topology_physical_package_id(cpu_dev->id);
-	cluster = cluster < 0 ? 0 : cluster;
-
-	max_opp = info->num_opps[cluster];
-	opps = info->opps[cluster];
+	int cluster = topology_physical_package_id(cpu_dev->id);
+	int idx, ret = 0, max_opp = info->num_opps[cluster];
+	struct ve_spc_opp *opps = info->opps[cluster];
 
 	for (idx = 0; idx < max_opp; idx++, opps++) {
 		ret = dev_pm_opp_add(cpu_dev, opps->freq * 1000, opps->u_volt);
@@ -543,11 +537,9 @@ static struct clk *ve_spc_clk_register(struct device *cpu_dev)
 	spc->hw.init = &init;
 	spc->cluster = topology_physical_package_id(cpu_dev->id);
 
-	spc->cluster = spc->cluster < 0 ? 0 : spc->cluster;
-
 	init.name = dev_name(cpu_dev);
 	init.ops = &clk_spc_ops;
-	init.flags = CLK_GET_RATE_NOCACHE;
+	init.flags = CLK_IS_ROOT | CLK_GET_RATE_NOCACHE;
 	init.num_parents = 0;
 
 	return devm_clk_register(cpu_dev, &spc->hw);
@@ -589,4 +581,4 @@ static int __init ve_spc_clk_init(void)
 	platform_device_register_simple("vexpress-spc-cpufreq", -1, NULL, 0);
 	return 0;
 }
-device_initcall(ve_spc_clk_init);
+module_init(ve_spc_clk_init);

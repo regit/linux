@@ -599,7 +599,7 @@ static netdev_tx_t mpc_send_packet(struct sk_buff *skb,
 	}
 
 non_ip:
-	return __netdev_start_xmit(mpc->old_ops, skb, dev, false);
+	return mpc->old_ops->ndo_start_xmit(skb, dev);
 }
 
 static int atm_mpoa_vcc_attach(struct atm_vcc *vcc, void __user *arg)
@@ -1007,7 +1007,7 @@ static int mpoa_event_listener(struct notifier_block *mpoa_notifier,
 	if (!net_eq(dev_net(dev), &init_net))
 		return NOTIFY_DONE;
 
-	if (strncmp(dev->name, "lec", 3))
+	if (dev->name == NULL || strncmp(dev->name, "lec", 3))
 		return NOTIFY_DONE; /* we are only interested in lec:s */
 
 	switch (event) {

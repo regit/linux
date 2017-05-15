@@ -74,10 +74,9 @@ static int ipcomp6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 		return 0;
 
 	if (type == NDISC_REDIRECT)
-		ip6_redirect(skb, net, skb->dev->ifindex, 0,
-			     sock_net_uid(net, NULL));
+		ip6_redirect(skb, net, skb->dev->ifindex, 0);
 	else
-		ip6_update_pmtu(skb, net, info, 0, 0, sock_net_uid(net, NULL));
+		ip6_update_pmtu(skb, net, info, 0, 0);
 	xfrm_state_put(x);
 
 	return 0;
@@ -182,7 +181,8 @@ static int ipcomp6_rcv_cb(struct sk_buff *skb, int err)
 	return 0;
 }
 
-static const struct xfrm_type ipcomp6_type = {
+static const struct xfrm_type ipcomp6_type =
+{
 	.description	= "IPCOMP6",
 	.owner		= THIS_MODULE,
 	.proto		= IPPROTO_COMP,
@@ -193,7 +193,8 @@ static const struct xfrm_type ipcomp6_type = {
 	.hdr_offset	= xfrm6_find_1stfragopt,
 };
 
-static struct xfrm6_protocol ipcomp6_protocol = {
+static struct xfrm6_protocol ipcomp6_protocol =
+{
 	.handler	= xfrm6_rcv,
 	.cb_handler	= ipcomp6_rcv_cb,
 	.err_handler	= ipcomp6_err,

@@ -98,7 +98,6 @@ static void record_compound(struct string_list **keyw,
 %token VOID_KEYW
 %token VOLATILE_KEYW
 %token TYPEOF_KEYW
-%token VA_LIST_KEYW
 
 %token EXPORT_SYMBOL_KEYW
 
@@ -262,7 +261,6 @@ simple_type_specifier:
 	| DOUBLE_KEYW
 	| VOID_KEYW
 	| BOOL_KEYW
-	| VA_LIST_KEYW
 	| TYPE			{ (*$1)->tag = SYM_TYPEDEF; $$ = $1; }
 	;
 
@@ -297,15 +295,6 @@ declarator:
 
 direct_declarator:
 	IDENT
-		{ if (current_name != NULL) {
-		    error_with_pos("unexpected second declaration name");
-		    YYERROR;
-		  } else {
-		    current_name = (*$1)->string;
-		    $$ = $1;
-		  }
-		}
-	| TYPE
 		{ if (current_name != NULL) {
 		    error_with_pos("unexpected second declaration name");
 		    YYERROR;

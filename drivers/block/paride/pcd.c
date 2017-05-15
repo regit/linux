@@ -69,8 +69,8 @@
             nice        This parameter controls the driver's use of
                         idle CPU time, at the expense of some speed.
  
-	If this driver is built into the kernel, you can use the
-        following kernel command line parameters, with the same values
+	If this driver is built into the kernel, you can use kernel
+        the following command line parameters, with the same values
         as the corresponding module parameters listed above:
 
 	    pcd.drive0
@@ -139,7 +139,7 @@ enum {D_PRT, D_PRO, D_UNI, D_MOD, D_SLV, D_DLY};
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
 #include <linux/mutex.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 static DEFINE_MUTEX(pcd_mutex);
 static DEFINE_SPINLOCK(pcd_lock);
@@ -221,7 +221,6 @@ static int pcd_busy;		/* request being processed ? */
 static int pcd_sector;		/* address of next requested sector */
 static int pcd_count;		/* number of blocks still to do */
 static char *pcd_buf;		/* buffer for request in progress */
-static void *par_drv;		/* reference of parport driver */
 
 /* kernel glue structures */
 
@@ -691,12 +690,6 @@ static int pcd_detect(void)
 	printk("%s: %s version %s, major %d, nice %d\n",
 	       name, name, PCD_VERSION, major, nice);
 
-	par_drv = pi_register_driver(name);
-	if (!par_drv) {
-		pr_err("failed to register %s driver\n", name);
-		return -1;
-	}
-
 	k = 0;
 	if (pcd_drive_count == 0) { /* nothing spec'd - so autoprobe for 1 */
 		cd = pcd;
@@ -730,7 +723,6 @@ static int pcd_detect(void)
 	printk("%s: No CD-ROM drive found\n", name);
 	for (unit = 0, cd = pcd; unit < PCD_UNITS; unit++, cd++)
 		put_disk(cd->disk);
-	pi_unregister_driver(par_drv);
 	return -1;
 }
 
@@ -992,7 +984,6 @@ static void __exit pcd_exit(void)
 	}
 	blk_cleanup_queue(pcd_queue);
 	unregister_blkdev(major, name);
-	pi_unregister_driver(par_drv);
 }
 
 MODULE_LICENSE("GPL");

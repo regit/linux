@@ -46,6 +46,9 @@ static void rtsx_usb_sg_timed_out(unsigned long data)
 
 	dev_dbg(&ucr->pusb_intf->dev, "%s: sg transfer timed out", __func__);
 	usb_sg_cancel(&ucr->current_sg);
+
+	/* we know the cancellation is caused by time-out */
+	ucr->current_sg.status = -ETIMEDOUT;
 }
 
 static int rtsx_usb_bulk_transfer_sglist(struct rtsx_ucr *ucr,
@@ -64,15 +67,12 @@ static int rtsx_usb_bulk_transfer_sglist(struct rtsx_ucr *ucr,
 	ucr->sg_timer.expires = jiffies + msecs_to_jiffies(timeout);
 	add_timer(&ucr->sg_timer);
 	usb_sg_wait(&ucr->current_sg);
-	if (!del_timer_sync(&ucr->sg_timer))
-		ret = -ETIMEDOUT;
-	else
-		ret = ucr->current_sg.status;
+	del_timer_sync(&ucr->sg_timer);
 
 	if (act_len)
 		*act_len = ucr->current_sg.bytes;
 
-	return ret;
+	return ucr->current_sg.status;
 }
 
 int rtsx_usb_transfer_data(struct rtsx_ucr *ucr, unsigned int pipe,
@@ -196,27 +196,18 @@ EXPORT_SYMBOL_GPL(rtsx_usb_ep0_write_register);
 int rtsx_usb_ep0_read_register(struct rtsx_ucr *ucr, u16 addr, u8 *data)
 {
 	u16 value;
-	u8 *buf;
-	int ret;
 
 	if (!data)
 		return -EINVAL;
-
-	buf = kzalloc(sizeof(u8), GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
+	*data = 0;
 
 	addr |= EP0_READ_REG_CMD << EP0_OP_SHIFT;
 	value = swab16(addr);
 
-	ret = usb_control_msg(ucr->pusb_dev,
+	return usb_control_msg(ucr->pusb_dev,
 			usb_rcvctrlpipe(ucr->pusb_dev, 0), RTSX_USB_REQ_REG_OP,
 			USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-			value, 0, buf, 1, 100);
-	*data = *buf;
-
-	kfree(buf);
-	return ret;
+			value, 0, data, 1, 100);
 }
 EXPORT_SYMBOL_GPL(rtsx_usb_ep0_read_register);
 
@@ -297,27 +288,18 @@ static int rtsx_usb_get_status_with_bulk(struct rtsx_ucr *ucr, u16 *status)
 int rtsx_usb_get_card_status(struct rtsx_ucr *ucr, u16 *status)
 {
 	int ret;
-	u16 *buf;
 
 	if (!status)
 		return -EINVAL;
 
-	if (polling_pipe == 0) {
-		buf = kzalloc(sizeof(u16), GFP_KERNEL);
-		if (!buf)
-			return -ENOMEM;
-
+	if (polling_pipe == 0)
 		ret = usb_control_msg(ucr->pusb_dev,
 				usb_rcvctrlpipe(ucr->pusb_dev, 0),
 				RTSX_USB_REQ_POLL,
 				USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-				0, 0, buf, 2, 100);
-		*status = *buf;
-
-		kfree(buf);
-	} else {
+				0, 0, status, 2, 100);
+	else
 		ret = rtsx_usb_get_status_with_bulk(ucr, status);
-	}
 
 	/* usb_control_msg may return positive when success */
 	if (ret < 0)
@@ -665,8 +647,8 @@ static int rtsx_usb_probe(struct usb_interface *intf,
 	/* initialize USB SG transfer timer */
 	setup_timer(&ucr->sg_timer, rtsx_usb_sg_timed_out, (unsigned long) ucr);
 
-	ret = mfd_add_hotplug_devices(&intf->dev, rtsx_usb_cells,
-				      ARRAY_SIZE(rtsx_usb_cells));
+	ret = mfd_add_devices(&intf->dev, usb_dev->devnum, rtsx_usb_cells,
+			ARRAY_SIZE(rtsx_usb_cells), NULL, 0, NULL);
 	if (ret)
 		goto out_init_fail;
 
@@ -701,24 +683,18 @@ static int rtsx_usb_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct rtsx_ucr *ucr =
 		(struct rtsx_ucr *)usb_get_intfdata(intf);
-	u16 val = 0;
 
-	dev_dbg(&intf->dev, "%s called with pm message 0x%04x\n",
+	dev_dbg(&intf->dev, "%s called with pm message 0x%04u\n",
 			__func__, message.event);
 
-	if (PMSG_IS_AUTO(message)) {
-		if (mutex_trylock(&ucr->dev_mutex)) {
-			rtsx_usb_get_card_status(ucr, &val);
-			mutex_unlock(&ucr->dev_mutex);
-
-			/* Defer the autosuspend if card exists */
-			if (val & (SD_CD | MS_CD))
-				return -EAGAIN;
-		} else {
-			/* There is an ongoing operation*/
-			return -EAGAIN;
-		}
-	}
+	/*
+	 * Call to make sure LED is off during suspend to save more power.
+	 * It is NOT a permanent state and could be turned on anytime later.
+	 * Thus no need to call turn_on when resunming.
+	 */
+	mutex_lock(&ucr->dev_mutex);
+	rtsx_usb_turn_off_led(ucr);
+	mutex_unlock(&ucr->dev_mutex);
 
 	return 0;
 }
@@ -768,7 +744,6 @@ static struct usb_device_id rtsx_usb_usb_ids[] = {
 	{ USB_DEVICE(0x0BDA, 0x0140) },
 	{ }
 };
-MODULE_DEVICE_TABLE(usb, rtsx_usb_usb_ids);
 
 static struct usb_driver rtsx_usb_driver = {
 	.name			= "rtsx_usb",

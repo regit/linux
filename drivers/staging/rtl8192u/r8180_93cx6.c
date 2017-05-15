@@ -23,11 +23,8 @@
 static void eprom_cs(struct net_device *dev, short bit)
 {
 	u8 cmdreg;
-	int err;
 
-	err = read_nic_byte_E(dev, EPROM_CMD, &cmdreg);
-	if (err)
-		return;
+	read_nic_byte_E(dev, EPROM_CMD, &cmdreg);
 	if (bit)
 		/* enable EPROM */
 		write_nic_byte_E(dev, EPROM_CMD, cmdreg | EPROM_CS_BIT);
@@ -43,11 +40,8 @@ static void eprom_cs(struct net_device *dev, short bit)
 static void eprom_ck_cycle(struct net_device *dev)
 {
 	u8 cmdreg;
-	int err;
 
-	err = read_nic_byte_E(dev, EPROM_CMD, &cmdreg);
-	if (err)
-		return;
+	read_nic_byte_E(dev, EPROM_CMD, &cmdreg);
 	write_nic_byte_E(dev, EPROM_CMD, cmdreg | EPROM_CK_BIT);
 	force_pci_posting(dev);
 	udelay(EPROM_DELAY);
@@ -62,11 +56,8 @@ static void eprom_ck_cycle(struct net_device *dev)
 static void eprom_w(struct net_device *dev, short bit)
 {
 	u8 cmdreg;
-	int err;
 
-	err = read_nic_byte_E(dev, EPROM_CMD, &cmdreg);
-	if (err)
-		return;
+	read_nic_byte_E(dev, EPROM_CMD, &cmdreg);
 	if (bit)
 		write_nic_byte_E(dev, EPROM_CMD, cmdreg | EPROM_W_BIT);
 	else
@@ -80,12 +71,8 @@ static void eprom_w(struct net_device *dev, short bit)
 static short eprom_r(struct net_device *dev)
 {
 	u8 bit;
-	int err;
 
-	err = read_nic_byte_E(dev, EPROM_CMD, &bit);
-	if (err)
-		return err;
-
+	read_nic_byte_E(dev, EPROM_CMD, &bit);
 	udelay(EPROM_DELAY);
 
 	if (bit & EPROM_R_BIT)
@@ -106,7 +93,7 @@ static void eprom_send_bits_string(struct net_device *dev, short b[], int len)
 }
 
 
-int eprom_read(struct net_device *dev, u32 addr)
+u32 eprom_read(struct net_device *dev, u32 addr)
 {
 	struct r8192_priv *priv = ieee80211_priv(dev);
 	short read_cmd[] = {1, 1, 0};
@@ -114,10 +101,9 @@ int eprom_read(struct net_device *dev, u32 addr)
 	int i;
 	int addr_len;
 	u32 ret;
-	int err;
 
 	ret = 0;
-	/* enable EPROM programming */
+	//enable EPROM programming
 	write_nic_byte_E(dev, EPROM_CMD,
 		       (EPROM_CMD_PROGRAM<<EPROM_CMD_OPERATING_MODE_SHIFT));
 	force_pci_posting(dev);
@@ -147,28 +133,21 @@ int eprom_read(struct net_device *dev, u32 addr)
 	eprom_send_bits_string(dev, read_cmd, 3);
 	eprom_send_bits_string(dev, addr_str, addr_len);
 
-	/*
-	 * keep chip pin D to low state while reading.
-	 * I'm unsure if it is necessary, but anyway shouldn't hurt
-	 */
+	//keep chip pin D to low state while reading.
+	//I'm unsure if it is necessary, but anyway shouldn't hurt
 	eprom_w(dev, 0);
 
 	for (i = 0; i < 16; i++) {
-		/* eeprom needs a clk cycle between writing opcode&adr
-		 * and reading data. (eeprom outs a dummy 0)
-		 */
+		//eeprom needs a clk cycle between writing opcode&adr
+		//and reading data. (eeprom outs a dummy 0)
 		eprom_ck_cycle(dev);
-		err = eprom_r(dev);
-		if (err < 0)
-			return err;
-
-		ret |= err<<(15-i);
+		ret |= (eprom_r(dev)<<(15-i));
 	}
 
 	eprom_cs(dev, 0);
 	eprom_ck_cycle(dev);
 
-	/* disable EPROM programming */
+	//disable EPROM programming
 	write_nic_byte_E(dev, EPROM_CMD,
 		       (EPROM_CMD_NORMAL<<EPROM_CMD_OPERATING_MODE_SHIFT));
 	return ret;

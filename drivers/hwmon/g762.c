@@ -128,8 +128,8 @@ enum g762_regs {
 			 G762_REG_FAN_CMD2_GEAR_MODE_1)) >> 2))
 
 struct g762_data {
-	struct device *hwmon_dev;
 	struct i2c_client *client;
+	struct device *hwmon_dev;
 	struct clk *clk;
 
 	/* update mutex */
@@ -193,24 +193,21 @@ static inline unsigned int rpm_from_cnt(u8 cnt, u32 clk_freq, u16 p,
  * Convert fan RPM value from sysfs into count value for fan controller
  * register (FAN_SET_CNT).
  */
-static inline unsigned char cnt_from_rpm(unsigned long rpm, u32 clk_freq, u16 p,
+static inline unsigned char cnt_from_rpm(u32 rpm, u32 clk_freq, u16 p,
 					 u8 clk_div, u8 gear_mult)
 {
-	unsigned long f1 = clk_freq * 30 * gear_mult;
-	unsigned long f2 = p * clk_div;
-
-	if (!rpm)	/* to stop the fan, set cnt to 255 */
+	if (!rpm)         /* to stop the fan, set cnt to 255 */
 		return 0xff;
 
-	rpm = clamp_val(rpm, f1 / (255 * f2), ULONG_MAX / f2);
-	return DIV_ROUND_CLOSEST(f1, rpm * f2);
+	return clamp_val(((clk_freq * 30 * gear_mult) / (rpm * p * clk_div)),
+			 0, 255);
 }
 
 /* helper to grab and cache data, at most one time per second */
 static struct g762_data *g762_update_client(struct device *dev)
 {
-	struct g762_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct g762_data *data = i2c_get_clientdata(client);
 	int ret = 0;
 
 	mutex_lock(&data->update_lock);
@@ -269,7 +266,8 @@ static struct g762_data *g762_update_client(struct device *dev)
  */
 static int do_set_clk_freq(struct device *dev, unsigned long val)
 {
-	struct g762_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct g762_data *data = i2c_get_clientdata(client);
 
 	if (val > 0xffffff)
 		return -EINVAL;
@@ -284,6 +282,7 @@ static int do_set_clk_freq(struct device *dev, unsigned long val)
 /* Set pwm mode. Accepts either 0 (PWM mode) or 1 (DC mode) */
 static int do_set_pwm_mode(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -302,7 +301,7 @@ static int do_set_pwm_mode(struct device *dev, unsigned long val)
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD1,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD1,
 					data->fan_cmd1);
 	data->valid = false;
  out:
@@ -314,6 +313,7 @@ static int do_set_pwm_mode(struct device *dev, unsigned long val)
 /* Set fan clock divisor. Accepts either 1, 2, 4 or 8. */
 static int do_set_fan_div(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -342,7 +342,7 @@ static int do_set_fan_div(struct device *dev, unsigned long val)
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD1,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD1,
 					data->fan_cmd1);
 	data->valid = false;
  out:
@@ -354,6 +354,7 @@ static int do_set_fan_div(struct device *dev, unsigned long val)
 /* Set fan gear mode. Accepts either 0, 1 or 2. */
 static int do_set_fan_gear_mode(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -378,7 +379,7 @@ static int do_set_fan_gear_mode(struct device *dev, unsigned long val)
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD2,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD2,
 					data->fan_cmd2);
 	data->valid = false;
  out:
@@ -390,6 +391,7 @@ static int do_set_fan_gear_mode(struct device *dev, unsigned long val)
 /* Set number of fan pulses per revolution. Accepts either 2 or 4. */
 static int do_set_fan_pulses(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -408,7 +410,7 @@ static int do_set_fan_pulses(struct device *dev, unsigned long val)
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD1,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD1,
 					data->fan_cmd1);
 	data->valid = false;
  out:
@@ -420,6 +422,7 @@ static int do_set_fan_pulses(struct device *dev, unsigned long val)
 /* Set fan mode. Accepts either 1 (open-loop) or 2 (closed-loop). */
 static int do_set_pwm_enable(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -441,15 +444,15 @@ static int do_set_pwm_enable(struct device *dev, unsigned long val)
 		 * value of 254 if it is 255 when switching to open-loop.
 		 */
 		if (data->set_cnt == 0xff)
-			i2c_smbus_write_byte_data(data->client,
-						  G762_REG_SET_CNT, 254);
+			i2c_smbus_write_byte_data(client, G762_REG_SET_CNT,
+						  254);
 		break;
 	default:
 		ret = -EINVAL;
 		goto out;
 	}
 
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD1,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD1,
 					data->fan_cmd1);
 	data->valid = false;
  out:
@@ -461,6 +464,7 @@ static int do_set_pwm_enable(struct device *dev, unsigned long val)
 /* Set PWM polarity. Accepts either 0 (positive duty) or 1 (negative duty) */
 static int do_set_pwm_polarity(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -479,7 +483,7 @@ static int do_set_pwm_polarity(struct device *dev, unsigned long val)
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD1,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD1,
 					data->fan_cmd1);
 	data->valid = false;
  out:
@@ -494,8 +498,8 @@ static int do_set_pwm_polarity(struct device *dev, unsigned long val)
  */
 static int do_set_pwm(struct device *dev, unsigned long val)
 {
-	struct g762_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct g762_data *data = i2c_get_clientdata(client);
 	int ret;
 
 	if (val > 255)
@@ -515,6 +519,7 @@ static int do_set_pwm(struct device *dev, unsigned long val)
  */
 static int do_set_fan_target(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -526,7 +531,7 @@ static int do_set_fan_target(struct device *dev, unsigned long val)
 				     G762_PULSE_FROM_REG(data->fan_cmd1),
 				     G762_CLKDIV_FROM_REG(data->fan_cmd1),
 				     G762_GEARMULT_FROM_REG(data->fan_cmd2));
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_SET_CNT,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_SET_CNT,
 					data->set_cnt);
 	data->valid = false;
 	mutex_unlock(&data->update_lock);
@@ -537,6 +542,7 @@ static int do_set_fan_target(struct device *dev, unsigned long val)
 /* Set fan startup voltage. Accepted values are either 0, 1, 2 or 3. */
 static int do_set_fan_startv(struct device *dev, unsigned long val)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 	int ret;
 
@@ -565,7 +571,7 @@ static int do_set_fan_startv(struct device *dev, unsigned long val)
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD2,
+	ret = i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD2,
 					data->fan_cmd2);
 	data->valid = false;
  out:
@@ -585,7 +591,6 @@ static const struct of_device_id g762_dt_match[] = {
 	{ .compatible = "gmt,g763" },
 	{ },
 };
-MODULE_DEVICE_TABLE(of, g762_dt_match);
 
 /*
  * Grab clock (a required property), enable it, get (fixed) clock frequency
@@ -653,12 +658,15 @@ static int g762_of_prop_import_one(struct i2c_client *client,
 				   int (*psetter)(struct device *dev,
 						  unsigned long val))
 {
-	int ret;
+	const __be32 *prop;
+	int len, ret;
 	u32 pval;
 
-	if (of_property_read_u32(client->dev.of_node, pname, &pval))
+	prop = of_get_property(client->dev.of_node, pname, &len);
+	if (!prop || len != sizeof(u32))
 		return 0;
 
+	pval = be32_to_cpu(prop[0]);
 	dev_dbg(&client->dev, "found %s (%d)\n", pname, pval);
 	ret = (*psetter)(&client->dev, pval);
 	if (ret)
@@ -1018,7 +1026,7 @@ static DEVICE_ATTR(fan1_pulses, S_IWUSR | S_IRUGO,
 		   get_fan_pulses, set_fan_pulses);
 
 /* Driver data */
-static struct attribute *g762_attrs[] = {
+static struct attribute *g762_attributes[] = {
 	&dev_attr_fan1_input.attr,
 	&dev_attr_fan1_alarm.attr,
 	&dev_attr_fan1_fault.attr,
@@ -1031,7 +1039,9 @@ static struct attribute *g762_attrs[] = {
 	NULL
 };
 
-ATTRIBUTE_GROUPS(g762);
+static const struct attribute_group g762_group = {
+	.attrs = g762_attributes,
+};
 
 /*
  * Enable both fan failure detection and fan out of control protection. The
@@ -1040,6 +1050,7 @@ ATTRIBUTE_GROUPS(g762);
  */
 static inline int g762_fan_init(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct g762_data *data = g762_update_client(dev);
 
 	if (IS_ERR(data))
@@ -1049,13 +1060,12 @@ static inline int g762_fan_init(struct device *dev)
 	data->fan_cmd1 |= G762_REG_FAN_CMD1_DET_FAN_OOC;
 	data->valid = false;
 
-	return i2c_smbus_write_byte_data(data->client, G762_REG_FAN_CMD1,
+	return i2c_smbus_write_byte_data(client, G762_REG_FAN_CMD1,
 					 data->fan_cmd1);
 }
 
 static int g762_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-	struct device *dev = &client->dev;
 	struct g762_data *data;
 	int ret;
 
@@ -1063,7 +1073,7 @@ static int g762_probe(struct i2c_client *client, const struct i2c_device_id *id)
 				     I2C_FUNC_SMBUS_BYTE_DATA))
 		return -ENODEV;
 
-	data = devm_kzalloc(dev, sizeof(struct g762_data), GFP_KERNEL);
+	data = devm_kzalloc(&client->dev, sizeof(struct g762_data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
@@ -1072,7 +1082,7 @@ static int g762_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	mutex_init(&data->update_lock);
 
 	/* Enable fan failure detection and fan out of control protection */
-	ret = g762_fan_init(dev);
+	ret = g762_fan_init(&client->dev);
 	if (ret)
 		return ret;
 
@@ -1088,14 +1098,21 @@ static int g762_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	if (ret)
 		goto clock_dis;
 
-	data->hwmon_dev = hwmon_device_register_with_groups(dev, client->name,
-							    data, g762_groups);
+	/* Register sysfs hooks */
+	ret = sysfs_create_group(&client->dev.kobj, &g762_group);
+	if (ret)
+		goto clock_dis;
+
+	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
 		ret = PTR_ERR(data->hwmon_dev);
-		goto clock_dis;
+		goto sysfs_rem;
 	}
 
 	return 0;
+
+ sysfs_rem:
+	sysfs_remove_group(&client->dev.kobj, &g762_group);
 
  clock_dis:
 	g762_of_clock_disable(client);
@@ -1108,6 +1125,7 @@ static int g762_remove(struct i2c_client *client)
 	struct g762_data *data = i2c_get_clientdata(client);
 
 	hwmon_device_unregister(data->hwmon_dev);
+	sysfs_remove_group(&client->dev.kobj, &g762_group);
 	g762_of_clock_disable(client);
 
 	return 0;
@@ -1116,6 +1134,7 @@ static int g762_remove(struct i2c_client *client)
 static struct i2c_driver g762_driver = {
 	.driver = {
 		.name = DRVNAME,
+		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(g762_dt_match),
 	},
 	.probe	  = g762_probe,

@@ -28,7 +28,6 @@ struct vsp1_sru {
 	struct vsp1_entity entity;
 
 	struct v4l2_ctrl_handler ctrls;
-
 	unsigned int intensity;
 };
 

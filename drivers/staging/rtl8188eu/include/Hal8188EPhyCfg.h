@@ -11,6 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 #ifndef __INC_HAL8188EPHYCFG_H__
 #define __INC_HAL8188EPHYCFG_H__
@@ -64,11 +69,13 @@ enum hw90_block {
 enum rf_radio_path {
 	RF_PATH_A = 0,			/* Radio Path A */
 	RF_PATH_B = 1,			/* Radio Path B */
+	RF_PATH_C = 2,			/* Radio Path C */
+	RF_PATH_D = 3,			/* Radio Path D */
 };
 
 #define MAX_PG_GROUP 13
 
-#define	RF_PATH_MAX			2
+#define	RF_PATH_MAX			3
 #define		MAX_RF_PATH		RF_PATH_MAX
 #define		MAX_TX_COUNT		4 /* path numbers */
 
@@ -80,13 +87,13 @@ enum rf_radio_path {
 
 enum wireless_mode {
 	WIRELESS_MODE_UNKNOWN = 0x00,
-	WIRELESS_MODE_A			= BIT(2),
-	WIRELESS_MODE_B			= BIT(0),
-	WIRELESS_MODE_G			= BIT(1),
-	WIRELESS_MODE_AUTO		= BIT(5),
-	WIRELESS_MODE_N_24G		= BIT(3),
-	WIRELESS_MODE_N_5G		= BIT(4),
-	WIRELESS_MODE_AC		= BIT(6)
+	WIRELESS_MODE_A			= BIT2,
+	WIRELESS_MODE_B			= BIT0,
+	WIRELESS_MODE_G			= BIT1,
+	WIRELESS_MODE_AUTO		= BIT5,
+	WIRELESS_MODE_N_24G		= BIT3,
+	WIRELESS_MODE_N_5G		= BIT4,
+	WIRELESS_MODE_AC		= BIT6
 };
 
 enum phy_rate_tx_offset_area {
@@ -97,6 +104,17 @@ enum phy_rate_tx_offset_area {
 	RA_OFFSET_HT_OFDM3,
 	RA_OFFSET_HT_OFDM4,
 	RA_OFFSET_HT_CCK,
+};
+
+/* BB/RF related */
+enum RF_TYPE_8190P {
+	RF_TYPE_MIN,		/*  0 */
+	RF_8225 = 1,		/*  1 11b/g RF for verification only */
+	RF_8256 = 2,		/*  2 11b/g/n */
+	RF_8258 = 3,		/*  3 11a/b/g/n RF */
+	RF_6052 = 4,		/*  4 11b/g/n RF */
+	/*  TODO: We should remove this psudo PHY RF after we get new RF. */
+	RF_PSEUDO_11N = 5,	/*  5, It is a temporality RF. */
 };
 
 struct bb_reg_def {
@@ -147,6 +165,24 @@ struct bb_reg_def {
 				 * Path A and B */
 };
 
+struct ant_sel_ofdm {
+	u32 r_tx_antenna:4;
+	u32 r_ant_l:4;
+	u32 r_ant_non_ht:4;
+	u32 r_ant_ht1:4;
+	u32 r_ant_ht2:4;
+	u32 r_ant_ht_s1:4;
+	u32 r_ant_non_ht_s1:4;
+	u32 OFDM_TXSC:2;
+	u32 reserved:2;
+};
+
+struct ant_sel_cck {
+	u8 r_cckrx_enable_2:2;
+	u8 r_cckrx_enable:2;
+	u8 r_ccktx_enable:4;
+};
+
 /*------------------------------Define structure----------------------------*/
 
 
@@ -162,15 +198,41 @@ struct bb_reg_def {
 /*  */
 /*  BB and RF register read/write */
 /*  */
+u32 rtl8188e_PHY_QueryBBReg(struct adapter *adapter, u32 regaddr, u32 mask);
+void rtl8188e_PHY_SetBBReg(struct adapter *Adapter, u32 RegAddr,
+			   u32 mask, u32 data);
+u32 rtl8188e_PHY_QueryRFReg(struct adapter *adapter, enum rf_radio_path rfpath,
+			    u32 regaddr, u32 mask);
+void rtl8188e_PHY_SetRFReg(struct adapter *adapter, enum rf_radio_path rfpath,
+			   u32 regaddr, u32 mask, u32 data);
+
+/*  Initialization related function */
+/* MAC/BB/RF HAL config */
+int PHY_MACConfig8188E(struct adapter *adapter);
+int PHY_BBConfig8188E(struct adapter *adapter);
+int PHY_RFConfig8188E(struct adapter *adapter);
+
+/* RF config */
+int rtl8188e_PHY_ConfigRFWithParaFile(struct adapter *adapter, u8 *filename,
+				      enum rf_radio_path rfpath);
+int rtl8188e_PHY_ConfigRFWithHeaderFile(struct adapter *adapter,
+					enum rf_radio_path rfpath);
 
 /* Read initi reg value for tx power setting. */
 void rtl8192c_PHY_GetHWRegOriginalValue(struct adapter *adapter);
 
 /*  BB TX Power R/W */
 void PHY_GetTxPowerLevel8188E(struct adapter *adapter, u32 *powerlevel);
+void PHY_SetTxPowerLevel8188E(struct adapter *adapter, u8 channel);
 
 void PHY_ScanOperationBackup8188E(struct adapter *Adapter, u8 Operation);
 
+/*  Switch bandwidth for 8192S */
+void PHY_SetBWMode8188E(struct adapter *adapter,
+			enum ht_channel_width chnlwidth, unsigned char offset);
+
+/*  channel switch related funciton */
+void PHY_SwChnl8188E(struct adapter *adapter, u8 channel);
 /*  Call after initialization */
 void ChkFwCmdIoDone(struct adapter *adapter);
 
@@ -183,7 +245,18 @@ void PHY_EnableHostClkReq(struct adapter *adapter);
 
 bool SetAntennaConfig92C(struct adapter *adapter, u8 defaultant);
 
+void storePwrIndexDiffRateOffset(struct adapter *adapter, u32 regaddr,
+				 u32 mask, u32 data);
 /*--------------------------Exported Function prototype---------------------*/
+
+#define PHY_QueryBBReg(adapt, regaddr, mask)			\
+	 rtl8188e_PHY_QueryBBReg((adapt), (regaddr), (mask))
+#define PHY_SetBBReg(adapt, regaddr, bitmask, data)		\
+	 rtl8188e_PHY_SetBBReg((adapt), (regaddr), (bitmask), (data))
+#define PHY_QueryRFReg(adapt, rfpath, regaddr, bitmask)	\
+	rtl8188e_PHY_QueryRFReg((adapt), (rfpath), (regaddr), (bitmask))
+#define PHY_SetRFReg(adapt, rfpath, regaddr, bitmask, data)	\
+	rtl8188e_PHY_SetRFReg((adapt), (rfpath), (regaddr), (bitmask), (data))
 
 #define PHY_SetMacReg	PHY_SetBBReg
 

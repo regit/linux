@@ -13,19 +13,9 @@
 #include <uapi/asm/ptrace.h>
 
 #ifndef __ASSEMBLY__
-#include <linux/types.h>
-
 struct pt_regs {
 	unsigned long uregs[18];
 };
-
-struct svc_pt_regs {
-	struct pt_regs regs;
-	u32 dacr;
-	u32 addr_limit;
-};
-
-#define to_svc_pt_regs(r) container_of(r, struct svc_pt_regs, regs)
 
 #define user_mode(regs)	\
 	(((regs)->ARM_cpsr & 0xf) == 0)
@@ -94,12 +84,6 @@ static inline long regs_return_value(struct pt_regs *regs)
 
 #define instruction_pointer(regs)	(regs)->ARM_pc
 
-#ifdef CONFIG_THUMB2_KERNEL
-#define frame_pointer(regs) (regs)->ARM_r7
-#else
-#define frame_pointer(regs) (regs)->ARM_fp
-#endif
-
 static inline void instruction_pointer_set(struct pt_regs *regs,
 					   unsigned long val)
 {
@@ -164,8 +148,9 @@ static inline unsigned long user_stack_pointer(struct pt_regs *regs)
 	return regs->ARM_sp;
 }
 
-#define current_pt_regs(void) ({ (struct pt_regs *)			\
-		((current_stack_pointer | (THREAD_SIZE - 1)) - 7) - 1;	\
+#define current_pt_regs(void) ({				\
+	register unsigned long sp asm ("sp");			\
+	(struct pt_regs *)((sp | (THREAD_SIZE - 1)) - 7) - 1;	\
 })
 
 #endif /* __ASSEMBLY__ */

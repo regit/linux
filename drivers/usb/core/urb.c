@@ -1,8 +1,3 @@
-/*
- * Released under the GPLv2 only.
- * SPDX-License-Identifier: GPL-2.0
- */
-
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/bitops.h>
@@ -73,8 +68,10 @@ struct urb *usb_alloc_urb(int iso_packets, gfp_t mem_flags)
 	urb = kmalloc(sizeof(struct urb) +
 		iso_packets * sizeof(struct usb_iso_packet_descriptor),
 		mem_flags);
-	if (!urb)
+	if (!urb) {
+		printk(KERN_ERR "alloc_urb: kmalloc failed\n");
 		return NULL;
+	}
 	usb_init_urb(urb);
 	return urb;
 }
@@ -132,8 +129,9 @@ void usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor)
 	list_add_tail(&urb->anchor_list, &anchor->urb_list);
 	urb->anchor = anchor;
 
-	if (unlikely(anchor->poisoned))
+	if (unlikely(anchor->poisoned)) {
 		atomic_inc(&urb->reject);
+	}
 
 	spin_unlock_irqrestore(&anchor->lock, flags);
 }
@@ -404,7 +402,7 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		/* SuperSpeed isoc endpoints have up to 16 bursts of up to
 		 * 3 packets each
 		 */
-		if (dev->speed >= USB_SPEED_SUPER) {
+		if (dev->speed == USB_SPEED_SUPER) {
 			int     burst = 1 + ep->ss_ep_comp.bMaxBurst;
 			int     mult = USB_SS_MULT(ep->ss_ep_comp.bmAttributes);
 			max *= burst;
@@ -412,8 +410,11 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		}
 
 		/* "high bandwidth" mode, 1-3 packets/uframe? */
-		if (dev->speed == USB_SPEED_HIGH)
-			max *= usb_endpoint_maxp_mult(&ep->desc);
+		if (dev->speed == USB_SPEED_HIGH) {
+			int	mult = 1 + ((max >> 11) & 0x03);
+			max &= 0x07ff;
+			max *= mult;
+		}
 
 		if (urb->number_of_packets <= 0)
 			return -EINVAL;
@@ -453,7 +454,6 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 			URB_FREE_BUFFER);
 	switch (xfertype) {
 	case USB_ENDPOINT_XFER_BULK:
-	case USB_ENDPOINT_XFER_INT:
 		if (is_out)
 			allowed |= URB_ZERO_PACKET;
 		/* FALLTHROUGH */
@@ -499,7 +499,6 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		}
 		/* too big? */
 		switch (dev->speed) {
-		case USB_SPEED_SUPER_PLUS:
 		case USB_SPEED_SUPER:	/* units are 125us */
 			/* Handle up to 2^(16-1) microframes */
 			if (urb->interval > (1 << 15))

@@ -5,14 +5,12 @@
  *    Author(s): Arnd Bergmann (arndb@de.ibm.com)
  *		 Cornelia Huck (cornelia.huck@de.ibm.com)
  *		 Martin Schwidefsky (schwidefsky@de.ibm.com)
- *
- * License: GPL
  */
 
 #define KMSG_COMPONENT "cio"
 #define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
 #include <linux/errno.h>
@@ -147,6 +145,7 @@ static struct css_device_id io_subchannel_ids[] = {
 	{ .match_flags = 0x1, .type = SUBCHANNEL_TYPE_IO, },
 	{ /* end of list */ },
 };
+MODULE_DEVICE_TABLE(css, io_subchannel_ids);
 
 static int io_subchannel_prepare(struct subchannel *sch)
 {
@@ -365,11 +364,11 @@ int ccw_device_set_offline(struct ccw_device *cdev)
 		   cdev->private->state == DEV_STATE_DISCONNECTED));
 	/* Inform the user if set offline failed. */
 	if (cdev->private->state == DEV_STATE_BOXED) {
-		pr_warn("%s: The device entered boxed state while being set offline\n",
-			dev_name(&cdev->dev));
+		pr_warning("%s: The device entered boxed state while "
+			   "being set offline\n", dev_name(&cdev->dev));
 	} else if (cdev->private->state == DEV_STATE_NOT_OPER) {
-		pr_warn("%s: The device stopped operating while being set offline\n",
-			dev_name(&cdev->dev));
+		pr_warning("%s: The device stopped operating while "
+			   "being set offline\n", dev_name(&cdev->dev));
 	}
 	/* Give up reference from ccw_device_set_online(). */
 	put_device(&cdev->dev);
@@ -430,11 +429,13 @@ int ccw_device_set_online(struct ccw_device *cdev)
 		spin_unlock_irq(cdev->ccwlock);
 		/* Inform the user that set online failed. */
 		if (cdev->private->state == DEV_STATE_BOXED) {
-			pr_warn("%s: Setting the device online failed because it is boxed\n",
-				dev_name(&cdev->dev));
+			pr_warning("%s: Setting the device online failed "
+				   "because it is boxed\n",
+				   dev_name(&cdev->dev));
 		} else if (cdev->private->state == DEV_STATE_NOT_OPER) {
-			pr_warn("%s: Setting the device online failed because it is not operational\n",
-				dev_name(&cdev->dev));
+			pr_warning("%s: Setting the device online failed "
+				   "because it is not operational\n",
+				   dev_name(&cdev->dev));
 		}
 		/* Give up online reference since onlining failed. */
 		put_device(&cdev->dev);
@@ -618,8 +619,9 @@ initiate_logging(struct device *dev, struct device_attribute *attr,
 
 	rc = chsc_siosl(sch->schid);
 	if (rc < 0) {
-		pr_warn("Logging for subchannel 0.%x.%04x failed with errno=%d\n",
-			sch->schid.ssid, sch->schid.sch_no, rc);
+		pr_warning("Logging for subchannel 0.%x.%04x failed with "
+			   "errno=%d\n",
+			   sch->schid.ssid, sch->schid.sch_no, rc);
 		return rc;
 	}
 	pr_notice("Logging for subchannel 0.%x.%04x was triggered\n",
@@ -763,6 +765,7 @@ static int io_subchannel_initialize_dev(struct subchannel *sch,
 	priv->state = DEV_STATE_NOT_OPER;
 	priv->dev_id.devno = sch->schib.pmcw.dev;
 	priv->dev_id.ssid = sch->schid.ssid;
+	priv->schid = sch->schid;
 
 	INIT_WORK(&priv->todo_work, ccw_device_todo);
 	INIT_LIST_HEAD(&priv->cmb_list);
@@ -1000,6 +1003,7 @@ static int ccw_device_move_to_sch(struct ccw_device *cdev,
 	put_device(&old_sch->dev);
 	/* Initialize new subchannel. */
 	spin_lock_irq(sch->lock);
+	cdev->private->schid = sch->schid;
 	cdev->ccwlock = sch->lock;
 	if (!sch_is_pseudo_sch(sch))
 		sch_set_cdev(sch, cdev);
@@ -1783,8 +1787,6 @@ static int ccw_device_remove(struct device *dev)
 	cdev->drv = NULL;
 	cdev->private->int_class = IRQIO_CIO;
 	spin_unlock_irq(cdev->ccwlock);
-	__disable_cmf(cdev);
-
 	return 0;
 }
 
@@ -1795,7 +1797,7 @@ static void ccw_device_shutdown(struct device *dev)
 	cdev = to_ccwdev(dev);
 	if (cdev->drv && cdev->drv->shutdown)
 		cdev->drv->shutdown(cdev);
-	__disable_cmf(cdev);
+	disable_cmf(cdev);
 }
 
 static int ccw_device_pm_prepare(struct device *dev)
@@ -2151,6 +2153,7 @@ int ccw_device_siosl(struct ccw_device *cdev)
 }
 EXPORT_SYMBOL_GPL(ccw_device_siosl);
 
+MODULE_LICENSE("GPL");
 EXPORT_SYMBOL(ccw_device_set_online);
 EXPORT_SYMBOL(ccw_device_set_offline);
 EXPORT_SYMBOL(ccw_driver_register);

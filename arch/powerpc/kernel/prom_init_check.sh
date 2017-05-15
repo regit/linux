@@ -50,14 +50,24 @@ do
 	done
 
 	# ignore register save/restore funcitons
-	case $UNDEF in
-	_restgpr_*|_restgpr0_*|_rest32gpr_*)
+	if [ "${UNDEF:0:9}" = "_restgpr_" ]; then
 		OK=1
-		;;
-	_savegpr_*|_savegpr0_*|_save32gpr_*)
+	fi
+	if [ "${UNDEF:0:10}" = "_restgpr0_" ]; then
 		OK=1
-		;;
-	esac
+	fi
+	if [ "${UNDEF:0:11}" = "_rest32gpr_" ]; then
+		OK=1
+	fi
+	if [ "${UNDEF:0:9}" = "_savegpr_" ]; then
+		OK=1
+	fi
+	if [ "${UNDEF:0:10}" = "_savegpr0_" ]; then
+		OK=1
+	fi
+	if [ "${UNDEF:0:11}" = "_save32gpr_" ]; then
+		OK=1
+	fi
 
 	if [ $OK -eq 0 ]; then
 		ERROR=1

@@ -113,7 +113,8 @@ static const char *pvr2_buffer_state_decode(enum pvr2_buffer_state st)
 static void pvr2_buffer_describe(struct pvr2_buffer *bp,const char *msg)
 {
 	pvr2_trace(PVR2_TRACE_INFO,
-		   "buffer%s%s %p state=%s id=%d status=%d stream=%p purb=%p sig=0x%x",
+		   "buffer%s%s %p state=%s id=%d status=%d"
+		   " stream=%p purb=%p sig=0x%x",
 		   (msg ? " " : ""),
 		   (msg ? msg : ""),
 		   bp,
@@ -155,7 +156,8 @@ static void pvr2_buffer_remove(struct pvr2_buffer *bp)
 	(*cnt)--;
 	(*bcnt) -= ccnt;
 	pvr2_trace(PVR2_TRACE_BUF_FLOW,
-		   "/*---TRACE_FLOW---*/ bufferPool	%8s dec cap=%07d cnt=%02d",
+		   "/*---TRACE_FLOW---*/"
+		   " bufferPool     %8s dec cap=%07d cnt=%02d",
 		   pvr2_buffer_state_decode(bp->state),*bcnt,*cnt);
 	bp->state = pvr2_buffer_state_none;
 }
@@ -196,7 +198,8 @@ static int pvr2_buffer_set_ready(struct pvr2_buffer *bp)
 	(sp->r_count)++;
 	sp->r_bcount += bp->used_count;
 	pvr2_trace(PVR2_TRACE_BUF_FLOW,
-		   "/*---TRACE_FLOW---*/ bufferPool	%8s inc cap=%07d cnt=%02d",
+		   "/*---TRACE_FLOW---*/"
+		   " bufferPool     %8s inc cap=%07d cnt=%02d",
 		   pvr2_buffer_state_decode(bp->state),
 		   sp->r_bcount,sp->r_count);
 	spin_unlock_irqrestore(&sp->list_lock,irq_flags);
@@ -221,7 +224,8 @@ static void pvr2_buffer_set_idle(struct pvr2_buffer *bp)
 	(sp->i_count)++;
 	sp->i_bcount += bp->max_count;
 	pvr2_trace(PVR2_TRACE_BUF_FLOW,
-		   "/*---TRACE_FLOW---*/ bufferPool	%8s inc cap=%07d cnt=%02d",
+		   "/*---TRACE_FLOW---*/"
+		   " bufferPool     %8s inc cap=%07d cnt=%02d",
 		   pvr2_buffer_state_decode(bp->state),
 		   sp->i_bcount,sp->i_count);
 	spin_unlock_irqrestore(&sp->list_lock,irq_flags);
@@ -245,7 +249,8 @@ static void pvr2_buffer_set_queued(struct pvr2_buffer *bp)
 	(sp->q_count)++;
 	sp->q_bcount += bp->max_count;
 	pvr2_trace(PVR2_TRACE_BUF_FLOW,
-		   "/*---TRACE_FLOW---*/ bufferPool	%8s inc cap=%07d cnt=%02d",
+		   "/*---TRACE_FLOW---*/"
+		   " bufferPool     %8s inc cap=%07d cnt=%02d",
 		   pvr2_buffer_state_decode(bp->state),
 		   sp->q_bcount,sp->q_count);
 	spin_unlock_irqrestore(&sp->list_lock,irq_flags);
@@ -288,8 +293,8 @@ static void pvr2_buffer_done(struct pvr2_buffer *bp)
 	bp->signature = 0;
 	bp->stream = NULL;
 	usb_free_urb(bp->purb);
-	pvr2_trace(PVR2_TRACE_BUF_POOL, "/*---TRACE_FLOW---*/ bufferDone     %p",
-		   bp);
+	pvr2_trace(PVR2_TRACE_BUF_POOL,"/*---TRACE_FLOW---*/"
+		   " bufferDone     %p",bp);
 }
 
 static int pvr2_stream_buffer_count(struct pvr2_stream *sp,unsigned int cnt)
@@ -301,7 +306,8 @@ static int pvr2_stream_buffer_count(struct pvr2_stream *sp,unsigned int cnt)
 	if (cnt == sp->buffer_total_count) return 0;
 
 	pvr2_trace(PVR2_TRACE_BUF_POOL,
-		   "/*---TRACE_FLOW---*/ poolResize	stream=%p cur=%d adj=%+d",
+		   "/*---TRACE_FLOW---*/ poolResize    "
+		   " stream=%p cur=%d adj=%+d",
 		   sp,
 		   sp->buffer_total_count,
 		   cnt-sp->buffer_total_count);
@@ -368,7 +374,8 @@ static int pvr2_stream_achieve_buffer_count(struct pvr2_stream *sp)
 	if (sp->buffer_total_count == sp->buffer_target_count) return 0;
 
 	pvr2_trace(PVR2_TRACE_BUF_POOL,
-		   "/*---TRACE_FLOW---*/ poolCheck	stream=%p cur=%d tgt=%d",
+		   "/*---TRACE_FLOW---*/"
+		   " poolCheck      stream=%p cur=%d tgt=%d",
 		   sp,sp->buffer_total_count,sp->buffer_target_count);
 
 	if (sp->buffer_total_count < sp->buffer_target_count) {
@@ -447,8 +454,8 @@ static void buffer_complete(struct urb *urb)
 		bp->used_count = urb->actual_length;
 		if (sp->fail_count) {
 			pvr2_trace(PVR2_TRACE_TOLERANCE,
-				   "stream %p transfer ok - fail count reset",
-				   sp);
+				   "stream %p transfer ok"
+				   " - fail count reset",sp);
 			sp->fail_count = 0;
 		}
 	} else if (sp->fail_count < sp->fail_tolerance) {
@@ -457,7 +464,8 @@ static void buffer_complete(struct urb *urb)
 		(sp->fail_count)++;
 		(sp->buffers_failed)++;
 		pvr2_trace(PVR2_TRACE_TOLERANCE,
-			   "stream %p ignoring error %d - fail count increased to %u",
+			   "stream %p ignoring error %d"
+			   " - fail count increased to %u",
 			   sp,urb->status,sp->fail_count);
 	} else {
 		(sp->buffers_failed)++;
@@ -465,7 +473,7 @@ static void buffer_complete(struct urb *urb)
 	}
 	spin_unlock_irqrestore(&sp->list_lock,irq_flags);
 	pvr2_buffer_set_ready(bp);
-	if (sp->callback_func) {
+	if (sp && sp->callback_func) {
 		sp->callback_func(sp->callback_data);
 	}
 }
@@ -506,14 +514,12 @@ void pvr2_stream_set_callback(struct pvr2_stream *sp,
 			      void *data)
 {
 	unsigned long irq_flags;
-	mutex_lock(&sp->mutex);
-	do {
+	mutex_lock(&sp->mutex); do {
 		spin_lock_irqsave(&sp->list_lock,irq_flags);
 		sp->callback_data = data;
 		sp->callback_func = func;
 		spin_unlock_irqrestore(&sp->list_lock,irq_flags);
-	} while(0);
-	mutex_unlock(&sp->mutex);
+	} while(0); mutex_unlock(&sp->mutex);
 }
 
 void pvr2_stream_get_stats(struct pvr2_stream *sp,
@@ -548,12 +554,10 @@ int pvr2_stream_set_buffer_count(struct pvr2_stream *sp,unsigned int cnt)
 {
 	int ret;
 	if (sp->buffer_target_count == cnt) return 0;
-	mutex_lock(&sp->mutex);
-	do {
+	mutex_lock(&sp->mutex); do {
 		sp->buffer_target_count = cnt;
 		ret = pvr2_stream_achieve_buffer_count(sp);
-	} while(0);
-	mutex_unlock(&sp->mutex);
+	} while(0); mutex_unlock(&sp->mutex);
 	return ret;
 }
 
@@ -586,8 +590,7 @@ int pvr2_stream_get_ready_count(struct pvr2_stream *sp)
 void pvr2_stream_kill(struct pvr2_stream *sp)
 {
 	struct pvr2_buffer *bp;
-	mutex_lock(&sp->mutex);
-	do {
+	mutex_lock(&sp->mutex); do {
 		pvr2_stream_internal_flush(sp);
 		while ((bp = pvr2_stream_get_ready_buffer(sp)) != NULL) {
 			pvr2_buffer_set_idle(bp);
@@ -595,8 +598,7 @@ void pvr2_stream_kill(struct pvr2_stream *sp)
 		if (sp->buffer_total_count != sp->buffer_target_count) {
 			pvr2_stream_achieve_buffer_count(sp);
 		}
-	} while(0);
-	mutex_unlock(&sp->mutex);
+	} while(0); mutex_unlock(&sp->mutex);
 }
 
 int pvr2_buffer_queue(struct pvr2_buffer *bp)
@@ -610,8 +612,7 @@ int pvr2_buffer_queue(struct pvr2_buffer *bp)
 	struct pvr2_stream *sp;
 	if (!bp) return -EINVAL;
 	sp = bp->stream;
-	mutex_lock(&sp->mutex);
-	do {
+	mutex_lock(&sp->mutex); do {
 		pvr2_buffer_wipe(bp);
 		if (!sp->dev) {
 			ret = -EIO;
@@ -635,8 +636,7 @@ int pvr2_buffer_queue(struct pvr2_buffer *bp)
 				  buffer_complete,
 				  bp);
 		usb_submit_urb(bp->purb,GFP_KERNEL);
-	} while(0);
-	mutex_unlock(&sp->mutex);
+	} while(0); mutex_unlock(&sp->mutex);
 	return ret;
 }
 
@@ -647,8 +647,7 @@ int pvr2_buffer_set_buffer(struct pvr2_buffer *bp,void *ptr,unsigned int cnt)
 	struct pvr2_stream *sp;
 	if (!bp) return -EINVAL;
 	sp = bp->stream;
-	mutex_lock(&sp->mutex);
-	do {
+	mutex_lock(&sp->mutex); do {
 		spin_lock_irqsave(&sp->list_lock,irq_flags);
 		if (bp->state != pvr2_buffer_state_idle) {
 			ret = -EPERM;
@@ -658,14 +657,14 @@ int pvr2_buffer_set_buffer(struct pvr2_buffer *bp,void *ptr,unsigned int cnt)
 			bp->max_count = cnt;
 			bp->stream->i_bcount += bp->max_count;
 			pvr2_trace(PVR2_TRACE_BUF_FLOW,
-				   "/*---TRACE_FLOW---*/ bufferPool	%8s cap cap=%07d cnt=%02d",
+				   "/*---TRACE_FLOW---*/ bufferPool    "
+				   " %8s cap cap=%07d cnt=%02d",
 				   pvr2_buffer_state_decode(
 					   pvr2_buffer_state_idle),
 				   bp->stream->i_bcount,bp->stream->i_count);
 		}
 		spin_unlock_irqrestore(&sp->list_lock,irq_flags);
-	} while(0);
-	mutex_unlock(&sp->mutex);
+	} while(0); mutex_unlock(&sp->mutex);
 	return ret;
 }
 
@@ -683,3 +682,14 @@ int pvr2_buffer_get_id(struct pvr2_buffer *bp)
 {
 	return bp->id;
 }
+
+
+/*
+  Stuff for Emacs to see, in order to encourage consistent editing style:
+  *** Local Variables: ***
+  *** mode: c ***
+  *** fill-column: 75 ***
+  *** tab-width: 8 ***
+  *** c-basic-offset: 8 ***
+  *** End: ***
+  */

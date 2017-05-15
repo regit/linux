@@ -11,6 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 #define _RTL8188E_XMIT_C_
 
@@ -20,7 +25,7 @@
 
 void dump_txrpt_ccx_88e(void *buf)
 {
-	struct txrpt_ccx_88e *txrpt_ccx = buf;
+	struct txrpt_ccx_88e *txrpt_ccx = (struct txrpt_ccx_88e *)buf;
 
 	DBG_88E("%s:\n"
 		"tag1:%u, pkt_num:%u, txdma_underflow:%u, int_bt:%u, int_tri:%u, int_ccx:%u\n"
@@ -59,7 +64,6 @@ void _dbg_dump_tx_info(struct adapter *padapter, int frame_tag,
 {
 	u8 dmp_txpkt;
 	bool dump_txdesc = false;
-
 	rtw_hal_get_def_var(padapter, HAL_DEF_DBG_DUMP_TXPKT, &(dmp_txpkt));
 
 	if (dmp_txpkt == 1) {/* dump txdesc for data frame */

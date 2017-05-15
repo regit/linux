@@ -20,8 +20,6 @@
 #include <linux/slab.h>
 #include <linux/ath9k_platform.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/of_net.h>
 #include <linux/relay.h>
 #include <net/ieee80211_radiotap.h>
 
@@ -47,13 +45,9 @@ int ath9k_modparam_nohwcrypt;
 module_param_named(nohwcrypt, ath9k_modparam_nohwcrypt, int, 0444);
 MODULE_PARM_DESC(nohwcrypt, "Disable hardware encryption");
 
-int ath9k_led_blink;
-module_param_named(blink, ath9k_led_blink, int, 0444);
+int led_blink;
+module_param_named(blink, led_blink, int, 0444);
 MODULE_PARM_DESC(blink, "Enable LED blink on activity");
-
-static int ath9k_led_active_high = -1;
-module_param_named(led_active_high, ath9k_led_active_high, int, 0444);
-MODULE_PARM_DESC(led_active_high, "Invert LED polarity");
 
 static int ath9k_btcoex_enable;
 module_param_named(btcoex_enable, ath9k_btcoex_enable, int, 0444);
@@ -67,13 +61,9 @@ static int ath9k_ps_enable;
 module_param_named(ps_enable, ath9k_ps_enable, int, 0444);
 MODULE_PARM_DESC(ps_enable, "Enable WLAN PowerSave");
 
-#ifdef CONFIG_ATH9K_CHANNEL_CONTEXT
-
-int ath9k_use_chanctx;
+static int ath9k_use_chanctx;
 module_param_named(use_chanctx, ath9k_use_chanctx, int, 0444);
 MODULE_PARM_DESC(use_chanctx, "Enable channel context for concurrency");
-
-#endif /* CONFIG_ATH9K_CHANNEL_CONTEXT */
 
 bool is_ath9k_unloaded;
 
@@ -93,21 +83,6 @@ static const struct ieee80211_tpt_blink ath9k_tpt_blink[] = {
 #endif
 
 static void ath9k_deinit_softc(struct ath_softc *sc);
-
-static void ath9k_op_ps_wakeup(struct ath_common *common)
-{
-	ath9k_ps_wakeup((struct ath_softc *) common->priv);
-}
-
-static void ath9k_op_ps_restore(struct ath_common *common)
-{
-	ath9k_ps_restore((struct ath_softc *) common->priv);
-}
-
-static struct ath_ps_ops ath9k_ps_ops = {
-	.wakeup = ath9k_op_ps_wakeup,
-	.restore = ath9k_op_ps_restore,
-};
 
 /*
  * Read and write, they both share the same lock. We do this to serialize
@@ -146,16 +121,6 @@ static unsigned int ath9k_ioread32(void *hw_priv, u32 reg_offset)
 		val = ioread32(sc->mem + reg_offset);
 	return val;
 }
-
-static void ath9k_multi_ioread32(void *hw_priv, u32 *addr,
-                                u32 *val, u16 count)
-{
-	int i;
-
-	for (i = 0; i < count; i++)
-		val[i] = ath9k_ioread32(hw_priv, addr[i]);
-}
-
 
 static unsigned int __ath9k_reg_rmw(struct ath_softc *sc, u32 reg_offset,
 				    u32 set, u32 clr)
@@ -203,20 +168,17 @@ static void ath9k_reg_notifier(struct wiphy *wiphy,
 	ath_reg_notifier_apply(wiphy, request, reg);
 
 	/* Set tx power */
-	if (!ah->curchan)
-		return;
-
-	sc->cur_chan->txpower = 2 * ah->curchan->chan->max_power;
-	ath9k_ps_wakeup(sc);
-	ath9k_hw_set_txpowerlimit(ah, sc->cur_chan->txpower, false);
-	ath9k_cmn_update_txpow(ah, sc->cur_chan->cur_txpower,
-			       sc->cur_chan->txpower,
-			       &sc->cur_chan->cur_txpower);
-	/* synchronize DFS detector if regulatory domain changed */
-	if (sc->dfs_detector != NULL)
-		sc->dfs_detector->set_dfs_domain(sc->dfs_detector,
-						 request->dfs_region);
-	ath9k_ps_restore(sc);
+	if (ah->curchan) {
+		sc->config.txpowlimit = 2 * ah->curchan->chan->max_power;
+		ath9k_ps_wakeup(sc);
+		ath9k_hw_set_txpowerlimit(ah, sc->config.txpowlimit, false);
+		sc->curtxpow = ath9k_hw_regulatory(ah)->power_limit;
+		/* synchronize DFS detector if regulatory domain changed */
+		if (sc->dfs_detector != NULL)
+			sc->dfs_detector->set_dfs_domain(sc->dfs_detector,
+							 request->dfs_region);
+		ath9k_ps_restore(sc);
+	}
 }
 
 /*
@@ -360,6 +322,7 @@ static int ath9k_init_queues(struct ath_softc *sc)
 	for (i = 0; i < IEEE80211_NUM_ACS; i++) {
 		sc->tx.txq_map[i] = ath_txq_setup(sc, ATH9K_TX_QUEUE_DATA, i);
 		sc->tx.txq_map[i]->mac80211_qnum = i;
+		sc->tx.txq_max_pending[i] = ATH_MAX_QDEPTH;
 	}
 	return 0;
 }
@@ -372,8 +335,9 @@ static void ath9k_init_misc(struct ath_softc *sc)
 	setup_timer(&common->ani.timer, ath_ani_calibrate, (unsigned long)sc);
 
 	common->last_rssi = ATH_RSSI_DUMMY_MARKER;
+	sc->config.txpowlimit = ATH_TXPOWER_MAX;
 	memcpy(common->bssidmask, ath_bcast_mac, ETH_ALEN);
-	sc->beacon.slottime = 9;
+	sc->beacon.slottime = ATH9K_SLOT_TIME_9;
 
 	for (i = 0; i < ARRAY_SIZE(sc->beacon.bslot); i++)
 		sc->beacon.bslot[i] = NULL;
@@ -381,13 +345,12 @@ static void ath9k_init_misc(struct ath_softc *sc)
 	if (sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_ANT_DIV_COMB)
 		sc->ant_comb.count = ATH_ANT_DIV_COMB_INIT_COUNT;
 
-	sc->spec_priv.ah = sc->sc_ah;
-	sc->spec_priv.spec_config.enabled = 0;
-	sc->spec_priv.spec_config.short_repeat = true;
-	sc->spec_priv.spec_config.count = 8;
-	sc->spec_priv.spec_config.endless = false;
-	sc->spec_priv.spec_config.period = 0xFF;
-	sc->spec_priv.spec_config.fft_period = 0xF;
+	sc->spec_config.enabled = 0;
+	sc->spec_config.short_repeat = true;
+	sc->spec_config.count = 8;
+	sc->spec_config.endless = false;
+	sc->spec_config.period = 0xFF;
+	sc->spec_config.fft_period = 0xF;
 }
 
 static void ath9k_init_pcoem_platform(struct ath_softc *sc)
@@ -395,9 +358,6 @@ static void ath9k_init_pcoem_platform(struct ath_softc *sc)
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath9k_hw_capabilities *pCap = &ah->caps;
 	struct ath_common *common = ath9k_hw_common(ah);
-
-	if (!IS_ENABLED(CONFIG_ATH9K_PCOEM))
-		return;
 
 	if (common->bus_ops->ath_bus_type != ATH_PCI)
 		return;
@@ -452,20 +412,10 @@ static void ath9k_init_pcoem_platform(struct ath_softc *sc)
 		ath_info(common, "Enable WAR for ASPM D3/L1\n");
 	}
 
-	/*
-	 * The default value of pll_pwrsave is 1.
-	 * For certain AR9485 cards, it is set to 0.
-	 * For AR9462, AR9565 it's set to 7.
-	 */
-	ah->config.pll_pwrsave = 1;
-
 	if (sc->driver_data & ATH9K_PCI_NO_PLL_PWRSAVE) {
-		ah->config.pll_pwrsave = 0;
+		ah->config.no_pll_pwrsave = true;
 		ath_info(common, "Disable PLL PowerSave\n");
 	}
-
-	if (sc->driver_data & ATH9K_PCI_LED_ACT_HI)
-		ah->config.led_active_high = true;
 }
 
 static void ath9k_eeprom_request_cb(const struct firmware *eeprom_blob,
@@ -482,7 +432,7 @@ static void ath9k_eeprom_request_cb(const struct firmware *eeprom_blob,
 static int ath9k_eeprom_request(struct ath_softc *sc, const char *name)
 {
 	struct ath9k_eeprom_ctx ec;
-	struct ath_hw *ah = sc->sc_ah;
+	struct ath_hw *ah = ah = sc->sc_ah;
 	int err;
 
 	/* try to load the EEPROM content asynchronously */
@@ -513,30 +463,14 @@ static void ath9k_eeprom_release(struct ath_softc *sc)
 	release_firmware(sc->sc_ah->eeprom_blob);
 }
 
-static int ath9k_init_platform(struct ath_softc *sc)
+static int ath9k_init_soc_platform(struct ath_softc *sc)
 {
 	struct ath9k_platform_data *pdata = sc->dev->platform_data;
 	struct ath_hw *ah = sc->sc_ah;
-	struct ath_common *common = ath9k_hw_common(ah);
-	int ret;
+	int ret = 0;
 
 	if (!pdata)
 		return 0;
-
-	if (!pdata->use_eeprom) {
-		ah->ah_flags &= ~AH_USE_EEPROM;
-		ah->gpio_mask = pdata->gpio_mask;
-		ah->gpio_val = pdata->gpio_val;
-		ah->led_pin = pdata->led_pin;
-		ah->is_clk_25mhz = pdata->is_clk_25mhz;
-		ah->get_mac_revision = pdata->get_mac_revision;
-		ah->external_reset = pdata->external_reset;
-		ah->disable_2ghz = pdata->disable_2ghz;
-		ah->disable_5ghz = pdata->disable_5ghz;
-
-		if (!pdata->endian_check)
-			ah->ah_flags |= AH_NO_EEP_SWAP;
-	}
 
 	if (pdata->eeprom_name) {
 		ret = ath9k_eeprom_request(sc, pdata->eeprom_name);
@@ -544,57 +478,16 @@ static int ath9k_init_platform(struct ath_softc *sc)
 			return ret;
 	}
 
-	if (pdata->led_active_high)
-		ah->config.led_active_high = true;
-
 	if (pdata->tx_gain_buffalo)
 		ah->config.tx_gain_buffalo = true;
 
-	if (pdata->macaddr)
-		ether_addr_copy(common->macaddr, pdata->macaddr);
-
-	return 0;
-}
-
-static int ath9k_of_init(struct ath_softc *sc)
-{
-	struct device_node *np = sc->dev->of_node;
-	struct ath_hw *ah = sc->sc_ah;
-	struct ath_common *common = ath9k_hw_common(ah);
-	enum ath_bus_type bus_type = common->bus_ops->ath_bus_type;
-	const char *mac;
-	char eeprom_name[100];
-	int ret;
-
-	if (!of_device_is_available(np))
-		return 0;
-
-	ath_dbg(common, CONFIG, "parsing configuration from OF node\n");
-
-	if (of_property_read_bool(np, "qca,no-eeprom")) {
-		/* ath9k-eeprom-<bus>-<id>.bin */
-		scnprintf(eeprom_name, sizeof(eeprom_name),
-			  "ath9k-eeprom-%s-%s.bin",
-			  ath_bus_type_to_string(bus_type), dev_name(ah->dev));
-
-		ret = ath9k_eeprom_request(sc, eeprom_name);
-		if (ret)
-			return ret;
-	}
-
-	mac = of_get_mac_address(np);
-	if (mac)
-		ether_addr_copy(common->macaddr, mac);
-
-	ah->ah_flags &= ~AH_USE_EEPROM;
-	ah->ah_flags |= AH_NO_EEP_SWAP;
-
-	return 0;
+	return ret;
 }
 
 static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 			    const struct ath_bus_ops *bus_ops)
 {
+	struct ath9k_platform_data *pdata = sc->dev->platform_data;
 	struct ath_hw *ah = NULL;
 	struct ath9k_hw_capabilities *pCap;
 	struct ath_common *common;
@@ -608,30 +501,31 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	ah->dev = sc->dev;
 	ah->hw = sc->hw;
 	ah->hw_version.devid = devid;
-	ah->ah_flags |= AH_USE_EEPROM;
-	ah->led_pin = -1;
 	ah->reg_ops.read = ath9k_ioread32;
-	ah->reg_ops.multi_read = ath9k_multi_ioread32;
 	ah->reg_ops.write = ath9k_iowrite32;
 	ah->reg_ops.rmw = ath9k_reg_rmw;
+	sc->sc_ah = ah;
 	pCap = &ah->caps;
 
 	common = ath9k_hw_common(ah);
-
-	/* Will be cleared in ath9k_start() */
-	set_bit(ATH_OP_INVALID, &common->op_flags);
-
-	sc->sc_ah = ah;
 	sc->dfs_detector = dfs_pattern_detector_init(common, NL80211_DFS_UNSET);
 	sc->tx99_power = MAX_RATE_POWER + 1;
 	init_waitqueue_head(&sc->tx_wait);
-	sc->cur_chan = &sc->chanctx[0];
-	if (!ath9k_is_chanctx_enabled())
-		sc->cur_chan->hw_queue_base = 0;
+
+	if (!pdata || pdata->use_eeprom) {
+		ah->ah_flags |= AH_USE_EEPROM;
+		sc->sc_ah->led_pin = -1;
+	} else {
+		sc->sc_ah->gpio_mask = pdata->gpio_mask;
+		sc->sc_ah->gpio_val = pdata->gpio_val;
+		sc->sc_ah->led_pin = pdata->led_pin;
+		ah->is_clk_25mhz = pdata->is_clk_25mhz;
+		ah->get_mac_revision = pdata->get_mac_revision;
+		ah->external_reset = pdata->external_reset;
+	}
 
 	common->ops = &ah->reg_ops;
 	common->bus_ops = bus_ops;
-	common->ps_ops = &ath9k_ps_ops;
 	common->ah = ah;
 	common->hw = sc->hw;
 	common->priv = sc;
@@ -644,16 +538,9 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	 */
 	ath9k_init_pcoem_platform(sc);
 
-	ret = ath9k_init_platform(sc);
+	ret = ath9k_init_soc_platform(sc);
 	if (ret)
 		return ret;
-
-	ret = ath9k_of_init(sc);
-	if (ret)
-		return ret;
-
-	if (ath9k_led_active_high != -1)
-		ah->config.led_active_high = ath9k_led_active_high == 1;
 
 	/*
 	 * Enable WLAN/BT RX Antenna diversity only when:
@@ -669,7 +556,6 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	spin_lock_init(&common->cc_lock);
 	spin_lock_init(&sc->sc_serial_rw);
 	spin_lock_init(&sc->sc_pm_lock);
-	spin_lock_init(&sc->chan_lock);
 	mutex_init(&sc->mutex);
 	tasklet_init(&sc->intr_tq, ath9k_tasklet, (unsigned long)sc);
 	tasklet_init(&sc->bcon_tasklet, ath9k_beacon_tasklet,
@@ -679,8 +565,6 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	INIT_WORK(&sc->hw_reset_work, ath_reset_work);
 	INIT_WORK(&sc->paprd_work, ath_paprd_calibrate);
 	INIT_DELAYED_WORK(&sc->hw_pll_work, ath_hw_pll_work);
-
-	ath9k_init_channel_context(sc);
 
 	/*
 	 * Cache line size is used to size and align various
@@ -694,6 +578,9 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	if (ret)
 		goto err_hw;
 
+	if (pdata && pdata->macaddr)
+		memcpy(common->macaddr, pdata->macaddr, ETH_ALEN);
+
 	ret = ath9k_init_queues(sc);
 	if (ret)
 		goto err_queues;
@@ -706,14 +593,12 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	if (ret)
 		goto err_btcoex;
 
-	ret = ath9k_init_p2p(sc);
-	if (ret)
-		goto err_btcoex;
+	sc->p2p_ps_timer = ath_gen_timer_alloc(sc->sc_ah, ath9k_p2p_ps_timer,
+		NULL, sc, AR_FIRST_NDP_TIMER);
 
 	ath9k_cmn_init_crypto(sc->sc_ah);
 	ath9k_init_misc(sc);
-	ath_chanctx_init(sc);
-	ath9k_offchannel_init(sc);
+	ath_fill_led_pin(sc);
 
 	if (common->bus_ops->aspm_init)
 		common->bus_ops->aspm_init(common);
@@ -757,9 +642,9 @@ static void ath9k_init_txpower_limits(struct ath_softc *sc)
 	struct ath9k_channel *curchan = ah->curchan;
 
 	if (ah->caps.hw_caps & ATH9K_HW_CAP_2GHZ)
-		ath9k_init_band_txpower(sc, NL80211_BAND_2GHZ);
+		ath9k_init_band_txpower(sc, IEEE80211_BAND_2GHZ);
 	if (ah->caps.hw_caps & ATH9K_HW_CAP_5GHZ)
-		ath9k_init_band_txpower(sc, NL80211_BAND_5GHZ);
+		ath9k_init_band_txpower(sc, IEEE80211_BAND_5GHZ);
 
 	ah->curchan = curchan;
 }
@@ -775,34 +660,17 @@ static const struct ieee80211_iface_limit if_limits[] = {
 				 BIT(NL80211_IFTYPE_P2P_GO) },
 };
 
-#ifdef CONFIG_WIRELESS_WDS
 static const struct ieee80211_iface_limit wds_limits[] = {
 	{ .max = 2048,	.types = BIT(NL80211_IFTYPE_WDS) },
 };
+
+static const struct ieee80211_iface_limit if_dfs_limits[] = {
+	{ .max = 1,	.types = BIT(NL80211_IFTYPE_AP) |
+#ifdef CONFIG_MAC80211_MESH
+				 BIT(NL80211_IFTYPE_MESH_POINT) |
 #endif
-
-#ifdef CONFIG_ATH9K_CHANNEL_CONTEXT
-
-static const struct ieee80211_iface_limit if_limits_multi[] = {
-	{ .max = 2,	.types = BIT(NL80211_IFTYPE_STATION) |
-				 BIT(NL80211_IFTYPE_AP) |
-				 BIT(NL80211_IFTYPE_P2P_CLIENT) |
-				 BIT(NL80211_IFTYPE_P2P_GO) },
-	{ .max = 1,	.types = BIT(NL80211_IFTYPE_ADHOC) },
-	{ .max = 1,	.types = BIT(NL80211_IFTYPE_P2P_DEVICE) },
+				 BIT(NL80211_IFTYPE_ADHOC) },
 };
-
-static const struct ieee80211_iface_combination if_comb_multi[] = {
-	{
-		.limits = if_limits_multi,
-		.n_limits = ARRAY_SIZE(if_limits_multi),
-		.max_interfaces = 3,
-		.num_different_channels = 2,
-		.beacon_int_infra_match = true,
-	},
-};
-
-#endif /* CONFIG_ATH9K_CHANNEL_CONTEXT */
 
 static const struct ieee80211_iface_combination if_comb[] = {
 	{
@@ -811,13 +679,7 @@ static const struct ieee80211_iface_combination if_comb[] = {
 		.max_interfaces = 2048,
 		.num_different_channels = 1,
 		.beacon_int_infra_match = true,
-#ifdef CONFIG_ATH9K_DFS_CERTIFIED
-		.radar_detect_widths =	BIT(NL80211_CHAN_WIDTH_20_NOHT) |
-					BIT(NL80211_CHAN_WIDTH_20) |
-					BIT(NL80211_CHAN_WIDTH_40),
-#endif
 	},
-#ifdef CONFIG_WIRELESS_WDS
 	{
 		.limits = wds_limits,
 		.n_limits = ARRAY_SIZE(wds_limits),
@@ -825,56 +687,38 @@ static const struct ieee80211_iface_combination if_comb[] = {
 		.num_different_channels = 1,
 		.beacon_int_infra_match = true,
 	},
+#ifdef CONFIG_ATH9K_DFS_CERTIFIED
+	{
+		.limits = if_dfs_limits,
+		.n_limits = ARRAY_SIZE(if_dfs_limits),
+		.max_interfaces = 1,
+		.num_different_channels = 1,
+		.beacon_int_infra_match = true,
+		.radar_detect_widths =	BIT(NL80211_CHAN_WIDTH_20_NOHT) |
+					BIT(NL80211_CHAN_WIDTH_20),
+	}
 #endif
 };
-
-#ifdef CONFIG_ATH9K_CHANNEL_CONTEXT
-static void ath9k_set_mcc_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
-{
-	struct ath_hw *ah = sc->sc_ah;
-	struct ath_common *common = ath9k_hw_common(ah);
-
-	if (!ath9k_is_chanctx_enabled())
-		return;
-
-	ieee80211_hw_set(hw, QUEUE_CONTROL);
-	hw->queues = ATH9K_NUM_TX_QUEUES;
-	hw->offchannel_tx_hw_queue = hw->queues - 1;
-	hw->wiphy->interface_modes &= ~ BIT(NL80211_IFTYPE_WDS);
-	hw->wiphy->iface_combinations = if_comb_multi;
-	hw->wiphy->n_iface_combinations = ARRAY_SIZE(if_comb_multi);
-	hw->wiphy->max_scan_ssids = 255;
-	hw->wiphy->max_scan_ie_len = IEEE80211_MAX_DATA_LEN;
-	hw->wiphy->max_remain_on_channel_duration = 10000;
-	hw->chanctx_data_size = sizeof(void *);
-	hw->extra_beacon_tailroom =
-		sizeof(struct ieee80211_p2p_noa_attr) + 9;
-
-	ath_dbg(common, CHAN_CTX, "Use channel contexts\n");
-}
-#endif /* CONFIG_ATH9K_CHANNEL_CONTEXT */
 
 static void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 {
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath_common *common = ath9k_hw_common(ah);
 
-	ieee80211_hw_set(hw, SUPPORTS_HT_CCK_RATES);
-	ieee80211_hw_set(hw, SUPPORTS_RC_TABLE);
-	ieee80211_hw_set(hw, REPORTS_TX_ACK_STATUS);
-	ieee80211_hw_set(hw, SPECTRUM_MGMT);
-	ieee80211_hw_set(hw, PS_NULLFUNC_STACK);
-	ieee80211_hw_set(hw, SIGNAL_DBM);
-	ieee80211_hw_set(hw, RX_INCLUDES_FCS);
-	ieee80211_hw_set(hw, HOST_BROADCAST_PS_BUFFERING);
-	ieee80211_hw_set(hw, SUPPORT_FAST_XMIT);
-	ieee80211_hw_set(hw, SUPPORTS_CLONED_SKBS);
+	hw->flags = IEEE80211_HW_RX_INCLUDES_FCS |
+		IEEE80211_HW_HOST_BROADCAST_PS_BUFFERING |
+		IEEE80211_HW_SIGNAL_DBM |
+		IEEE80211_HW_PS_NULLFUNC_STACK |
+		IEEE80211_HW_SPECTRUM_MGMT |
+		IEEE80211_HW_REPORTS_TX_ACK_STATUS |
+		IEEE80211_HW_SUPPORTS_RC_TABLE |
+		IEEE80211_HW_SUPPORTS_HT_CCK_RATES;
 
 	if (ath9k_ps_enable)
-		ieee80211_hw_set(hw, SUPPORTS_PS);
+		hw->flags |= IEEE80211_HW_SUPPORTS_PS;
 
 	if (sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_HT) {
-		ieee80211_hw_set(hw, AMPDU_AGGREGATION);
+		hw->flags |= IEEE80211_HW_AMPDU_AGGREGATION;
 
 		if (AR_SREV_9280_20_OR_LATER(ah))
 			hw->radiotap_mcs_details |=
@@ -882,31 +726,25 @@ static void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 	}
 
 	if (AR_SREV_9160_10_OR_LATER(sc->sc_ah) || ath9k_modparam_nohwcrypt)
-		ieee80211_hw_set(hw, MFP_CAPABLE);
+		hw->flags |= IEEE80211_HW_MFP_CAPABLE;
 
-	hw->wiphy->features |= NL80211_FEATURE_ACTIVE_MONITOR |
-			       NL80211_FEATURE_AP_MODE_CHAN_WIDTH_CHANGE |
-			       NL80211_FEATURE_P2P_GO_CTWIN;
+	hw->wiphy->features |= (NL80211_FEATURE_ACTIVE_MONITOR |
+				NL80211_FEATURE_AP_MODE_CHAN_WIDTH_CHANGE);
 
-	if (!IS_ENABLED(CONFIG_ATH9K_TX99)) {
+	if (!config_enabled(CONFIG_ATH9K_TX99)) {
 		hw->wiphy->interface_modes =
 			BIT(NL80211_IFTYPE_P2P_GO) |
 			BIT(NL80211_IFTYPE_P2P_CLIENT) |
 			BIT(NL80211_IFTYPE_AP) |
 			BIT(NL80211_IFTYPE_STATION) |
 			BIT(NL80211_IFTYPE_ADHOC) |
-			BIT(NL80211_IFTYPE_MESH_POINT) |
-#ifdef CONFIG_WIRELESS_WDS
-			BIT(NL80211_IFTYPE_WDS) |
-#endif
-			BIT(NL80211_IFTYPE_OCB);
-
-		if (ath9k_is_chanctx_enabled())
-			hw->wiphy->interface_modes |=
-					BIT(NL80211_IFTYPE_P2P_DEVICE);
-
+			BIT(NL80211_IFTYPE_MESH_POINT);
 		hw->wiphy->iface_combinations = if_comb;
-		hw->wiphy->n_iface_combinations = ARRAY_SIZE(if_comb);
+		if (!ath9k_use_chanctx) {
+			hw->wiphy->n_iface_combinations = ARRAY_SIZE(if_comb);
+			hw->wiphy->interface_modes |= BIT(NL80211_IFTYPE_WDS);
+		} else
+			hw->wiphy->n_iface_combinations = 1;
 	}
 
 	hw->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
@@ -920,12 +758,10 @@ static void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 
 	hw->queues = 4;
 	hw->max_rates = 4;
-	hw->max_listen_interval = 10;
+	hw->max_listen_interval = 1;
 	hw->max_rate_tries = 10;
 	hw->sta_data_size = sizeof(struct ath_node);
 	hw->vif_data_size = sizeof(struct ath_vif);
-	hw->txq_data_size = sizeof(struct ath_atx_tid);
-	hw->extra_tx_headroom = 4;
 
 	hw->wiphy->available_antennas_rx = BIT(ah->caps.max_rxchains) - 1;
 	hw->wiphy->available_antennas_tx = BIT(ah->caps.max_txchains) - 1;
@@ -938,15 +774,12 @@ static void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 	sc->ant_tx = hw->wiphy->available_antennas_tx;
 
 	if (sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_2GHZ)
-		hw->wiphy->bands[NL80211_BAND_2GHZ] =
-			&common->sbands[NL80211_BAND_2GHZ];
+		hw->wiphy->bands[IEEE80211_BAND_2GHZ] =
+			&common->sbands[IEEE80211_BAND_2GHZ];
 	if (sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_5GHZ)
-		hw->wiphy->bands[NL80211_BAND_5GHZ] =
-			&common->sbands[NL80211_BAND_5GHZ];
+		hw->wiphy->bands[IEEE80211_BAND_5GHZ] =
+			&common->sbands[IEEE80211_BAND_5GHZ];
 
-#ifdef CONFIG_ATH9K_CHANNEL_CONTEXT
-	ath9k_set_mcc_capab(sc, hw);
-#endif
 	ath9k_init_wow(hw);
 	ath9k_cmn_reload_chainmask(ah);
 
@@ -970,6 +803,9 @@ int ath9k_init_device(u16 devid, struct ath_softc *sc,
 	ah = sc->sc_ah;
 	common = ath9k_hw_common(ah);
 	ath9k_set_hw_capab(sc, hw);
+
+	/* Will be cleared in ath9k_start() */
+	set_bit(ATH_OP_INVALID, &common->op_flags);
 
 	/* Initialize regulatory */
 	error = ath_regd_init(&common->regulatory, sc->hw->wiphy,
@@ -1040,7 +876,9 @@ static void ath9k_deinit_softc(struct ath_softc *sc)
 {
 	int i = 0;
 
-	ath9k_deinit_p2p(sc);
+	if (sc->p2p_ps_timer)
+		ath_gen_timer_free(sc->sc_ah, sc->p2p_ps_timer);
+
 	ath9k_deinit_btcoex(sc);
 
 	for (i = 0; i < ATH9K_NUM_TX_QUEUES; i++)
@@ -1067,7 +905,6 @@ void ath9k_deinit_device(struct ath_softc *sc)
 	ath9k_ps_restore(sc);
 
 	ath9k_deinit_debug(sc);
-	ath9k_deinit_wow(hw);
 	ieee80211_unregister_hw(hw);
 	ath_rx_cleanup(sc);
 	ath9k_deinit_softc(sc);

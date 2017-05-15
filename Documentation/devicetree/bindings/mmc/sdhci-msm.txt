@@ -17,7 +17,6 @@ Required properties:
 	"iface" - Main peripheral bus clock (PCLK/HCLK - AHB Bus clock) (required)
 	"core"	- SDC MMC clock (MCLK) (required)
 	"bus"	- SDCC bus voter clock (optional)
-	"xo"	- TCXO clock (optional)
 
 Example:
 
@@ -28,8 +27,8 @@ Example:
 		bus-width = <8>;
 		non-removable;
 
-		vmmc-supply = <&pm8941_l20>;
-		vqmmc-supply = <&pm8941_s3>;
+		vmmc = <&pm8941_l20>;
+		vqmmc = <&pm8941_s3>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&sdc1_clk &sdc1_cmd &sdc1_data>;
@@ -45,8 +44,8 @@ Example:
 		bus-width = <4>;
 		cd-gpios = <&msmgpio 62 0x1>;
 
-		vmmc-supply = <&pm8941_l21>;
-		vqmmc-supply = <&pm8941_l13>;
+		vmmc = <&pm8941_l21>;
+		vqmmc = <&pm8941_l13>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&sdc2_clk &sdc2_cmd &sdc2_data>;

@@ -230,11 +230,12 @@ static int mt2131_init(struct dvb_frontend *fe)
 	return ret;
 }
 
-static void mt2131_release(struct dvb_frontend *fe)
+static int mt2131_release(struct dvb_frontend *fe)
 {
 	dprintk(1, "%s()\n", __func__);
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
+	return 0;
 }
 
 static const struct dvb_tuner_ops mt2131_tuner_ops = {
@@ -293,3 +294,8 @@ EXPORT_SYMBOL(mt2131_attach);
 MODULE_AUTHOR("Steven Toth");
 MODULE_DESCRIPTION("Microtune MT2131 silicon tuner driver");
 MODULE_LICENSE("GPL");
+
+/*
+ * Local variables:
+ * c-basic-offset: 8
+ */

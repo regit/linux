@@ -100,7 +100,7 @@ static int gx_fix;
 #include <linux/ethtool.h>
 #include <linux/crc32.h>
 #include <linux/bitops.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/processor.h>		/* Processor type for cache alignment. */
 #include <asm/unaligned.h>
 #include <asm/io.h>
@@ -236,7 +236,7 @@ static const struct pci_id_info pci_id_tbl[] = {
 	{ }
 };
 
-static const struct pci_device_id yellowfin_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(yellowfin_pci_tbl) = {
 	{ 0x1000, 0x0702, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ 0x1000, 0x0701, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1 },
 	{ }
@@ -360,6 +360,7 @@ static const struct net_device_ops netdev_ops = {
 	.ndo_stop 		= yellowfin_close,
 	.ndo_start_xmit 	= yellowfin_start_xmit,
 	.ndo_set_rx_mode	= set_rx_mode,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_do_ioctl 		= netdev_ioctl,
@@ -692,11 +693,11 @@ static void yellowfin_tx_timeout(struct net_device *dev)
 	/* Note: these should be KERN_DEBUG. */
 	if (yellowfin_debug) {
 		int i;
-		pr_warn("  Rx ring %p: ", yp->rx_ring);
+		pr_warning("  Rx ring %p: ", yp->rx_ring);
 		for (i = 0; i < RX_RING_SIZE; i++)
 			pr_cont(" %08x", yp->rx_ring[i].result_status);
 		pr_cont("\n");
-		pr_warn("  Tx ring %p: ", yp->tx_ring);
+		pr_warning("  Tx ring %p: ", yp->tx_ring);
 		for (i = 0; i < TX_RING_SIZE; i++)
 			pr_cont(" %04x /%08x",
 			       yp->tx_status[i].tx_errs,
@@ -713,7 +714,7 @@ static void yellowfin_tx_timeout(struct net_device *dev)
 	if (yp->cur_tx - yp->dirty_tx < TX_QUEUE_SIZE)
 		netif_wake_queue (dev);		/* Typical path */
 
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	dev->stats.tx_errors++;
 }
 

@@ -615,12 +615,13 @@ static int tm6000_prepare_isoc(struct tm6000_core *dev)
 		return -ENOMEM;
 	}
 
-	dprintk(dev, V4L2_DEBUG_QUEUE, "Allocating %d x %d packets (%d bytes) of %d bytes each to handle %u size\n",
+	dprintk(dev, V4L2_DEBUG_QUEUE, "Allocating %d x %d packets"
+		    " (%d bytes) of %d bytes each to handle %u size\n",
 		    max_packets, num_bufs, sb_size,
 		    dev->isoc_in.maxsize, size);
 
 
-	if (tm6000_alloc_urb_buffers(dev) < 0) {
+	if (!dev->urb_buffer && tm6000_alloc_urb_buffers(dev) < 0) {
 		tm6000_err("cannot allocate memory for urb buffers\n");
 
 		/* call free, as some buffers might have been allocated */
@@ -634,6 +635,7 @@ static int tm6000_prepare_isoc(struct tm6000_core *dev)
 	for (i = 0; i < dev->isoc_ctl.num_bufs; i++) {
 		urb = usb_alloc_urb(max_packets, GFP_KERNEL);
 		if (!urb) {
+			tm6000_err("cannot alloc isoc_ctl.urb %i\n", i);
 			tm6000_uninit_isoc(dev);
 			usb_free_urb(urb);
 			return -ENOMEM;
@@ -712,7 +714,8 @@ static void free_buffer(struct videobuf_queue *vq, struct tm6000_buffer *buf)
 	struct tm6000_core   *dev = fh->dev;
 	unsigned long flags;
 
-	BUG_ON(in_interrupt());
+	if (in_interrupt())
+		BUG();
 
 	/* We used to wait for the buffer to finish here, but this didn't work
 	   because, as we were keeping the state as VIDEOBUF_QUEUED,
@@ -915,6 +918,7 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 		(f->fmt.pix.width * fh->fmt->depth) >> 3;
 	f->fmt.pix.sizeimage =
 		f->fmt.pix.height * f->fmt.pix.bytesperline;
+	f->fmt.pix.priv = 0;
 
 	return 0;
 }
@@ -938,8 +942,8 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 
 	fmt = format_by_fourcc(f->fmt.pix.pixelformat);
 	if (NULL == fmt) {
-		dprintk(dev, 2, "Fourcc format (0x%08x) invalid.\n",
-			f->fmt.pix.pixelformat);
+		dprintk(dev, V4L2_DEBUG_IOCTL_ARG, "Fourcc format (0x%08x)"
+				" invalid.\n", f->fmt.pix.pixelformat);
 		return -EINVAL;
 	}
 
@@ -955,6 +959,7 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.width &= ~0x01;
 
 	f->fmt.pix.field = field;
+	f->fmt.pix.priv = 0;
 
 	f->fmt.pix.bytesperline =
 		(f->fmt.pix.width * fmt->depth) >> 3;
@@ -1365,13 +1370,14 @@ static int __tm6000_open(struct file *file)
 	fh->width = dev->width;
 	fh->height = dev->height;
 
-	dprintk(dev, V4L2_DEBUG_OPEN, "Open: fh=0x%08lx, dev=0x%08lx, dev->vidq=0x%08lx\n",
+	dprintk(dev, V4L2_DEBUG_OPEN, "Open: fh=0x%08lx, dev=0x%08lx, "
+						"dev->vidq=0x%08lx\n",
 			(unsigned long)fh, (unsigned long)dev,
 			(unsigned long)&dev->vidq);
-	dprintk(dev, V4L2_DEBUG_OPEN, "Open: list_empty queued=%d\n",
-		list_empty(&dev->vidq.queued));
-	dprintk(dev, V4L2_DEBUG_OPEN, "Open: list_empty active=%d\n",
-		list_empty(&dev->vidq.active));
+	dprintk(dev, V4L2_DEBUG_OPEN, "Open: list_empty "
+				"queued=%d\n", list_empty(&dev->vidq.queued));
+	dprintk(dev, V4L2_DEBUG_OPEN, "Open: list_empty "
+				"active=%d\n", list_empty(&dev->vidq.active));
 
 	/* initialize hardware on analog mode */
 	rc = tm6000_init_analog_mode(dev);
@@ -1572,7 +1578,7 @@ static struct video_device tm6000_template = {
 	.name		= "tm6000",
 	.fops           = &tm6000_fops,
 	.ioctl_ops      = &video_ioctl_ops,
-	.release	= video_device_release_empty,
+	.release	= video_device_release,
 	.tvnorms        = TM6000_STD,
 };
 
@@ -1605,19 +1611,27 @@ static struct video_device tm6000_radio_template = {
  * ------------------------------------------------------------------
  */
 
-static void vdev_init(struct tm6000_core *dev,
-		struct video_device *vfd,
+static struct video_device *vdev_init(struct tm6000_core *dev,
 		const struct video_device
 		*template, const char *type_name)
 {
+	struct video_device *vfd;
+
+	vfd = video_device_alloc();
+	if (NULL == vfd)
+		return NULL;
+
 	*vfd = *template;
 	vfd->v4l2_dev = &dev->v4l2_dev;
-	vfd->release = video_device_release_empty;
+	vfd->release = video_device_release;
+	vfd->debug = tm6000_debug;
 	vfd->lock = &dev->lock;
+	set_bit(V4L2_FL_USE_FH_PRIO, &vfd->flags);
 
 	snprintf(vfd->name, sizeof(vfd->name), "%s %s", dev->name, type_name);
 
 	video_set_drvdata(vfd, dev);
+	return vfd;
 }
 
 int tm6000_v4l2_register(struct tm6000_core *dev)
@@ -1648,46 +1662,62 @@ int tm6000_v4l2_register(struct tm6000_core *dev)
 	if (ret)
 		goto free_ctrl;
 
-	vdev_init(dev, &dev->vfd, &tm6000_template, "video");
+	dev->vfd = vdev_init(dev, &tm6000_template, "video");
 
-	dev->vfd.ctrl_handler = &dev->ctrl_handler;
+	if (!dev->vfd) {
+		printk(KERN_INFO "%s: can't register video device\n",
+		       dev->name);
+		ret = -ENOMEM;
+		goto free_ctrl;
+	}
+	dev->vfd->ctrl_handler = &dev->ctrl_handler;
 
 	/* init video dma queues */
 	INIT_LIST_HEAD(&dev->vidq.active);
 	INIT_LIST_HEAD(&dev->vidq.queued);
 
-	ret = video_register_device(&dev->vfd, VFL_TYPE_GRABBER, video_nr);
+	ret = video_register_device(dev->vfd, VFL_TYPE_GRABBER, video_nr);
 
 	if (ret < 0) {
 		printk(KERN_INFO "%s: can't register video device\n",
 		       dev->name);
+		video_device_release(dev->vfd);
+		dev->vfd = NULL;
 		goto free_ctrl;
 	}
 
 	printk(KERN_INFO "%s: registered device %s\n",
-	       dev->name, video_device_node_name(&dev->vfd));
+	       dev->name, video_device_node_name(dev->vfd));
 
 	if (dev->caps.has_radio) {
-		vdev_init(dev, &dev->radio_dev, &tm6000_radio_template,
+		dev->radio_dev = vdev_init(dev, &tm6000_radio_template,
 							   "radio");
-		dev->radio_dev.ctrl_handler = &dev->radio_ctrl_handler;
-		ret = video_register_device(&dev->radio_dev, VFL_TYPE_RADIO,
+		if (!dev->radio_dev) {
+			printk(KERN_INFO "%s: can't register radio device\n",
+			       dev->name);
+			ret = -ENXIO;
+			goto unreg_video;
+		}
+
+		dev->radio_dev->ctrl_handler = &dev->radio_ctrl_handler;
+		ret = video_register_device(dev->radio_dev, VFL_TYPE_RADIO,
 					    radio_nr);
 		if (ret < 0) {
 			printk(KERN_INFO "%s: can't register radio device\n",
 			       dev->name);
+			video_device_release(dev->radio_dev);
 			goto unreg_video;
 		}
 
 		printk(KERN_INFO "%s: registered device %s\n",
-		       dev->name, video_device_node_name(&dev->radio_dev));
+		       dev->name, video_device_node_name(dev->radio_dev));
 	}
 
 	printk(KERN_INFO "Trident TVMaster TM5600/TM6000/TM6010 USB2 board (Load status: %d)\n", ret);
 	return ret;
 
 unreg_video:
-	video_unregister_device(&dev->vfd);
+	video_unregister_device(dev->vfd);
 free_ctrl:
 	v4l2_ctrl_handler_free(&dev->ctrl_handler);
 	v4l2_ctrl_handler_free(&dev->radio_ctrl_handler);
@@ -1696,12 +1726,19 @@ free_ctrl:
 
 int tm6000_v4l2_unregister(struct tm6000_core *dev)
 {
-	video_unregister_device(&dev->vfd);
+	video_unregister_device(dev->vfd);
 
 	/* if URB buffers are still allocated free them now */
 	tm6000_free_urb_buffers(dev);
 
-	video_unregister_device(&dev->radio_dev);
+	if (dev->radio_dev) {
+		if (video_is_registered(dev->radio_dev))
+			video_unregister_device(dev->radio_dev);
+		else
+			video_device_release(dev->radio_dev);
+		dev->radio_dev = NULL;
+	}
+
 	return 0;
 }
 

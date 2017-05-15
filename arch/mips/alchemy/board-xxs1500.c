@@ -87,9 +87,9 @@ void __init board_setup(void)
 	alchemy_gpio2_enable();
 
 	/* Set multiple use pins (UART3/GPIO) to UART (it's used as UART too) */
-	pin_func  = alchemy_rdsys(AU1000_SYS_PINFUNC) & ~SYS_PF_UR3;
+	pin_func  = au_readl(SYS_PINFUNC) & ~SYS_PF_UR3;
 	pin_func |= SYS_PF_UR3;
-	alchemy_wrsys(pin_func, AU1000_SYS_PINFUNC);
+	au_writel(pin_func, SYS_PINFUNC);
 
 	/* Enable UART */
 	alchemy_uart_enable(AU1000_UART3_PHYS_ADDR);

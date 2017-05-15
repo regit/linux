@@ -252,15 +252,21 @@ static int tps65910_irq_init(struct tps65910 *tps65910, int irq,
 	}
 
 	tps65910->chip_irq = irq;
-	ret = devm_regmap_add_irq_chip(tps65910->dev, tps65910->regmap,
-				       tps65910->chip_irq,
-				       IRQF_ONESHOT, pdata->irq_base,
-				       tps6591x_irqs_chip, &tps65910->irq_data);
+	ret = regmap_add_irq_chip(tps65910->regmap, tps65910->chip_irq,
+		IRQF_ONESHOT, pdata->irq_base,
+		tps6591x_irqs_chip, &tps65910->irq_data);
 	if (ret < 0) {
 		dev_warn(tps65910->dev, "Failed to add irq_chip %d\n", ret);
 		tps65910->chip_irq = 0;
 	}
 	return ret;
+}
+
+static int tps65910_irq_exit(struct tps65910 *tps65910)
+{
+	if (tps65910->chip_irq > 0)
+		regmap_del_irq_chip(tps65910->chip_irq, tps65910->irq_data);
+	return 0;
 }
 
 static bool is_volatile_reg(struct device *dev, unsigned int reg)
@@ -381,7 +387,7 @@ static const struct of_device_id tps65910_of_match[] = {
 MODULE_DEVICE_TABLE(of, tps65910_of_match);
 
 static struct tps65910_board *tps65910_parse_dt(struct i2c_client *client,
-						unsigned long *chip_id)
+						int *chip_id)
 {
 	struct device_node *np = client->dev.of_node;
 	struct tps65910_board *board_info;
@@ -395,7 +401,7 @@ static struct tps65910_board *tps65910_parse_dt(struct i2c_client *client,
 		return NULL;
 	}
 
-	*chip_id  = (unsigned long)match->data;
+	*chip_id  = (int)match->data;
 
 	board_info = devm_kzalloc(&client->dev, sizeof(*board_info),
 			GFP_KERNEL);
@@ -425,7 +431,7 @@ static struct tps65910_board *tps65910_parse_dt(struct i2c_client *client,
 #else
 static inline
 struct tps65910_board *tps65910_parse_dt(struct i2c_client *client,
-					 unsigned long *chip_id)
+					 int *chip_id)
 {
 	return NULL;
 }
@@ -447,14 +453,14 @@ static void tps65910_power_off(void)
 }
 
 static int tps65910_i2c_probe(struct i2c_client *i2c,
-			      const struct i2c_device_id *id)
+					const struct i2c_device_id *id)
 {
 	struct tps65910 *tps65910;
 	struct tps65910_board *pmic_plat_data;
 	struct tps65910_board *of_pmic_plat_data = NULL;
 	struct tps65910_platform_data *init_data;
-	unsigned long chip_id = id->driver_data;
 	int ret = 0;
+	int chip_id = id->driver_data;
 
 	pmic_plat_data = dev_get_platdata(&i2c->dev);
 
@@ -480,11 +486,6 @@ static int tps65910_i2c_probe(struct i2c_client *i2c,
 	tps65910->i2c_client = i2c;
 	tps65910->id = chip_id;
 
-	/* Work around silicon erratum SWCZ010: the tps65910 may miss the
-	 * first I2C transfer. So issue a dummy transfer before the first
-	 * real transfer.
-	 */
-	i2c_master_send(i2c, "", 1);
 	tps65910->regmap = devm_regmap_init_i2c(i2c, &tps65910_regmap_config);
 	if (IS_ERR(tps65910->regmap)) {
 		ret = PTR_ERR(tps65910->regmap);
@@ -504,16 +505,27 @@ static int tps65910_i2c_probe(struct i2c_client *i2c,
 		pm_power_off = tps65910_power_off;
 	}
 
-	ret = devm_mfd_add_devices(tps65910->dev, -1,
-				   tps65910s, ARRAY_SIZE(tps65910s),
-				   NULL, 0,
-				   regmap_irq_get_domain(tps65910->irq_data));
+	ret = mfd_add_devices(tps65910->dev, -1,
+			      tps65910s, ARRAY_SIZE(tps65910s),
+			      NULL, 0,
+			      regmap_irq_get_domain(tps65910->irq_data));
 	if (ret < 0) {
 		dev_err(&i2c->dev, "mfd_add_devices failed: %d\n", ret);
+		tps65910_irq_exit(tps65910);
 		return ret;
 	}
 
 	return ret;
+}
+
+static int tps65910_i2c_remove(struct i2c_client *i2c)
+{
+	struct tps65910 *tps65910 = i2c_get_clientdata(i2c);
+
+	tps65910_irq_exit(tps65910);
+	mfd_remove_devices(tps65910->dev);
+
+	return 0;
 }
 
 static const struct i2c_device_id tps65910_i2c_id[] = {
@@ -527,9 +539,11 @@ MODULE_DEVICE_TABLE(i2c, tps65910_i2c_id);
 static struct i2c_driver tps65910_i2c_driver = {
 	.driver = {
 		   .name = "tps65910",
+		   .owner = THIS_MODULE,
 		   .of_match_table = of_match_ptr(tps65910_of_match),
 	},
 	.probe = tps65910_i2c_probe,
+	.remove = tps65910_i2c_remove,
 	.id_table = tps65910_i2c_id,
 };
 

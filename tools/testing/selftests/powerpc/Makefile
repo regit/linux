@@ -8,56 +8,27 @@ ifeq ($(ARCH),powerpc)
 
 GIT_VERSION = $(shell git describe --always --long --dirty || echo "unknown")
 
-CFLAGS := -std=gnu99 -Wall -O2 -Wall -Werror -DGIT_VERSION='"$(GIT_VERSION)"' -I$(CURDIR)/include $(CFLAGS)
+CC := $(CROSS_COMPILE)$(CC)
+CFLAGS := -Wall -O2 -flto -Wall -Werror -DGIT_VERSION='"$(GIT_VERSION)"' -I$(CURDIR) $(CFLAGS)
 
-export CFLAGS
+export CC CFLAGS
 
-SUB_DIRS = alignment		\
-	   benchmarks		\
-	   copyloops		\
-	   context_switch	\
-	   dscr			\
-	   mm			\
-	   pmu			\
-	   signal		\
-	   primitives		\
-	   stringloops		\
-	   switch_endian	\
-	   syscalls		\
-	   tm			\
-	   vphn         \
-	   math		\
-	   ptrace
+TARGETS = pmu copyloops mm tm
 
 endif
 
-all: $(SUB_DIRS)
+all:
+	@for TARGET in $(TARGETS); do \
+		$(MAKE) -C $$TARGET all; \
+	done;
 
-$(SUB_DIRS):
-	$(MAKE) -k -C $@ all
-
-include ../lib.mk
-
-override define RUN_TESTS
-	@for TARGET in $(SUB_DIRS); do \
+run_tests: all
+	@for TARGET in $(TARGETS); do \
 		$(MAKE) -C $$TARGET run_tests; \
 	done;
-endef
-
-override define INSTALL_RULE
-	@for TARGET in $(SUB_DIRS); do \
-		$(MAKE) -C $$TARGET install; \
-	done;
-endef
-
-override define EMIT_TESTS
-	@for TARGET in $(SUB_DIRS); do \
-		$(MAKE) -s -C $$TARGET emit_tests; \
-	done;
-endef
 
 clean:
-	@for TARGET in $(SUB_DIRS); do \
+	@for TARGET in $(TARGETS); do \
 		$(MAKE) -C $$TARGET clean; \
 	done;
 	rm -f tags
@@ -65,4 +36,4 @@ clean:
 tags:
 	find . -name '*.c' -o -name '*.h' | xargs ctags
 
-.PHONY: tags $(SUB_DIRS)
+.PHONY: all run_tests clean tags

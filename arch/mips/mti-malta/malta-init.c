@@ -14,8 +14,7 @@
 #include <linux/init.h>
 #include <linux/string.h>
 #include <linux/kernel.h>
-#include <linux/pci_regs.h>
-#include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 
 #include <asm/cacheflush.h>
 #include <asm/smp-ops.h>
@@ -76,7 +75,7 @@ static void __init console_config(void)
 	if ((strstr(fw_getcmdline(), "earlycon=")) == NULL) {
 		sprintf(console_string, "uart8250,io,0x3f8,%d%c%c", baud,
 			parity, bits);
-		setup_earlycon(console_string);
+		setup_early_serial8250_console(console_string);
 	}
 
 	if ((strstr(fw_getcmdline(), "console=")) == NULL) {
@@ -112,7 +111,7 @@ static void __init mips_ejtag_setup(void)
 	flush_icache_range((unsigned long)base, (unsigned long)base + 0x80);
 }
 
-phys_addr_t mips_cpc_default_phys_base(void)
+phys_t mips_cpc_default_phys_base(void)
 {
 	return CPC_BASE_ADDR;
 }
@@ -243,19 +242,23 @@ mips_pci_controller:
 			  MSC01_PCI_SWAP_BYTESWAP << MSC01_PCI_SWAP_MEM_SHF |
 			  MSC01_PCI_SWAP_BYTESWAP << MSC01_PCI_SWAP_BAR0_SHF);
 #endif
-
+#ifndef CONFIG_EVA
+		/* Fix up target memory mapping.  */
+		MSC_READ(MSC01_PCI_BAR0, mask);
+		MSC_WRITE(MSC01_PCI_P2SCMSKL, mask & MSC01_PCI_BAR0_SIZE_MSK);
+#else
 		/*
 		 * Setup the Malta max (2GB) memory for PCI DMA in host bridge
-		 * in transparent addressing mode.
+		 * in transparent addressing mode, starting from 0x80000000.
 		 */
-		mask = PHYS_OFFSET | PCI_BASE_ADDRESS_MEM_PREFETCH;
+		mask = PHYS_OFFSET | (1<<3);
 		MSC_WRITE(MSC01_PCI_BAR0, mask);
-		MSC_WRITE(MSC01_PCI_HEAD4, mask);
 
-		mask &= MSC01_PCI_BAR0_SIZE_MSK;
+		mask = PHYS_OFFSET;
+		MSC_WRITE(MSC01_PCI_HEAD4, mask);
 		MSC_WRITE(MSC01_PCI_P2SCMSKL, mask);
 		MSC_WRITE(MSC01_PCI_P2SCMAPL, mask);
-
+#endif
 		/* Don't handle target retries indefinitely.  */
 		if ((data & MSC01_PCI_CFG_MAXRTRY_MSK) ==
 		    MSC01_PCI_CFG_MAXRTRY_MSK)
@@ -290,6 +293,7 @@ mips_pci_controller:
 	console_config();
 #endif
 	/* Early detection of CMP support */
+	mips_cm_probe();
 	mips_cpc_probe();
 
 	if (!register_cps_smp_ops())
@@ -298,5 +302,4 @@ mips_pci_controller:
 		return;
 	if (!register_vsmp_smp_ops())
 		return;
-	register_up_smp_ops();
 }

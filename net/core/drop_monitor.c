@@ -59,7 +59,12 @@ struct dm_hw_stat_delta {
 	unsigned long last_drop_val;
 };
 
-static struct genl_family net_drop_monitor_family;
+static struct genl_family net_drop_monitor_family = {
+	.id             = GENL_ID_GENERATE,
+	.hdrsize        = 0,
+	.name           = "NET_DM",
+	.version        = 2,
+};
 
 static DEFINE_PER_CPU(struct per_cpu_dm_data, dm_cpu_data);
 
@@ -75,7 +80,6 @@ static struct sk_buff *reset_per_cpu_data(struct per_cpu_dm_data *data)
 	struct nlattr *nla;
 	struct sk_buff *skb;
 	unsigned long flags;
-	void *msg_header;
 
 	al = sizeof(struct net_dm_alert_msg);
 	al += dm_hit_limit * sizeof(struct net_dm_drop_point);
@@ -83,45 +87,25 @@ static struct sk_buff *reset_per_cpu_data(struct per_cpu_dm_data *data)
 
 	skb = genlmsg_new(al, GFP_KERNEL);
 
-	if (!skb)
-		goto err;
-
-	msg_header = genlmsg_put(skb, 0, 0, &net_drop_monitor_family,
-				 0, NET_DM_CMD_ALERT);
-	if (!msg_header) {
-		nlmsg_free(skb);
-		skb = NULL;
-		goto err;
+	if (skb) {
+		genlmsg_put(skb, 0, 0, &net_drop_monitor_family,
+				0, NET_DM_CMD_ALERT);
+		nla = nla_reserve(skb, NLA_UNSPEC,
+				  sizeof(struct net_dm_alert_msg));
+		msg = nla_data(nla);
+		memset(msg, 0, al);
+	} else {
+		mod_timer(&data->send_timer, jiffies + HZ / 10);
 	}
-	nla = nla_reserve(skb, NLA_UNSPEC,
-			  sizeof(struct net_dm_alert_msg));
-	if (!nla) {
-		nlmsg_free(skb);
-		skb = NULL;
-		goto err;
-	}
-	msg = nla_data(nla);
-	memset(msg, 0, al);
-	goto out;
 
-err:
-	mod_timer(&data->send_timer, jiffies + HZ / 10);
-out:
 	spin_lock_irqsave(&data->lock, flags);
 	swap(data->skb, skb);
 	spin_unlock_irqrestore(&data->lock, flags);
 
-	if (skb) {
-		struct nlmsghdr *nlh = (struct nlmsghdr *)skb->data;
-		struct genlmsghdr *gnlh = (struct genlmsghdr *)nlmsg_data(nlh);
-
-		genlmsg_end(skb, genlmsg_data(gnlh));
-	}
-
 	return skb;
 }
 
-static const struct genl_multicast_group dropmon_mcgrps[] = {
+static struct genl_multicast_group dropmon_mcgrps[] = {
 	{ .name = "events", },
 };
 
@@ -162,7 +146,7 @@ static void trace_drop_common(struct sk_buff *skb, void *location)
 	unsigned long flags;
 
 	local_irq_save(flags);
-	data = this_cpu_ptr(&dm_cpu_data);
+	data = &__get_cpu_var(dm_cpu_data);
 	spin_lock(&data->lock);
 	dskb = data->skb;
 
@@ -203,8 +187,7 @@ static void trace_kfree_skb_hit(void *ignore, struct sk_buff *skb, void *locatio
 	trace_drop_common(skb, location);
 }
 
-static void trace_napi_poll_hit(void *ignore, struct napi_struct *napi,
-				int work, int budget)
+static void trace_napi_poll_hit(void *ignore, struct napi_struct *napi)
 {
 	struct dm_hw_stat_delta *new_stat;
 
@@ -306,8 +289,10 @@ static int net_dm_cmd_trace(struct sk_buff *skb,
 	switch (info->genlhdr->cmd) {
 	case NET_DM_CMD_START:
 		return set_all_monitor_traces(TRACE_ON);
+		break;
 	case NET_DM_CMD_STOP:
 		return set_all_monitor_traces(TRACE_OFF);
+		break;
 	}
 
 	return -ENOTSUPP;
@@ -367,17 +352,6 @@ static const struct genl_ops dropmon_ops[] = {
 	},
 };
 
-static struct genl_family net_drop_monitor_family __ro_after_init = {
-	.hdrsize        = 0,
-	.name           = "NET_DM",
-	.version        = 2,
-	.module		= THIS_MODULE,
-	.ops		= dropmon_ops,
-	.n_ops		= ARRAY_SIZE(dropmon_ops),
-	.mcgrps		= dropmon_mcgrps,
-	.n_mcgrps	= ARRAY_SIZE(dropmon_mcgrps),
-};
-
 static struct notifier_block dropmon_net_notifier = {
 	.notifier_call = dropmon_net_event
 };
@@ -394,7 +368,8 @@ static int __init init_net_drop_monitor(void)
 		return -ENOSPC;
 	}
 
-	rc = genl_register_family(&net_drop_monitor_family);
+	rc = genl_register_family_with_ops_groups(&net_drop_monitor_family,
+						  dropmon_ops, dropmon_mcgrps);
 	if (rc) {
 		pr_err("Could not create drop monitor netlink family\n");
 		return rc;

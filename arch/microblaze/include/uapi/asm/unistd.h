@@ -398,20 +398,5 @@
 #define __NR_finit_module	380
 #define __NR_sched_setattr	381
 #define __NR_sched_getattr	382
-#define __NR_renameat2		383
-#define __NR_seccomp		384
-#define __NR_getrandom		385
-#define __NR_memfd_create	386
-#define __NR_bpf		387
-#define __NR_execveat		388
-#define __NR_userfaultfd	389
-#define __NR_membarrier		390
-#define __NR_mlock2		391
-#define __NR_copy_file_range	392
-#define __NR_preadv2		393
-#define __NR_pwritev2		394
-#define __NR_pkey_mprotect	395
-#define __NR_pkey_alloc		396
-#define __NR_pkey_free		397
 
 #endif /* _UAPI_ASM_MICROBLAZE_UNISTD_H */

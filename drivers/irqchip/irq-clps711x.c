@@ -11,7 +11,6 @@
 
 #include <linux/io.h>
 #include <linux/irq.h>
-#include <linux/irqchip.h>
 #include <linux/irqdomain.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
@@ -19,6 +18,8 @@
 
 #include <asm/exception.h>
 #include <asm/mach/irq.h>
+
+#include "irqchip.h"
 
 #define CLPS711X_INTSR1	(0x0240)
 #define CLPS711X_INTMR1	(0x0280)
@@ -75,20 +76,24 @@ static struct {
 
 static asmlinkage void __exception_irq_entry clps711x_irqh(struct pt_regs *regs)
 {
-	u32 irqstat;
+	u32 irqnr, irqstat;
 
 	do {
 		irqstat = readw_relaxed(clps711x_intc->intmr[0]) &
 			  readw_relaxed(clps711x_intc->intsr[0]);
-		if (irqstat)
-			handle_domain_irq(clps711x_intc->domain,
-					  fls(irqstat) - 1, regs);
+		if (irqstat) {
+			irqnr =	irq_find_mapping(clps711x_intc->domain,
+						 fls(irqstat) - 1);
+			handle_IRQ(irqnr, regs);
+		}
 
 		irqstat = readw_relaxed(clps711x_intc->intmr[1]) &
 			  readw_relaxed(clps711x_intc->intsr[1]);
-		if (irqstat)
-			handle_domain_irq(clps711x_intc->domain,
-					  fls(irqstat) - 1 + 16, regs);
+		if (irqstat) {
+			irqnr =	irq_find_mapping(clps711x_intc->domain,
+						 fls(irqstat) - 1 + 16);
+			handle_IRQ(irqnr, regs);
+		}
 	} while (irqstat);
 }
 
@@ -132,14 +137,14 @@ static int __init clps711x_intc_irq_map(struct irq_domain *h, unsigned int virq,
 					irq_hw_number_t hw)
 {
 	irq_flow_handler_t handler = handle_level_irq;
-	unsigned int flags = 0;
+	unsigned int flags = IRQF_VALID | IRQF_PROBE;
 
 	if (!clps711x_irqs[hw].flags)
 		return 0;
 
 	if (clps711x_irqs[hw].flags & CLPS711X_FLAG_FIQ) {
 		handler = handle_bad_irq;
-		flags |= IRQ_NOAUTOEN;
+		flags |= IRQF_NOAUTOEN;
 	} else if (clps711x_irqs[hw].eoi) {
 		handler = handle_fasteoi_irq;
 	}
@@ -149,7 +154,7 @@ static int __init clps711x_intc_irq_map(struct irq_domain *h, unsigned int virq,
 		writel_relaxed(0, clps711x_intc->base + clps711x_irqs[hw].eoi);
 
 	irq_set_chip_and_handler(virq, &clps711x_intc_chip, handler);
-	irq_modify_status(virq, IRQ_NOPROBE, flags);
+	set_irq_flags(virq, flags);
 
 	return 0;
 }
@@ -182,7 +187,7 @@ static int __init _clps711x_intc_init(struct device_node *np,
 	writel_relaxed(0, clps711x_intc->intmr[2]);
 
 	err = irq_alloc_descs(-1, 0, ARRAY_SIZE(clps711x_irqs), numa_node_id());
-	if (err < 0)
+	if (IS_ERR_VALUE(err))
 		goto out_iounmap;
 
 	clps711x_intc->ops.map = clps711x_intc_irq_map;
@@ -234,5 +239,5 @@ static int __init clps711x_intc_init_dt(struct device_node *np,
 
 	return _clps711x_intc_init(np, res.start, resource_size(&res));
 }
-IRQCHIP_DECLARE(clps711x, "cirrus,ep7209-intc", clps711x_intc_init_dt);
+IRQCHIP_DECLARE(clps711x, "cirrus,clps711x-intc", clps711x_intc_init_dt);
 #endif

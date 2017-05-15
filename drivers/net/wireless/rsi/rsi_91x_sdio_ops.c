@@ -201,12 +201,7 @@ static int rsi_load_ta_instructions(struct rsi_common *common)
 		return status;
 	}
 
-	/* Copy firmware into DMA-accessible memory */
 	fw = kmemdup(fw_entry->data, fw_entry->size, GFP_KERNEL);
-	if (!fw) {
-		status = -ENOMEM;
-		goto out;
-	}
 	len = fw_entry->size;
 
 	if (len % 4)
@@ -218,9 +213,6 @@ static int rsi_load_ta_instructions(struct rsi_common *common)
 	rsi_dbg(INIT_ZONE, "%s: num blocks: %d\n", __func__, num_blocks);
 
 	status = rsi_copy_to_card(common, fw, len, num_blocks);
-	kfree(fw);
-
-out:
 	release_firmware(fw_entry);
 	return status;
 }
@@ -409,16 +401,14 @@ void rsi_interrupt_handler(struct rsi_hw *adapter)
 			case BUFFER_AVAILABLE:
 				dev->rx_info.watch_bufferfull_count = 0;
 				dev->rx_info.buffer_full = false;
-				dev->rx_info.semi_buffer_full = false;
 				dev->rx_info.mgmt_buffer_full = false;
 				rsi_sdio_ack_intr(common->priv,
 						  (1 << PKT_BUFF_AVAILABLE));
-				rsi_set_event(&common->tx_thread.event);
-
+				rsi_set_event((&common->tx_thread.event));
 				rsi_dbg(ISR_ZONE,
-					"%s: ==> BUFFER_AVAILABLE <==\n",
+					"%s: ==> BUFFER_AVILABLE <==\n",
 					__func__);
-				dev->rx_info.buf_available_counter++;
+				dev->rx_info.buf_avilable_counter++;
 				break;
 
 			case FIRMWARE_ASSERT_IND:

@@ -110,7 +110,7 @@ static int connbytes_mt_check(const struct xt_mtchk_param *par)
 	    sinfo->direction != XT_CONNBYTES_DIR_BOTH)
 		return -EINVAL;
 
-	ret = nf_ct_netns_get(par->net, par->family);
+	ret = nf_ct_l3proto_try_module_get(par->family);
 	if (ret < 0)
 		pr_info("cannot load conntrack support for proto=%u\n",
 			par->family);
@@ -120,7 +120,7 @@ static int connbytes_mt_check(const struct xt_mtchk_param *par)
 	 * accounting is enabled, so complain in the hope that someone notices.
 	 */
 	if (!nf_ct_acct_enabled(par->net)) {
-		pr_warn("Forcing CT accounting to be enabled\n");
+		pr_warning("Forcing CT accounting to be enabled\n");
 		nf_ct_set_acct(par->net, true);
 	}
 
@@ -129,7 +129,7 @@ static int connbytes_mt_check(const struct xt_mtchk_param *par)
 
 static void connbytes_mt_destroy(const struct xt_mtdtor_param *par)
 {
-	nf_ct_netns_put(par->net, par->family);
+	nf_ct_l3proto_module_put(par->family);
 }
 
 static struct xt_match connbytes_mt_reg __read_mostly = {

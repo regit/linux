@@ -37,7 +37,7 @@
 			compatible = "fixed-clock";
 			reg = <0>;
 			#clock-cells = <0>;
-			clock-frequency = <26000000>;
+			clock-frequency = <27000000>;
 		};
 	};
 
@@ -50,7 +50,7 @@
 			label = "Power Button";
 			gpios = <&gpio5 2 GPIO_ACTIVE_HIGH>;
 			linux,code = <116>; /* KEY_POWER */
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 	};
 
@@ -183,7 +183,7 @@
 };
 
 &esdhc1 {
-	cd-gpios = <&gpio3 24 GPIO_ACTIVE_LOW>;
+	cd-gpios = <&gpio3 24 GPIO_ACTIVE_HIGH>;
 	fsl,wp-controller;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_esdhc1>;
@@ -191,7 +191,7 @@
 };
 
 &esdhc2 {
-	cd-gpios = <&gpio3 25 GPIO_ACTIVE_LOW>;
+	cd-gpios = <&gpio3 25 GPIO_ACTIVE_HIGH>;
 	fsl,wp-controller;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_esdhc2>;
@@ -502,6 +502,7 @@
 };
 
 &ssi1 {
+	fsl,mode = "i2s-slave";
 	codec-handle = <&sgtl5000>;
 	status = "okay";
 };
@@ -513,21 +514,21 @@
 &uart1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart1>;
-	uart-has-rtscts;
+	fsl,uart-has-rtscts;
 	status = "okay";
 };
 
 &uart2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart2>;
-	uart-has-rtscts;
+	fsl,uart-has-rtscts;
 	status = "okay";
 };
 
 &uart3 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart3>;
-	uart-has-rtscts;
+	fsl,uart-has-rtscts;
 	status = "okay";
 };
 

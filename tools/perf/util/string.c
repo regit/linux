@@ -9,48 +9,78 @@
  */
 s64 perf_atoll(const char *str)
 {
-	s64 length;
-	char *p;
-	char c;
+	unsigned int i;
+	s64 length = -1, unit = 1;
 
 	if (!isdigit(str[0]))
 		goto out_err;
 
-	length = strtoll(str, &p, 10);
-	switch (c = *p++) {
-		case 'b': case 'B':
-			if (*p)
+	for (i = 1; i < strlen(str); i++) {
+		switch (str[i]) {
+		case 'B':
+		case 'b':
+			break;
+		case 'K':
+			if (str[i + 1] != 'B')
 				goto out_err;
-		case '\0':
-			return length;
+			else
+				goto kilo;
+		case 'k':
+			if (str[i + 1] != 'b')
+				goto out_err;
+kilo:
+			unit = K;
+			break;
+		case 'M':
+			if (str[i + 1] != 'B')
+				goto out_err;
+			else
+				goto mega;
+		case 'm':
+			if (str[i + 1] != 'b')
+				goto out_err;
+mega:
+			unit = K * K;
+			break;
+		case 'G':
+			if (str[i + 1] != 'B')
+				goto out_err;
+			else
+				goto giga;
+		case 'g':
+			if (str[i + 1] != 'b')
+				goto out_err;
+giga:
+			unit = K * K * K;
+			break;
+		case 'T':
+			if (str[i + 1] != 'B')
+				goto out_err;
+			else
+				goto tera;
+		case 't':
+			if (str[i + 1] != 'b')
+				goto out_err;
+tera:
+			unit = K * K * K * K;
+			break;
+		case '\0':	/* only specified figures */
+			unit = 1;
+			break;
 		default:
-			goto out_err;
-		/* two-letter suffices */
-		case 'k': case 'K':
-			length <<= 10;
+			if (!isdigit(str[i]))
+				goto out_err;
 			break;
-		case 'm': case 'M':
-			length <<= 20;
-			break;
-		case 'g': case 'G':
-			length <<= 30;
-			break;
-		case 't': case 'T':
-			length <<= 40;
-			break;
+		}
 	}
-	/* we want the cases to match */
-	if (islower(c)) {
-		if (strcmp(p, "b") != 0)
-			goto out_err;
-	} else {
-		if (strcmp(p, "B") != 0)
-			goto out_err;
-	}
-	return length;
+
+	length = atoll(str) * unit;
+	goto out;
 
 out_err:
-	return -1;
+	length = -1;
+out:
+	return length;
 }
 
 /*
@@ -193,8 +223,7 @@ error:
 }
 
 /* Glob/lazy pattern matching */
-static bool __match_glob(const char *str, const char *pat, bool ignore_space,
-			bool case_ins)
+static bool __match_glob(const char *str, const char *pat, bool ignore_space)
 {
 	while (*str && *pat && *pat != '*') {
 		if (ignore_space) {
@@ -220,13 +249,8 @@ static bool __match_glob(const char *str, const char *pat, bool ignore_space,
 				return false;
 		else if (*pat == '\\') /* Escaped char match as normal char */
 			pat++;
-		if (case_ins) {
-			if (tolower(*str) != tolower(*pat))
-				return false;
-		} else if (*str != *pat)
+		if (*str++ != *pat++)
 			return false;
-		str++;
-		pat++;
 	}
 	/* Check wild card */
 	if (*pat == '*') {
@@ -235,7 +259,7 @@ static bool __match_glob(const char *str, const char *pat, bool ignore_space,
 		if (!*pat)	/* Tail wild card matches all */
 			return true;
 		while (*str)
-			if (__match_glob(str++, pat, ignore_space, case_ins))
+			if (__match_glob(str++, pat, ignore_space))
 				return true;
 	}
 	return !*str && !*pat;
@@ -255,12 +279,7 @@ static bool __match_glob(const char *str, const char *pat, bool ignore_space,
  */
 bool strglobmatch(const char *str, const char *pat)
 {
-	return __match_glob(str, pat, false, false);
-}
-
-bool strglobmatch_nocase(const char *str, const char *pat)
-{
-	return __match_glob(str, pat, false, true);
+	return __match_glob(str, pat, false);
 }
 
 /**
@@ -273,7 +292,7 @@ bool strglobmatch_nocase(const char *str, const char *pat)
  */
 bool strlazymatch(const char *str, const char *pat)
 {
-	return __match_glob(str, pat, true, false);
+	return __match_glob(str, pat, true);
 }
 
 /**
@@ -353,41 +372,42 @@ char *rtrim(char *s)
 	return s;
 }
 
-char *asprintf_expr_inout_ints(const char *var, bool in, size_t nints, int *ints)
+/**
+ * memdup - duplicate region of memory
+ * @src: memory region to duplicate
+ * @len: memory region length
+ */
+void *memdup(const void *src, size_t len)
 {
-	/*
-	 * FIXME: replace this with an expression using log10() when we
-	 * find a suitable implementation, maybe the one in the dvb drivers...
-	 *
-	 * "%s == %d || " = log10(MAXINT) * 2 + 8 chars for the operators
-	 */
-	size_t size = nints * 28 + 1; /* \0 */
-	size_t i, printed = 0;
-	char *expr = malloc(size);
+	void *p;
 
-	if (expr) {
-		const char *or_and = "||", *eq_neq = "==";
-		char *e = expr;
+	p = malloc(len);
+	if (p)
+		memcpy(p, src, len);
 
-		if (!in) {
-			or_and = "&&";
-			eq_neq = "!=";
-		}
+	return p;
+}
 
-		for (i = 0; i < nints; ++i) {
-			if (printed == size)
-				goto out_err_overflow;
-
-			if (i > 0)
-				printed += snprintf(e + printed, size - printed, " %s ", or_and);
-			printed += scnprintf(e + printed, size - printed,
-					     "%s %s %d", var, eq_neq, ints[i]);
-		}
+/**
+ * str_append - reallocate string and append another
+ * @s: pointer to string pointer
+ * @len: pointer to len (initialized)
+ * @a: string to append.
+ */
+int str_append(char **s, int *len, const char *a)
+{
+	int olen = *s ? strlen(*s) : 0;
+	int nlen = olen + strlen(a) + 1;
+	if (*len < nlen) {
+		*len = *len * 2;
+		if (*len < nlen)
+			*len = nlen;
+		*s = realloc(*s, *len);
+		if (!*s)
+			return -ENOMEM;
+		if (olen == 0)
+			**s = 0;
 	}
-
-	return expr;
-
-out_err_overflow:
-	free(expr);
-	return NULL;
+	strcat(*s, a);
+	return 0;
 }

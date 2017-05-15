@@ -159,7 +159,7 @@ sdram_calculate_timing(struct sdram_info *sd, u_int cpu_khz,
 	 * half speed or use delayed read latching (errata 13).
 	 */
 	if ((ns_to_cycles(sdram->tck, sd_khz) > 1) ||
-	    (read_cpuid_revision() < ARM_CPU_REV_SA1110_B2 && sd_khz < 62000))
+	    (CPU_REVISION < CPU_SA1110_B2 && sd_khz < 62000))
 		sd_khz /= 2;
 
 	sd->mdcnfg = MDCNFG & 0x007f007f;
@@ -349,7 +349,7 @@ static int __init sa1110_clk_init(void)
 			name = "K4S641632D";
 		if (machine_is_h3100())
 			name = "KM416S4030CT";
-		if (machine_is_jornada720() || machine_is_h3600())
+		if (machine_is_jornada720())
 			name = "K4S281632B-1H";
 		if (machine_is_nanoengine())
 			name = "MT48LC8M16A2TG-75";

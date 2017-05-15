@@ -48,8 +48,8 @@ static int drm_get_platform_dev(struct platform_device *platdev,
 	DRM_DEBUG("\n");
 
 	dev = drm_dev_alloc(driver, &platdev->dev);
-	if (IS_ERR(dev))
-		return PTR_ERR(dev);
+	if (!dev)
+		return -ENOMEM;
 
 	dev->platformdev = platdev;
 
@@ -68,6 +68,43 @@ err_free:
 	return ret;
 }
 
+static int drm_platform_set_busid(struct drm_device *dev, struct drm_master *master)
+{
+	int len, ret, id;
+
+	master->unique_len = 13 + strlen(dev->platformdev->name);
+	master->unique_size = master->unique_len;
+	master->unique = kmalloc(master->unique_len + 1, GFP_KERNEL);
+
+	if (master->unique == NULL)
+		return -ENOMEM;
+
+	id = dev->platformdev->id;
+
+	/* if only a single instance of the platform device, id will be
+	 * set to -1.. use 0 instead to avoid a funny looking bus-id:
+	 */
+	if (id == -1)
+		id = 0;
+
+	len = snprintf(master->unique, master->unique_len,
+			"platform:%s:%02d", dev->platformdev->name, id);
+
+	if (len > master->unique_len) {
+		DRM_ERROR("Unique buffer overflowed\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	return 0;
+err:
+	return ret;
+}
+
+static struct drm_bus drm_platform_bus = {
+	.set_busid = drm_platform_set_busid,
+};
+
 /**
  * drm_platform_init - Register a platform device with the DRM subsystem
  * @driver: DRM device driver
@@ -77,15 +114,13 @@ err_free:
  * subsystem, initializing a drm_device structure and calling the driver's
  * .load() function.
  *
- * NOTE: This function is deprecated, please use drm_dev_alloc() and
- * drm_dev_register() instead and remove your ->load() callback.
- *
  * Return: 0 on success or a negative error code on failure.
  */
 int drm_platform_init(struct drm_driver *driver, struct platform_device *platform_device)
 {
 	DRM_DEBUG("\n");
 
+	driver->bus = &drm_platform_bus;
 	return drm_get_platform_dev(platform_device, driver);
 }
 EXPORT_SYMBOL(drm_platform_init);

@@ -28,15 +28,14 @@
 static DEFINE_IDA(rng_index_ida);
 
 struct virtrng_info {
+	struct virtio_device *vdev;
 	struct hwrng hwrng;
 	struct virtqueue *vq;
-	struct completion have_data;
-	char name[25];
 	unsigned int data_avail;
-	int index;
+	struct completion have_data;
 	bool busy;
-	bool hwrng_register_done;
-	bool hwrng_removed;
+	char name[25];
+	int index;
 };
 
 static void random_recv_done(struct virtqueue *vq)
@@ -67,9 +66,6 @@ static int virtio_read(struct hwrng *rng, void *buf, size_t size, bool wait)
 {
 	int ret;
 	struct virtrng_info *vi = (struct virtrng_info *)rng->priv;
-
-	if (vi->hwrng_removed)
-		return -ENODEV;
 
 	if (!vi->busy) {
 		vi->busy = true;
@@ -108,8 +104,8 @@ static int probe_common(struct virtio_device *vdev)
 
 	vi->index = index = ida_simple_get(&rng_index_ida, 0, 0, GFP_KERNEL);
 	if (index < 0) {
-		err = index;
-		goto err_ida;
+		kfree(vi);
+		return index;
 	}
 	sprintf(vi->name, "virtio_rng.%d", index);
 	init_completion(&vi->have_data);
@@ -119,7 +115,6 @@ static int probe_common(struct virtio_device *vdev)
 		.cleanup = virtio_cleanup,
 		.priv = (unsigned long)vi,
 		.name = vi->name,
-		.quality = 1000,
 	};
 	vdev->priv = vi;
 
@@ -127,29 +122,30 @@ static int probe_common(struct virtio_device *vdev)
 	vi->vq = virtio_find_single_vq(vdev, random_recv_done, "input");
 	if (IS_ERR(vi->vq)) {
 		err = PTR_ERR(vi->vq);
-		goto err_find;
+		vi->vq = NULL;
+		kfree(vi);
+		ida_simple_remove(&rng_index_ida, index);
+		return err;
+	}
+
+	err = hwrng_register(&vi->hwrng);
+	if (err) {
+		vdev->config->del_vqs(vdev);
+		vi->vq = NULL;
+		kfree(vi);
+		ida_simple_remove(&rng_index_ida, index);
+		return err;
 	}
 
 	return 0;
-
-err_find:
-	ida_simple_remove(&rng_index_ida, index);
-err_ida:
-	kfree(vi);
-	return err;
 }
 
 static void remove_common(struct virtio_device *vdev)
 {
 	struct virtrng_info *vi = vdev->priv;
-
-	vi->hwrng_removed = true;
-	vi->data_avail = 0;
-	complete(&vi->have_data);
 	vdev->config->reset(vdev);
 	vi->busy = false;
-	if (vi->hwrng_register_done)
-		hwrng_unregister(&vi->hwrng);
+	hwrng_unregister(&vi->hwrng);
 	vdev->config->del_vqs(vdev);
 	ida_simple_remove(&rng_index_ida, vi->index);
 	kfree(vi);
@@ -163,16 +159,6 @@ static int virtrng_probe(struct virtio_device *vdev)
 static void virtrng_remove(struct virtio_device *vdev)
 {
 	remove_common(vdev);
-}
-
-static void virtrng_scan(struct virtio_device *vdev)
-{
-	struct virtrng_info *vi = vdev->priv;
-	int err;
-
-	err = hwrng_register(&vi->hwrng);
-	if (!err)
-		vi->hwrng_register_done = true;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -199,7 +185,6 @@ static struct virtio_driver virtio_rng_driver = {
 	.id_table =	id_table,
 	.probe =	virtrng_probe,
 	.remove =	virtrng_remove,
-	.scan =		virtrng_scan,
 #ifdef CONFIG_PM_SLEEP
 	.freeze =	virtrng_freeze,
 	.restore =	virtrng_restore,

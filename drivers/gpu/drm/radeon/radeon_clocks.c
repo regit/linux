@@ -29,7 +29,6 @@
 #include <drm/radeon_drm.h>
 #include "radeon_reg.h"
 #include "radeon.h"
-#include "radeon_asic.h"
 #include "atom.h"
 
 /* 10 khz */

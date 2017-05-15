@@ -37,12 +37,12 @@
 #include <asm/smp.h>
 #include <asm/mmu.h>
 #include <asm/pgtable.h>
+#include <asm/pci.h>
 #include <asm/iommu.h>
 #include <asm/btext.h>
 #include <asm/sections.h>
 #include <asm/machdep.h>
 #include <asm/opal.h>
-#include <asm/asm-prototypes.h>
 
 #include <linux/linux_logo.h>
 
@@ -390,7 +390,6 @@ static void __init prom_printf(const char *format, ...)
 			break;
 		}
 	}
-	va_end(args);
 }
 
 
@@ -461,14 +460,14 @@ static int __init prom_next_node(phandle *nodep)
 	}
 }
 
-static inline int prom_getprop(phandle node, const char *pname,
+static int inline prom_getprop(phandle node, const char *pname,
 			       void *value, size_t valuelen)
 {
 	return call_prom("getprop", 4, 1, node, ADDR(pname),
 			 (u32)(unsigned long) value, (u32) valuelen);
 }
 
-static inline int prom_getproplen(phandle node, const char *pname)
+static int inline prom_getproplen(phandle node, const char *pname)
 {
 	return call_prom("getproplen", 2, 1, node, ADDR(pname));
 }
@@ -635,216 +634,96 @@ static void __init early_cmdline_parse(void)
  *
  * See prom.h for the definition of the bits specified in the
  * architecture vector.
+ *
+ * Because the description vector contains a mix of byte and word
+ * values, we declare it as an unsigned char array, and use this
+ * macro to put word values in.
  */
+#define W(x)	((x) >> 24) & 0xff, ((x) >> 16) & 0xff, \
+		((x) >> 8) & 0xff, (x) & 0xff
 
-/* Firmware expects the value to be n - 1, where n is the # of vectors */
-#define NUM_VECTORS(n)		((n) - 1)
+unsigned char ibm_architecture_vec[] = {
+	W(0xfffe0000), W(0x003a0000),	/* POWER5/POWER5+ */
+	W(0xffff0000), W(0x003e0000),	/* POWER6 */
+	W(0xffff0000), W(0x003f0000),	/* POWER7 */
+	W(0xffff0000), W(0x004b0000),	/* POWER8E */
+	W(0xffff0000), W(0x004d0000),	/* POWER8 */
+	W(0xffffffff), W(0x0f000004),	/* all 2.07-compliant */
+	W(0xffffffff), W(0x0f000003),	/* all 2.06-compliant */
+	W(0xffffffff), W(0x0f000002),	/* all 2.05-compliant */
+	W(0xfffffffe), W(0x0f000001),	/* all 2.04-compliant and earlier */
+	6 - 1,				/* 6 option vectors */
 
-/*
- * Firmware expects 1 + n - 2, where n is the length of the option vector in
- * bytes. The 1 accounts for the length byte itself, the - 2 .. ?
- */
-#define VECTOR_LENGTH(n)	(1 + (n) - 2)
+	/* option vector 1: processor architectures supported */
+	3 - 2,				/* length */
+	0,				/* don't ignore, don't halt */
+	OV1_PPC_2_00 | OV1_PPC_2_01 | OV1_PPC_2_02 | OV1_PPC_2_03 |
+	OV1_PPC_2_04 | OV1_PPC_2_05 | OV1_PPC_2_06 | OV1_PPC_2_07,
 
-struct option_vector1 {
-	u8 byte1;
-	u8 arch_versions;
-} __packed;
-
-struct option_vector2 {
-	u8 byte1;
-	__be16 reserved;
-	__be32 real_base;
-	__be32 real_size;
-	__be32 virt_base;
-	__be32 virt_size;
-	__be32 load_base;
-	__be32 min_rma;
-	__be32 min_load;
-	u8 min_rma_percent;
-	u8 max_pft_size;
-} __packed;
-
-struct option_vector3 {
-	u8 byte1;
-	u8 byte2;
-} __packed;
-
-struct option_vector4 {
-	u8 byte1;
-	u8 min_vp_cap;
-} __packed;
-
-struct option_vector5 {
-	u8 byte1;
-	u8 byte2;
-	u8 byte3;
-	u8 cmo;
-	u8 associativity;
-	u8 bin_opts;
-	u8 micro_checkpoint;
-	u8 reserved0;
-	__be32 max_cpus;
-	__be16 papr_level;
-	__be16 reserved1;
-	u8 platform_facilities;
-	u8 reserved2;
-	__be16 reserved3;
-	u8 subprocessors;
-} __packed;
-
-struct option_vector6 {
-	u8 reserved;
-	u8 secondary_pteg;
-	u8 os_name;
-} __packed;
-
-struct ibm_arch_vec {
-	struct { u32 mask, val; } pvrs[10];
-
-	u8 num_vectors;
-
-	u8 vec1_len;
-	struct option_vector1 vec1;
-
-	u8 vec2_len;
-	struct option_vector2 vec2;
-
-	u8 vec3_len;
-	struct option_vector3 vec3;
-
-	u8 vec4_len;
-	struct option_vector4 vec4;
-
-	u8 vec5_len;
-	struct option_vector5 vec5;
-
-	u8 vec6_len;
-	struct option_vector6 vec6;
-} __packed;
-
-struct ibm_arch_vec __cacheline_aligned ibm_architecture_vec = {
-	.pvrs = {
-		{
-			.mask = cpu_to_be32(0xfffe0000), /* POWER5/POWER5+ */
-			.val  = cpu_to_be32(0x003a0000),
-		},
-		{
-			.mask = cpu_to_be32(0xffff0000), /* POWER6 */
-			.val  = cpu_to_be32(0x003e0000),
-		},
-		{
-			.mask = cpu_to_be32(0xffff0000), /* POWER7 */
-			.val  = cpu_to_be32(0x003f0000),
-		},
-		{
-			.mask = cpu_to_be32(0xffff0000), /* POWER8E */
-			.val  = cpu_to_be32(0x004b0000),
-		},
-		{
-			.mask = cpu_to_be32(0xffff0000), /* POWER8NVL */
-			.val  = cpu_to_be32(0x004c0000),
-		},
-		{
-			.mask = cpu_to_be32(0xffff0000), /* POWER8 */
-			.val  = cpu_to_be32(0x004d0000),
-		},
-		{
-			.mask = cpu_to_be32(0xffffffff), /* all 2.07-compliant */
-			.val  = cpu_to_be32(0x0f000004),
-		},
-		{
-			.mask = cpu_to_be32(0xffffffff), /* all 2.06-compliant */
-			.val  = cpu_to_be32(0x0f000003),
-		},
-		{
-			.mask = cpu_to_be32(0xffffffff), /* all 2.05-compliant */
-			.val  = cpu_to_be32(0x0f000002),
-		},
-		{
-			.mask = cpu_to_be32(0xfffffffe), /* all 2.04-compliant and earlier */
-			.val  = cpu_to_be32(0x0f000001),
-		},
-	},
-
-	.num_vectors = NUM_VECTORS(6),
-
-	.vec1_len = VECTOR_LENGTH(sizeof(struct option_vector1)),
-	.vec1 = {
-		.byte1 = 0,
-		.arch_versions = OV1_PPC_2_00 | OV1_PPC_2_01 | OV1_PPC_2_02 | OV1_PPC_2_03 |
-				 OV1_PPC_2_04 | OV1_PPC_2_05 | OV1_PPC_2_06 | OV1_PPC_2_07,
-	},
-
-	.vec2_len = VECTOR_LENGTH(sizeof(struct option_vector2)),
 	/* option vector 2: Open Firmware options supported */
-	.vec2 = {
-		.byte1 = OV2_REAL_MODE,
-		.reserved = 0,
-		.real_base = cpu_to_be32(0xffffffff),
-		.real_size = cpu_to_be32(0xffffffff),
-		.virt_base = cpu_to_be32(0xffffffff),
-		.virt_size = cpu_to_be32(0xffffffff),
-		.load_base = cpu_to_be32(0xffffffff),
-		.min_rma = cpu_to_be32(256),		/* 256MB min RMA */
-		.min_load = cpu_to_be32(0xffffffff),	/* full client load */
-		.min_rma_percent = 0,	/* min RMA percentage of total RAM */
-		.max_pft_size = 48,	/* max log_2(hash table size) */
-	},
+	34 - 2,				/* length */
+	OV2_REAL_MODE,
+	0, 0,
+	W(0xffffffff),			/* real_base */
+	W(0xffffffff),			/* real_size */
+	W(0xffffffff),			/* virt_base */
+	W(0xffffffff),			/* virt_size */
+	W(0xffffffff),			/* load_base */
+	W(256),				/* 256MB min RMA */
+	W(0xffffffff),			/* full client load */
+	0,				/* min RMA percentage of total RAM */
+	48,				/* max log_2(hash table size) */
 
-	.vec3_len = VECTOR_LENGTH(sizeof(struct option_vector3)),
 	/* option vector 3: processor options supported */
-	.vec3 = {
-		.byte1 = 0,			/* don't ignore, don't halt */
-		.byte2 = OV3_FP | OV3_VMX | OV3_DFP,
-	},
+	3 - 2,				/* length */
+	0,				/* don't ignore, don't halt */
+	OV3_FP | OV3_VMX | OV3_DFP,
 
-	.vec4_len = VECTOR_LENGTH(sizeof(struct option_vector4)),
 	/* option vector 4: IBM PAPR implementation */
-	.vec4 = {
-		.byte1 = 0,			/* don't halt */
-		.min_vp_cap = OV4_MIN_ENT_CAP,	/* minimum VP entitled capacity */
-	},
+	3 - 2,				/* length */
+	0,				/* don't halt */
+	OV4_MIN_ENT_CAP,		/* minimum VP entitled capacity */
 
-	.vec5_len = VECTOR_LENGTH(sizeof(struct option_vector5)),
 	/* option vector 5: PAPR/OF options */
-	.vec5 = {
-		.byte1 = 0,				/* don't ignore, don't halt */
-		.byte2 = OV5_FEAT(OV5_LPAR) | OV5_FEAT(OV5_SPLPAR) | OV5_FEAT(OV5_LARGE_PAGES) |
-		OV5_FEAT(OV5_DRCONF_MEMORY) | OV5_FEAT(OV5_DONATE_DEDICATE_CPU) |
+	19 - 2,				/* length */
+	0,				/* don't ignore, don't halt */
+	OV5_FEAT(OV5_LPAR) | OV5_FEAT(OV5_SPLPAR) | OV5_FEAT(OV5_LARGE_PAGES) |
+	OV5_FEAT(OV5_DRCONF_MEMORY) | OV5_FEAT(OV5_DONATE_DEDICATE_CPU) |
 #ifdef CONFIG_PCI_MSI
-		/* PCIe/MSI support.  Without MSI full PCIe is not supported */
-		OV5_FEAT(OV5_MSI),
+	/* PCIe/MSI support.  Without MSI full PCIe is not supported */
+	OV5_FEAT(OV5_MSI),
 #else
-		0,
+	0,
 #endif
-		.byte3 = 0,
-		.cmo =
+	0,
 #ifdef CONFIG_PPC_SMLPAR
-		OV5_FEAT(OV5_CMO) | OV5_FEAT(OV5_XCMO),
+	OV5_FEAT(OV5_CMO) | OV5_FEAT(OV5_XCMO),
 #else
-		0,
+	0,
 #endif
-		.associativity = OV5_FEAT(OV5_TYPE1_AFFINITY) | OV5_FEAT(OV5_PRRN),
-		.bin_opts = 0,
-		.micro_checkpoint = 0,
-		.reserved0 = 0,
-		.max_cpus = cpu_to_be32(NR_CPUS),	/* number of cores supported */
-		.papr_level = 0,
-		.reserved1 = 0,
-		.platform_facilities = OV5_FEAT(OV5_PFO_HW_RNG) | OV5_FEAT(OV5_PFO_HW_ENCR) | OV5_FEAT(OV5_PFO_HW_842),
-		.reserved2 = 0,
-		.reserved3 = 0,
-		.subprocessors = 1,
-	},
-
+	OV5_FEAT(OV5_TYPE1_AFFINITY) | OV5_FEAT(OV5_PRRN),
+	0,
+	0,
+	0,
+	/* WARNING: The offset of the "number of cores" field below
+	 * must match by the macro below. Update the definition if
+	 * the structure layout changes.
+	 */
+#define IBM_ARCH_VEC_NRCORES_OFFSET	125
+	W(NR_CPUS),			/* number of cores supported */
+	0,
+	0,
+	0,
+	0,
+	OV5_FEAT(OV5_PFO_HW_RNG) | OV5_FEAT(OV5_PFO_HW_ENCR) |
+	OV5_FEAT(OV5_PFO_HW_842),
+	OV5_FEAT(OV5_SUB_PROCESSORS),
 	/* option vector 6: IBM PAPR hints */
-	.vec6_len = VECTOR_LENGTH(sizeof(struct option_vector6)),
-	.vec6 = {
-		.reserved = 0,
-		.secondary_pteg = 0,
-		.os_name = OV6_LINUX,
-	},
+	4 - 2,				/* length */
+	0,
+	0,
+	OV6_LINUX,
+
 };
 
 /* Old method - ELF header with PT_NOTE sections only works on BE */
@@ -980,6 +859,7 @@ static void __init prom_send_capabilities(void)
 	ihandle root;
 	prom_arg_t ret;
 	u32 cores;
+	unsigned char *ptcores;
 
 	root = call_prom("open", 1, 1, ADDR("/"));
 	if (root != 0) {
@@ -990,18 +870,37 @@ static void __init prom_send_capabilities(void)
 		 * divide NR_CPUS.
 		 */
 
-		cores = DIV_ROUND_UP(NR_CPUS, prom_count_smt_threads());
-		prom_printf("Max number of cores passed to firmware: %lu (NR_CPUS = %lu)\n",
-			    cores, NR_CPUS);
-
-		ibm_architecture_vec.vec5.max_cpus = cpu_to_be32(cores);
+		/* The core value may start at an odd address. If such a word
+		 * access is made at a cache line boundary, this leads to an
+		 * exception which may not be handled at this time.
+		 * Forcing a per byte access to avoid exception.
+		 */
+		ptcores = &ibm_architecture_vec[IBM_ARCH_VEC_NRCORES_OFFSET];
+		cores = 0;
+		cores |= ptcores[0] << 24;
+		cores |= ptcores[1] << 16;
+		cores |= ptcores[2] << 8;
+		cores |= ptcores[3];
+		if (cores != NR_CPUS) {
+			prom_printf("WARNING ! "
+				    "ibm_architecture_vec structure inconsistent: %lu!\n",
+				    cores);
+		} else {
+			cores = DIV_ROUND_UP(NR_CPUS, prom_count_smt_threads());
+			prom_printf("Max number of cores passed to firmware: %lu (NR_CPUS = %lu)\n",
+				    cores, NR_CPUS);
+			ptcores[0] = (cores >> 24) & 0xff;
+			ptcores[1] = (cores >> 16) & 0xff;
+			ptcores[2] = (cores >> 8) & 0xff;
+			ptcores[3] = cores & 0xff;
+		}
 
 		/* try calling the ibm,client-architecture-support method */
 		prom_printf("Calling ibm,client-architecture-support...");
 		if (call_prom_ret("call-method", 3, 2, &ret,
 				  ADDR("ibm,client-architecture-support"),
 				  root,
-				  ADDR(&ibm_architecture_vec)) == 0) {
+				  ADDR(ibm_architecture_vec)) == 0) {
 			/* the call exists... */
 			if (ret)
 				prom_printf("\nWARNING: ibm,client-architecture"
@@ -1518,45 +1417,27 @@ static void __init prom_instantiate_sml(void)
 {
 	phandle ibmvtpm_node;
 	ihandle ibmvtpm_inst;
-	u32 entry = 0, size = 0, succ = 0;
+	u32 entry = 0, size = 0;
 	u64 base;
-	__be32 val;
 
 	prom_debug("prom_instantiate_sml: start...\n");
 
-	ibmvtpm_node = call_prom("finddevice", 1, 1, ADDR("/vdevice/vtpm"));
+	ibmvtpm_node = call_prom("finddevice", 1, 1, ADDR("/ibm,vtpm"));
 	prom_debug("ibmvtpm_node: %x\n", ibmvtpm_node);
 	if (!PHANDLE_VALID(ibmvtpm_node))
 		return;
 
-	ibmvtpm_inst = call_prom("open", 1, 1, ADDR("/vdevice/vtpm"));
+	ibmvtpm_inst = call_prom("open", 1, 1, ADDR("/ibm,vtpm"));
 	if (!IHANDLE_VALID(ibmvtpm_inst)) {
 		prom_printf("opening vtpm package failed (%x)\n", ibmvtpm_inst);
 		return;
 	}
 
-	if (prom_getprop(ibmvtpm_node, "ibm,sml-efi-reformat-supported",
-			 &val, sizeof(val)) != PROM_ERROR) {
-		if (call_prom_ret("call-method", 2, 2, &succ,
-				  ADDR("reformat-sml-to-efi-alignment"),
-				  ibmvtpm_inst) != 0 || succ == 0) {
-			prom_printf("Reformat SML to EFI alignment failed\n");
-			return;
-		}
-
-		if (call_prom_ret("call-method", 2, 2, &size,
-				  ADDR("sml-get-allocated-size"),
-				  ibmvtpm_inst) != 0 || size == 0) {
-			prom_printf("SML get allocated size failed\n");
-			return;
-		}
-	} else {
-		if (call_prom_ret("call-method", 2, 2, &size,
-				  ADDR("sml-get-handover-size"),
-				  ibmvtpm_inst) != 0 || size == 0) {
-			prom_printf("SML get handover size failed\n");
-			return;
-		}
+	if (call_prom_ret("call-method", 2, 2, &size,
+			  ADDR("sml-get-handover-size"),
+			  ibmvtpm_inst) != 0 || size == 0) {
+		prom_printf("SML get handover size failed\n");
+		return;
 	}
 
 	base = alloc_down(size, PAGE_SIZE, 0);
@@ -1564,8 +1445,6 @@ static void __init prom_instantiate_sml(void)
 		prom_panic("Could not allocate memory for sml\n");
 
 	prom_printf("instantiating sml at 0x%x...", base);
-
-	memset((void *)base, 0, size);
 
 	if (call_prom_ret("call-method", 4, 2, &entry,
 			  ADDR("sml-handover"),
@@ -1577,9 +1456,9 @@ static void __init prom_instantiate_sml(void)
 
 	reserve_mem(base, size);
 
-	prom_setprop(ibmvtpm_node, "/vdevice/vtpm", "linux,sml-base",
+	prom_setprop(ibmvtpm_node, "/ibm,vtpm", "linux,sml-base",
 		     &base, sizeof(base));
-	prom_setprop(ibmvtpm_node, "/vdevice/vtpm", "linux,sml-size",
+	prom_setprop(ibmvtpm_node, "/ibm,vtpm", "linux,sml-size",
 		     &size, sizeof(size));
 
 	prom_debug("sml base     = 0x%x\n", base);
@@ -2731,86 +2610,6 @@ static void __init fixup_device_tree_efika(void)
 #define fixup_device_tree_efika()
 #endif
 
-#ifdef CONFIG_PPC_PASEMI_NEMO
-/*
- * CFE supplied on Nemo is broken in several ways, biggest
- * problem is that it reassigns ISA interrupts to unused mpic ints.
- * Add an interrupt-controller property for the io-bridge to use
- * and correct the ints so we can attach them to an irq_domain
- */
-static void __init fixup_device_tree_pasemi(void)
-{
-	u32 interrupts[2], parent, rval, val = 0;
-	char *name, *pci_name;
-	phandle iob, node;
-
-	/* Find the root pci node */
-	name = "/pxp@0,e0000000";
-	iob = call_prom("finddevice", 1, 1, ADDR(name));
-	if (!PHANDLE_VALID(iob))
-		return;
-
-	/* check if interrupt-controller node set yet */
-	if (prom_getproplen(iob, "interrupt-controller") !=PROM_ERROR)
-		return;
-
-	prom_printf("adding interrupt-controller property for SB600...\n");
-
-	prom_setprop(iob, name, "interrupt-controller", &val, 0);
-
-	pci_name = "/pxp@0,e0000000/pci@11";
-	node = call_prom("finddevice", 1, 1, ADDR(pci_name));
-	parent = ADDR(iob);
-
-	for( ; prom_next_node(&node); ) {
-		/* scan each node for one with an interrupt */
-		if (!PHANDLE_VALID(node))
-			continue;
-
-		rval = prom_getproplen(node, "interrupts");
-		if (rval == 0 || rval == PROM_ERROR)
-			continue;
-
-		prom_getprop(node, "interrupts", &interrupts, sizeof(interrupts));
-		if ((interrupts[0] < 212) || (interrupts[0] > 222))
-			continue;
-
-		/* found a node, update both interrupts and interrupt-parent */
-		if ((interrupts[0] >= 212) && (interrupts[0] <= 215))
-			interrupts[0] -= 203;
-		if ((interrupts[0] >= 216) && (interrupts[0] <= 220))
-			interrupts[0] -= 213;
-		if (interrupts[0] == 221)
-			interrupts[0] = 14;
-		if (interrupts[0] == 222)
-			interrupts[0] = 8;
-
-		prom_setprop(node, pci_name, "interrupts", interrupts,
-					sizeof(interrupts));
-		prom_setprop(node, pci_name, "interrupt-parent", &parent,
-					sizeof(parent));
-	}
-
-	/*
-	 * The io-bridge has device_type set to 'io-bridge' change it to 'isa'
-	 * so that generic isa-bridge code can add the SB600 and its on-board
-	 * peripherals.
-	 */
-	name = "/pxp@0,e0000000/io-bridge@0";
-	iob = call_prom("finddevice", 1, 1, ADDR(name));
-	if (!PHANDLE_VALID(iob))
-		return;
-
-	/* device_type is already set, just change it. */
-
-	prom_printf("Changing device_type of SB600 node...\n");
-
-	prom_setprop(iob, name, "device_type", "isa", sizeof("isa"));
-}
-#else	/* !CONFIG_PPC_PASEMI_NEMO */
-static inline void fixup_device_tree_pasemi(void) { }
-#endif
-
 static void __init fixup_device_tree(void)
 {
 	fixup_device_tree_maple();
@@ -2818,7 +2617,6 @@ static void __init fixup_device_tree(void)
 	fixup_device_tree_chrp();
 	fixup_device_tree_pmac();
 	fixup_device_tree_efika();
-	fixup_device_tree_pasemi();
 }
 
 static void __init prom_find_boot_cpu(void)
@@ -2833,9 +2631,6 @@ static void __init prom_find_boot_cpu(void)
 	prom_cpu = be32_to_cpu(rval);
 
 	cpu_pkg = call_prom("instance-to-package", 1, 1, prom_cpu);
-
-	if (!PHANDLE_VALID(cpu_pkg))
-		return;
 
 	prom_getprop(cpu_pkg, "reg", &rval, sizeof(rval));
 	prom.cpu = be32_to_cpu(rval);
@@ -3103,7 +2898,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	 * Call OF "quiesce" method to shut down pending DMA's from
 	 * devices etc...
 	 */
-	prom_printf("Quiescing Open Firmware ...\n");
+	prom_printf("Calling quiesce...\n");
 	call_prom("quiesce", 0, 0);
 
 	/*
@@ -3115,7 +2910,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 
 	/* Don't print anything after quiesce under OPAL, it crashes OFW */
 	if (of_platform != PLATFORM_OPAL) {
-		prom_printf("Booting Linux via __start() @ 0x%lx ...\n", kbase);
+		prom_printf("returning from prom_init\n");
 		prom_debug("->dt_header_start=0x%x\n", hdr);
 	}
 

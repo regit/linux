@@ -259,7 +259,7 @@ static void ath_edma_start_recv(struct ath_softc *sc)
 	ath_rx_addbuffer_edma(sc, ATH9K_RX_QUEUE_HP);
 	ath_rx_addbuffer_edma(sc, ATH9K_RX_QUEUE_LP);
 	ath_opmode_init(sc);
-	ath9k_hw_startpcureceive(sc->sc_ah, sc->cur_chan->offchannel);
+	ath9k_hw_startpcureceive(sc->sc_ah, !!(sc->hw->conf.flags & IEEE80211_CONF_OFFCHANNEL));
 }
 
 static void ath_edma_stop_recv(struct ath_softc *sc)
@@ -374,10 +374,9 @@ void ath_rx_cleanup(struct ath_softc *sc)
 
 u32 ath_calcrxfilter(struct ath_softc *sc)
 {
-	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	u32 rfilt;
 
-	if (IS_ENABLED(CONFIG_ATH9K_TX99))
+	if (config_enabled(CONFIG_ATH9K_TX99))
 		return 0;
 
 	rfilt = ATH9K_RX_FILTER_UCAST | ATH9K_RX_FILTER_BCAST
@@ -387,64 +386,56 @@ u32 ath_calcrxfilter(struct ath_softc *sc)
 	if (sc->hw->conf.radar_enabled)
 		rfilt |= ATH9K_RX_FILTER_PHYRADAR | ATH9K_RX_FILTER_PHYERR;
 
-	spin_lock_bh(&sc->chan_lock);
-
-	if (sc->cur_chan->rxfilter & FIF_PROBE_REQ)
+	if (sc->rx.rxfilter & FIF_PROBE_REQ)
 		rfilt |= ATH9K_RX_FILTER_PROBEREQ;
 
+	/*
+	 * Set promiscuous mode when FIF_PROMISC_IN_BSS is enabled for station
+	 * mode interface or when in monitor mode. AP mode does not need this
+	 * since it receives all in-BSS frames anyway.
+	 */
 	if (sc->sc_ah->is_monitoring)
 		rfilt |= ATH9K_RX_FILTER_PROM;
 
-	if ((sc->cur_chan->rxfilter & FIF_CONTROL) ||
-	    sc->sc_ah->dynack.enabled)
+	if (sc->rx.rxfilter & FIF_CONTROL)
 		rfilt |= ATH9K_RX_FILTER_CONTROL;
 
 	if ((sc->sc_ah->opmode == NL80211_IFTYPE_STATION) &&
-	    (sc->cur_chan->nvifs <= 1) &&
-	    !(sc->cur_chan->rxfilter & FIF_BCN_PRBRESP_PROMISC))
+	    (sc->nvifs <= 1) &&
+	    !(sc->rx.rxfilter & FIF_BCN_PRBRESP_PROMISC))
 		rfilt |= ATH9K_RX_FILTER_MYBEACON;
-	else if (sc->sc_ah->opmode != NL80211_IFTYPE_OCB)
+	else
 		rfilt |= ATH9K_RX_FILTER_BEACON;
 
 	if ((sc->sc_ah->opmode == NL80211_IFTYPE_AP) ||
-	    (sc->cur_chan->rxfilter & FIF_PSPOLL))
+	    (sc->rx.rxfilter & FIF_PSPOLL))
 		rfilt |= ATH9K_RX_FILTER_PSPOLL;
 
-	if (sc->cur_chandef.width != NL80211_CHAN_WIDTH_20_NOHT)
+	if (conf_is_ht(&sc->hw->conf))
 		rfilt |= ATH9K_RX_FILTER_COMP_BAR;
 
-	if (sc->cur_chan->nvifs > 1 || (sc->cur_chan->rxfilter & FIF_OTHER_BSS)) {
+	if (sc->nvifs > 1 || (sc->rx.rxfilter & FIF_OTHER_BSS)) {
 		/* This is needed for older chips */
 		if (sc->sc_ah->hw_version.macVersion <= AR_SREV_VERSION_9160)
 			rfilt |= ATH9K_RX_FILTER_PROM;
 		rfilt |= ATH9K_RX_FILTER_MCAST_BCAST_ALL;
 	}
 
-	if (AR_SREV_9550(sc->sc_ah) || AR_SREV_9531(sc->sc_ah) ||
-	    AR_SREV_9561(sc->sc_ah))
+	if (AR_SREV_9550(sc->sc_ah) || AR_SREV_9531(sc->sc_ah))
 		rfilt |= ATH9K_RX_FILTER_4ADDRESS;
-
-	if (AR_SREV_9462(sc->sc_ah) || AR_SREV_9565(sc->sc_ah))
-		rfilt |= ATH9K_RX_FILTER_CONTROL_WRAPPER;
-
-	if (ath9k_is_chanctx_enabled() &&
-	    test_bit(ATH_OP_SCANNING, &common->op_flags))
-		rfilt |= ATH9K_RX_FILTER_BEACON;
-
-	spin_unlock_bh(&sc->chan_lock);
 
 	return rfilt;
 
 }
 
-void ath_startrecv(struct ath_softc *sc)
+int ath_startrecv(struct ath_softc *sc)
 {
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath_rxbuf *bf, *tbf;
 
 	if (ah->caps.hw_caps & ATH9K_HW_CAP_EDMA) {
 		ath_edma_start_recv(sc);
-		return;
+		return 0;
 	}
 
 	if (list_empty(&sc->rx.rxbuf))
@@ -466,7 +457,9 @@ void ath_startrecv(struct ath_softc *sc)
 
 start_recv:
 	ath_opmode_init(sc);
-	ath9k_hw_startpcureceive(ah, sc->cur_chan->offchannel);
+	ath9k_hw_startpcureceive(ah, !!(sc->hw->conf.flags & IEEE80211_CONF_OFFCHANNEL));
+
+	return 0;
 }
 
 static void ath_flushrecv(struct ath_softc *sc)
@@ -494,9 +487,10 @@ bool ath_stoprecv(struct ath_softc *sc)
 
 	if (!(ah->ah_flags & AH_UNPLUGGED) &&
 	    unlikely(!stopped)) {
-		ath_dbg(ath9k_hw_common(sc->sc_ah), RESET,
-			"Failed to stop Rx DMA\n");
-		RESET_STAT_INC(sc, RESET_RX_DMA_ERROR);
+		ath_err(ath9k_hw_common(sc->sc_ah),
+			"Could not stop RX, we could be "
+			"confusing the DMA engine when we start RX up\n");
+		ATH_DBG_WARN_ON_ONCE(!stopped);
 	}
 	return stopped && !reset;
 }
@@ -536,7 +530,6 @@ static bool ath_beacon_dtim_pending_cab(struct sk_buff *skb)
 static void ath_rx_ps_beacon(struct ath_softc *sc, struct sk_buff *skb)
 {
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
-	bool skip_beacon = false;
 
 	if (skb->len < 24 + 8 + 2 + 2)
 		return;
@@ -547,19 +540,10 @@ static void ath_rx_ps_beacon(struct ath_softc *sc, struct sk_buff *skb)
 		sc->ps_flags &= ~PS_BEACON_SYNC;
 		ath_dbg(common, PS,
 			"Reconfigure beacon timers based on synchronized timestamp\n");
-
-#ifdef CONFIG_ATH9K_CHANNEL_CONTEXT
-		if (ath9k_is_chanctx_enabled()) {
-			if (sc->cur_chan == &sc->offchannel.chan)
-				skip_beacon = true;
-		}
-#endif
-
-		if (!skip_beacon &&
-		    !(WARN_ON_ONCE(sc->cur_chan->beacon.beacon_interval == 0)))
+		if (!(WARN_ON_ONCE(sc->cur_beacon_conf.beacon_interval == 0)))
 			ath9k_set_beacon(sc);
-
-		ath9k_p2p_beacon_sync(sc);
+		if (sc->p2p_ps_vif)
+			ath9k_update_p2p_ps(sc, sc->p2p_ps_vif->vif);
 	}
 
 	if (ath_beacon_dtim_pending_cab(skb)) {
@@ -867,21 +851,10 @@ static int ath9k_rx_skb_preprocess(struct ath_softc *sc,
 	 * can be dropped.
 	 */
 	if (rx_stats->rs_status & ATH9K_RXERR_PHY) {
-		/*
-		 * DFS and spectral are mutually exclusive
-		 *
-		 * Since some chips use PHYERR_RADAR as indication for both, we
-		 * need to double check which feature is enabled to prevent
-		 * feeding spectral or dfs-detector with wrong frames.
-		 */
-		if (hw->conf.radar_enabled) {
-			ath9k_dfs_process_phyerr(sc, hdr, rx_stats,
-						 rx_status->mactime);
-		} else if (sc->spec_priv.spectral_mode != SPECTRAL_DISABLED &&
-			   ath_cmn_process_fft(&sc->spec_priv, hdr, rx_stats,
-					       rx_status->mactime)) {
+		ath9k_dfs_process_phyerr(sc, hdr, rx_stats, rx_status->mactime);
+		if (ath_process_fft(sc, hdr, rx_stats, rx_status->mactime))
 			RX_STAT_INC(rx_spectral);
-		}
+
 		return -EINVAL;
 	}
 
@@ -889,13 +862,8 @@ static int ath9k_rx_skb_preprocess(struct ath_softc *sc,
 	 * everything but the rate is checked here, the rate check is done
 	 * separately to avoid doing two lookups for a rate for each frame.
 	 */
-	spin_lock_bh(&sc->chan_lock);
-	if (!ath9k_cmn_rx_accept(common, hdr, rx_status, rx_stats, decrypt_error,
-				 sc->cur_chan->rxfilter)) {
-		spin_unlock_bh(&sc->chan_lock);
+	if (!ath9k_cmn_rx_accept(common, hdr, rx_status, rx_stats, decrypt_error, sc->rx.rxfilter))
 		return -EINVAL;
-	}
-	spin_unlock_bh(&sc->chan_lock);
 
 	if (ath_is_mybeacon(common, hdr)) {
 		RX_STAT_INC(rx_beacons);
@@ -917,12 +885,6 @@ static int ath9k_rx_skb_preprocess(struct ath_softc *sc,
 			rx_stats->rs_rate);
 		RX_STAT_INC(rx_rate_err);
 		return -EINVAL;
-	}
-
-	if (ath9k_is_chanctx_enabled()) {
-		if (rx_stats->is_mybeacon)
-			ath_chanctx_beacon_recv_ev(sc,
-					   ATH_CHANCTX_EVENT_BEACON_RECEIVED);
 	}
 
 	ath9k_cmn_process_rssi(common, hw, rx_stats, rx_status);
@@ -1019,7 +981,6 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, bool hp)
 	unsigned long flags;
 	dma_addr_t new_buf_addr;
 	unsigned int budget = 512;
-	struct ieee80211_hdr *hdr;
 
 	if (edma)
 		dma_type = DMA_BIDIRECTIONAL;
@@ -1148,10 +1109,6 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, bool hp)
 		ath9k_antenna_check(sc, &rs);
 		ath9k_apply_ampdu_details(sc, &rs, rxs);
 		ath_debug_rate_stats(sc, &rs, skb);
-
-		hdr = (struct ieee80211_hdr *)skb->data;
-		if (ieee80211_is_ack(hdr->frame_control))
-			ath_dynack_sample_ack_ts(sc->sc_ah, skb, rs.rs_tstamp);
 
 		ieee80211_rx(hw, skb);
 

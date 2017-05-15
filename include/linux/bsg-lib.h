@@ -40,8 +40,6 @@ struct bsg_job {
 	struct device *dev;
 	struct request *req;
 
-	struct kref kref;
-
 	/* Transport/driver specific request/reply structs */
 	void *request;
 	void *reply;
@@ -69,7 +67,5 @@ void bsg_job_done(struct bsg_job *job, int result,
 int bsg_setup_queue(struct device *dev, struct request_queue *q, char *name,
 		    bsg_job_fn *job_fn, int dd_job_size);
 void bsg_request_fn(struct request_queue *q);
-void bsg_job_put(struct bsg_job *job);
-int __must_check bsg_job_get(struct bsg_job *job);
 
 #endif

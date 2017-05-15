@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -23,7 +27,7 @@
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright (c) 2011, 2015, Intel Corporation.
+ * Copyright (c) 2011, 2012, Intel Corporation.
  */
 /*
  * This file is part of Lustre, http://www.lustre.org/
@@ -39,9 +43,6 @@
 #ifndef _LUSTRE_PARAM_H
 #define _LUSTRE_PARAM_H
 
-#include "../../include/linux/libcfs/libcfs.h"
-#include "../../include/linux/lnet/types.h"
-
 /** \defgroup param param
  *
  * @{
@@ -55,8 +56,20 @@ struct cfg_interop_param {
 
 /* obd_config.c */
 int class_find_param(char *buf, char *key, char **valp);
+struct cfg_interop_param *class_find_old_param(const char *param,
+					       struct cfg_interop_param *ptr);
+int class_get_next_param(char **params, char *copy);
+int class_match_param(char *buf, char *key, char **valp);
 int class_parse_nid(char *buf, lnet_nid_t *nid, char **endh);
 int class_parse_nid_quiet(char *buf, lnet_nid_t *nid, char **endh);
+int class_parse_net(char *buf, __u32 *net, char **endh);
+int class_match_nid(char *buf, char *key, lnet_nid_t nid);
+int class_match_net(char *buf, char *key, __u32 net);
+/* obd_mount.c */
+int do_lcfg(char *cfgname, lnet_nid_t nid, int cmd,
+	    char *s1, char *s2, char *s3, char *s4);
+
+
 
 /****************** User-settable parameter keys *********************/
 /* e.g.
@@ -88,7 +101,6 @@ int class_parse_nid_quiet(char *buf, lnet_nid_t *nid, char **endh);
 
 /* Prefixes for parameters handled by obd's proc methods (XXX_process_config) */
 #define PARAM_OST		  "ost."
-#define PARAM_OSD		"osd."
 #define PARAM_OSC		  "osc."
 #define PARAM_MDT		  "mdt."
 #define PARAM_MDD		  "mdd."

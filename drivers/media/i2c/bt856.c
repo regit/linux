@@ -32,7 +32,7 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/ioctl.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/i2c.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
@@ -252,6 +252,7 @@ MODULE_DEVICE_TABLE(i2c, bt856_id);
 
 static struct i2c_driver bt856_driver = {
 	.driver = {
+		.owner	= THIS_MODULE,
 		.name	= "bt856",
 	},
 	.probe		= bt856_probe,

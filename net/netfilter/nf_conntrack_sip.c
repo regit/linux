@@ -10,8 +10,6 @@
  * published by the Free Software Foundation.
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/module.h>
 #include <linux/ctype.h>
 #include <linux/skbuff.h>
@@ -83,10 +81,9 @@ static int digits_len(const struct nf_conn *ct, const char *dptr,
 static int iswordc(const char c)
 {
 	if (isalnum(c) || c == '!' || c == '"' || c == '%' ||
-	    (c >= '(' && c <= '+') || c == ':' || c == '<' || c == '>' ||
+	    (c >= '(' && c <= '/') || c == ':' || c == '<' || c == '>' ||
 	    c == '?' || (c >= '[' && c <= ']') || c == '_' || c == '`' ||
-	    c == '{' || c == '}' || c == '~' || (c >= '-' && c <= '/') ||
-	    c == '\'')
+	    c == '{' || c == '}' || c == '~')
 		return 1;
 	return 0;
 }
@@ -250,7 +247,7 @@ int ct_sip_parse_request(const struct nf_conn *ct,
 	for (; dptr < limit - strlen("sip:"); dptr++) {
 		if (*dptr == '\r' || *dptr == '\n')
 			return -1;
-		if (strncasecmp(dptr, "sip:", strlen("sip:")) == 0) {
+		if (strnicmp(dptr, "sip:", strlen("sip:")) == 0) {
 			dptr += strlen("sip:");
 			break;
 		}
@@ -330,12 +327,13 @@ static const char *sip_follow_continuation(const char *dptr, const char *limit)
 static const char *sip_skip_whitespace(const char *dptr, const char *limit)
 {
 	for (; dptr < limit; dptr++) {
-		if (*dptr == ' ' || *dptr == '\t')
+		if (*dptr == ' ')
 			continue;
 		if (*dptr != '\r' && *dptr != '\n')
 			break;
 		dptr = sip_follow_continuation(dptr, limit);
-		break;
+		if (dptr == NULL)
+			return NULL;
 	}
 	return dptr;
 }
@@ -352,7 +350,7 @@ static const char *ct_sip_header_search(const char *dptr, const char *limit,
 			continue;
 		}
 
-		if (strncasecmp(dptr, needle, len) == 0)
+		if (strnicmp(dptr, needle, len) == 0)
 			return dptr;
 	}
 	return NULL;
@@ -385,10 +383,10 @@ int ct_sip_get_header(const struct nf_conn *ct, const char *dptr,
 		/* Find header. Compact headers must be followed by a
 		 * non-alphabetic character to avoid mismatches. */
 		if (limit - dptr >= hdr->len &&
-		    strncasecmp(dptr, hdr->name, hdr->len) == 0)
+		    strnicmp(dptr, hdr->name, hdr->len) == 0)
 			dptr += hdr->len;
 		else if (hdr->cname && limit - dptr >= hdr->clen + 1 &&
-			 strncasecmp(dptr, hdr->cname, hdr->clen) == 0 &&
+			 strnicmp(dptr, hdr->cname, hdr->clen) == 0 &&
 			 !isalpha(*(dptr + hdr->clen)))
 			dptr += hdr->clen;
 		else
@@ -622,9 +620,9 @@ static int ct_sip_parse_transport(struct nf_conn *ct, const char *dptr,
 
 	if (ct_sip_parse_param(ct, dptr, dataoff, datalen, "transport=",
 			       &matchoff, &matchlen)) {
-		if (!strncasecmp(dptr + matchoff, "TCP", strlen("TCP")))
+		if (!strnicmp(dptr + matchoff, "TCP", strlen("TCP")))
 			*proto = IPPROTO_TCP;
-		else if (!strncasecmp(dptr + matchoff, "UDP", strlen("UDP")))
+		else if (!strnicmp(dptr + matchoff, "UDP", strlen("UDP")))
 			*proto = IPPROTO_UDP;
 		else
 			return 0;
@@ -745,10 +743,10 @@ int ct_sip_get_sdp_header(const struct nf_conn *ct, const char *dptr,
 
 		if (term != SDP_HDR_UNSPEC &&
 		    limit - dptr >= thdr->len &&
-		    strncasecmp(dptr, thdr->name, thdr->len) == 0)
+		    strnicmp(dptr, thdr->name, thdr->len) == 0)
 			break;
 		else if (limit - dptr >= hdr->len &&
-			 strncasecmp(dptr, hdr->name, hdr->len) == 0)
+			 strnicmp(dptr, hdr->name, hdr->len) == 0)
 			dptr += hdr->len;
 		else
 			continue;
@@ -1383,7 +1381,7 @@ static int process_sip_response(struct sk_buff *skb, unsigned int protoff,
 		return NF_DROP;
 	}
 	cseq = simple_strtoul(*dptr + matchoff, NULL, 10);
-	if (!cseq && *(*dptr + matchoff) != '0') {
+	if (!cseq) {
 		nf_ct_helper_log(skb, ct, "cannot get cseq");
 		return NF_DROP;
 	}
@@ -1396,7 +1394,7 @@ static int process_sip_response(struct sk_buff *skb, unsigned int protoff,
 		if (handler->response == NULL)
 			continue;
 		if (*datalen < matchend + handler->len ||
-		    strncasecmp(*dptr + matchend, handler->method, handler->len))
+		    strnicmp(*dptr + matchend, handler->method, handler->len))
 			continue;
 		return handler->response(skb, protoff, dataoff, dptr, datalen,
 					 cseq, code);
@@ -1436,11 +1434,8 @@ static int process_sip_request(struct sk_buff *skb, unsigned int protoff,
 		handler = &sip_handlers[i];
 		if (handler->request == NULL)
 			continue;
-		if (*datalen < handler->len + 2 ||
-		    strncasecmp(*dptr, handler->method, handler->len))
-			continue;
-		if ((*dptr)[handler->len] != ' ' ||
-		    !isalpha((*dptr)[handler->len+1]))
+		if (*datalen < handler->len ||
+		    strnicmp(*dptr, handler->method, handler->len))
 			continue;
 
 		if (ct_sip_get_header(ct, *dptr, 0, *datalen, SIP_HDR_CSEQ,
@@ -1449,7 +1444,7 @@ static int process_sip_request(struct sk_buff *skb, unsigned int protoff,
 			return NF_DROP;
 		}
 		cseq = simple_strtoul(*dptr + matchoff, NULL, 10);
-		if (!cseq && *(*dptr + matchoff) != '0') {
+		if (!cseq) {
 			nf_ct_helper_log(skb, ct, "cannot get cseq");
 			return NF_DROP;
 		}
@@ -1467,7 +1462,7 @@ static int process_sip_msg(struct sk_buff *skb, struct nf_conn *ct,
 	const struct nf_nat_sip_hooks *hooks;
 	int ret;
 
-	if (strncasecmp(*dptr, "SIP/2.0 ", strlen("SIP/2.0 ")) != 0)
+	if (strnicmp(*dptr, "SIP/2.0 ", strlen("SIP/2.0 ")) != 0)
 		ret = process_sip_request(skb, protoff, dataoff, dptr, datalen);
 	else
 		ret = process_sip_response(skb, protoff, dataoff, dptr, datalen);
@@ -1592,7 +1587,7 @@ static int sip_help_udp(struct sk_buff *skb, unsigned int protoff,
 	return process_sip_msg(skb, ct, protoff, dataoff, &dptr, &datalen);
 }
 
-static struct nf_conntrack_helper sip[MAX_PORTS * 4] __read_mostly;
+static struct nf_conntrack_helper sip[MAX_PORTS][4] __read_mostly;
 
 static const struct nf_conntrack_expect_policy sip_exp_policy[SIP_EXPECT_MAX + 1] = {
 	[SIP_EXPECT_SIGNALLING] = {
@@ -1619,12 +1614,20 @@ static const struct nf_conntrack_expect_policy sip_exp_policy[SIP_EXPECT_MAX + 1
 
 static void nf_conntrack_sip_fini(void)
 {
-	nf_conntrack_helpers_unregister(sip, ports_c * 4);
+	int i, j;
+
+	for (i = 0; i < ports_c; i++) {
+		for (j = 0; j < ARRAY_SIZE(sip[i]); j++) {
+			if (sip[i][j].me == NULL)
+				continue;
+			nf_conntrack_helper_unregister(&sip[i][j]);
+		}
+	}
 }
 
 static int __init nf_conntrack_sip_init(void)
 {
-	int i, ret;
+	int i, j, ret;
 
 	if (ports_c == 0)
 		ports[ports_c++] = SIP_PORT;
@@ -1632,32 +1635,43 @@ static int __init nf_conntrack_sip_init(void)
 	for (i = 0; i < ports_c; i++) {
 		memset(&sip[i], 0, sizeof(sip[i]));
 
-		nf_ct_helper_init(&sip[4 * i], AF_INET, IPPROTO_UDP, "sip",
-				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_udp,
-				  NULL, THIS_MODULE);
-		nf_ct_helper_init(&sip[4 * i + 1], AF_INET, IPPROTO_TCP, "sip",
-				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_tcp,
-				  NULL, THIS_MODULE);
-		nf_ct_helper_init(&sip[4 * i + 2], AF_INET6, IPPROTO_UDP, "sip",
-				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_udp,
-				  NULL, THIS_MODULE);
-		nf_ct_helper_init(&sip[4 * i + 3], AF_INET6, IPPROTO_TCP, "sip",
-				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_tcp,
-				  NULL, THIS_MODULE);
-	}
+		sip[i][0].tuple.src.l3num = AF_INET;
+		sip[i][0].tuple.dst.protonum = IPPROTO_UDP;
+		sip[i][0].help = sip_help_udp;
+		sip[i][1].tuple.src.l3num = AF_INET;
+		sip[i][1].tuple.dst.protonum = IPPROTO_TCP;
+		sip[i][1].help = sip_help_tcp;
 
-	ret = nf_conntrack_helpers_register(sip, ports_c * 4);
-	if (ret < 0) {
-		pr_err("failed to register helpers\n");
-		return ret;
+		sip[i][2].tuple.src.l3num = AF_INET6;
+		sip[i][2].tuple.dst.protonum = IPPROTO_UDP;
+		sip[i][2].help = sip_help_udp;
+		sip[i][3].tuple.src.l3num = AF_INET6;
+		sip[i][3].tuple.dst.protonum = IPPROTO_TCP;
+		sip[i][3].help = sip_help_tcp;
+
+		for (j = 0; j < ARRAY_SIZE(sip[i]); j++) {
+			sip[i][j].data_len = sizeof(struct nf_ct_sip_master);
+			sip[i][j].tuple.src.u.udp.port = htons(ports[i]);
+			sip[i][j].expect_policy = sip_exp_policy;
+			sip[i][j].expect_class_max = SIP_EXPECT_MAX;
+			sip[i][j].me = THIS_MODULE;
+
+			if (ports[i] == SIP_PORT)
+				sprintf(sip[i][j].name, "sip");
+			else
+				sprintf(sip[i][j].name, "sip-%u", i);
+
+			pr_debug("port #%u: %u\n", i, ports[i]);
+
+			ret = nf_conntrack_helper_register(&sip[i][j]);
+			if (ret) {
+				printk(KERN_ERR "nf_ct_sip: failed to register"
+				       " helper for pf: %u port: %u\n",
+				       sip[i][j].tuple.src.l3num, ports[i]);
+				nf_conntrack_sip_fini();
+				return ret;
+			}
+		}
 	}
 	return 0;
 }

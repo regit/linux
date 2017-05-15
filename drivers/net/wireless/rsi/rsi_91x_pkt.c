@@ -27,24 +27,22 @@
 int rsi_send_data_pkt(struct rsi_common *common, struct sk_buff *skb)
 {
 	struct rsi_hw *adapter = common->priv;
-	struct ieee80211_hdr *tmp_hdr;
+	struct ieee80211_hdr *tmp_hdr = NULL;
 	struct ieee80211_tx_info *info;
 	struct skb_info *tx_params;
-	struct ieee80211_bss_conf *bss;
-	int status;
+	struct ieee80211_bss_conf *bss = NULL;
+	int status = -EINVAL;
 	u8 ieee80211_size = MIN_802_11_HDR_LEN;
-	u8 extnd_size;
+	u8 extnd_size = 0;
 	__le16 *frame_desc;
-	u16 seq_num;
+	u16 seq_num = 0;
 
 	info = IEEE80211_SKB_CB(skb);
 	bss = &info->control.vif->bss_conf;
 	tx_params = (struct skb_info *)info->driver_data;
 
-	if (!bss->assoc) {
-		status = -EINVAL;
+	if (!bss->assoc)
 		goto err;
-	}
 
 	tmp_hdr = (struct ieee80211_hdr *)&skb->data[0];
 	seq_num = (le16_to_cpu(tmp_hdr->seq_ctrl) >> 4);
@@ -83,16 +81,6 @@ int rsi_send_data_pkt(struct rsi_common *common, struct sk_buff *skb)
 		/* Send fixed rate */
 		frame_desc[3] = cpu_to_le16(RATE_INFO_ENABLE);
 		frame_desc[4] = cpu_to_le16(common->min_rate);
-
-		if (conf_is_ht40(&common->priv->hw->conf))
-			frame_desc[5] = cpu_to_le16(FULL40M_ENABLE);
-
-		if (common->vif_info[0].sgi) {
-			if (common->min_rate & 0x100) /* Only MCS rates */
-				frame_desc[4] |=
-					cpu_to_le16(ENABLE_SHORTGI_RATE);
-		}
-
 	}
 
 	frame_desc[6] |= cpu_to_le16(seq_num & 0xfff);
@@ -125,15 +113,13 @@ int rsi_send_mgmt_pkt(struct rsi_common *common,
 		      struct sk_buff *skb)
 {
 	struct rsi_hw *adapter = common->priv;
-	struct ieee80211_hdr *wh;
+	struct ieee80211_hdr *wh = NULL;
 	struct ieee80211_tx_info *info;
-	struct ieee80211_bss_conf *bss;
-	struct ieee80211_hw *hw = adapter->hw;
-	struct ieee80211_conf *conf = &hw->conf;
+	struct ieee80211_bss_conf *bss = NULL;
 	struct skb_info *tx_params;
 	int status = -E2BIG;
-	__le16 *msg;
-	u8 extnd_size;
+	__le16 *msg = NULL;
+	u8 extnd_size = 0;
 	u8 vap_id = 0;
 
 	info = IEEE80211_SKB_CB(skb);
@@ -184,15 +170,10 @@ int rsi_send_mgmt_pkt(struct rsi_common *common,
 	if (wh->addr1[0] & BIT(0))
 		msg[3] |= cpu_to_le16(RSI_BROADCAST_PKT);
 
-	if (common->band == NL80211_BAND_2GHZ)
+	if (common->band == IEEE80211_BAND_2GHZ)
 		msg[4] = cpu_to_le16(RSI_11B_MODE);
 	else
 		msg[4] = cpu_to_le16((RSI_RATE_6 & 0x0f) | RSI_11G_MODE);
-
-	if (conf_is_ht40(conf)) {
-		msg[4] = cpu_to_le16(0xB | RSI_11G_MODE);
-		msg[5] = cpu_to_le16(0x6);
-	}
 
 	/* Indicate to firmware to give cfm */
 	if ((skb->data[16] == IEEE80211_STYPE_PROBE_REQ) && (!bss->assoc)) {

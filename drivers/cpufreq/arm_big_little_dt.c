@@ -43,6 +43,23 @@ static struct device_node *get_cpu_node_with_valid_op(int cpu)
 	return np;
 }
 
+static int dt_init_opp_table(struct device *cpu_dev)
+{
+	struct device_node *np;
+	int ret;
+
+	np = of_node_get(cpu_dev->of_node);
+	if (!np) {
+		pr_err("failed to find cpu%d node\n", cpu_dev->id);
+		return -ENOENT;
+	}
+
+	ret = of_init_opp_table(cpu_dev);
+	of_node_put(np);
+
+	return ret;
+}
+
 static int dt_get_transition_latency(struct device *cpu_dev)
 {
 	struct device_node *np;
@@ -64,8 +81,7 @@ static int dt_get_transition_latency(struct device *cpu_dev)
 static struct cpufreq_arm_bL_ops dt_bL_ops = {
 	.name	= "dt-bl",
 	.get_transition_latency = dt_get_transition_latency,
-	.init_opp_table = dev_pm_opp_of_cpumask_add_table,
-	.free_opp_table = dev_pm_opp_of_cpumask_remove_table,
+	.init_opp_table = dt_init_opp_table,
 };
 
 static int generic_bL_probe(struct platform_device *pdev)
@@ -89,6 +105,7 @@ static int generic_bL_remove(struct platform_device *pdev)
 static struct platform_driver generic_bL_platdrv = {
 	.driver = {
 		.name	= "arm-bL-cpufreq-dt",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= generic_bL_probe,
 	.remove		= generic_bL_remove,
@@ -97,4 +114,4 @@ module_platform_driver(generic_bL_platdrv);
 
 MODULE_AUTHOR("Viresh Kumar <viresh.kumar@linaro.org>");
 MODULE_DESCRIPTION("Generic ARM big LITTLE cpufreq driver via DT");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

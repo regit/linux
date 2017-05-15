@@ -10,7 +10,6 @@
 
 #include <linux/vmalloc.h>
 #include <linux/i2c.h>
-#include <media/tuner.h>
 
 #include "mxl111sf.h"
 #include "mxl111sf-reg.h"
@@ -29,13 +28,14 @@
 
 int dvb_usb_mxl111sf_debug;
 module_param_named(debug, dvb_usb_mxl111sf_debug, int, 0644);
-MODULE_PARM_DESC(debug, "set debugging level (1=info, 2=xfer, 4=i2c, 8=reg, 16=adv (or-able)).");
+MODULE_PARM_DESC(debug, "set debugging level "
+		 "(1=info, 2=xfer, 4=i2c, 8=reg, 16=adv (or-able)).");
 
-static int dvb_usb_mxl111sf_isoc;
+int dvb_usb_mxl111sf_isoc;
 module_param_named(isoc, dvb_usb_mxl111sf_isoc, int, 0644);
 MODULE_PARM_DESC(isoc, "enable usb isoc xfer (0=bulk, 1=isoc).");
 
-static int dvb_usb_mxl111sf_spi;
+int dvb_usb_mxl111sf_spi;
 module_param_named(spi, dvb_usb_mxl111sf_spi, int, 0644);
 MODULE_PARM_DESC(spi, "use spi rather than tp for data xfer (0=tp, 1=spi).");
 
@@ -43,7 +43,7 @@ MODULE_PARM_DESC(spi, "use spi rather than tp for data xfer (0=tp, 1=spi).");
 #define ANT_PATH_EXTERNAL 1
 #define ANT_PATH_INTERNAL 2
 
-static int dvb_usb_mxl111sf_rfswitch =
+int dvb_usb_mxl111sf_rfswitch =
 #if 0
 		ANT_PATH_AUTO;
 #else
@@ -129,15 +129,15 @@ int mxl111sf_write_reg_mask(struct mxl111sf_state *state,
 				   u8 addr, u8 mask, u8 data)
 {
 	int ret;
-	u8 val = 0;
+	u8 val;
 
 	if (mask != 0xff) {
 		ret = mxl111sf_read_reg(state, addr, &val);
 #if 1
 		/* dont know why this usually errors out on the first try */
 		if (mxl_fail(ret))
-			pr_err("error writing addr: 0x%02x, mask: 0x%02x, data: 0x%02x, retrying...",
-			       addr, mask, data);
+			pr_err("error writing addr: 0x%02x, mask: 0x%02x, "
+			    "data: 0x%02x, retrying...", addr, mask, data);
 
 		ret = mxl111sf_read_reg(state, addr, &val);
 #endif
@@ -288,9 +288,9 @@ static int mxl111sf_adap_fe_init(struct dvb_frontend *fe)
 	err = mxl1x1sf_set_device_mode(state, adap_state->device_mode);
 
 	mxl_fail(err);
-	err = mxl111sf_enable_usb_output(state);
+	mxl111sf_enable_usb_output(state);
 	mxl_fail(err);
-	err = mxl1x1sf_top_master_ctrl(state, 1);
+	mxl1x1sf_top_master_ctrl(state, 1);
 	mxl_fail(err);
 
 	if ((MXL111SF_GPIO_MOD_DVBT != adap_state->gpio_mode) &&
@@ -731,7 +731,7 @@ fail:
 	return ret;
 }
 
-static const struct mxl111sf_demod_config mxl_demod_config = {
+static struct mxl111sf_demod_config mxl_demod_config = {
 	.read_reg        = mxl111sf_read_reg,
 	.write_reg       = mxl111sf_write_reg,
 	.program_regs    = mxl111sf_ctrl_program_regs,
@@ -855,7 +855,7 @@ static int mxl111sf_ant_hunt(struct dvb_frontend *fe)
 	return 0;
 }
 
-static const struct mxl111sf_tuner_config mxl_tuner_config = {
+static struct mxl111sf_tuner_config mxl_tuner_config = {
 	.if_freq         = MXL_IF_6_0, /* applies to external IF output, only */
 	.invert_spectrum = 0,
 	.read_reg        = mxl111sf_read_reg,
@@ -868,10 +868,6 @@ static const struct mxl111sf_tuner_config mxl_tuner_config = {
 static int mxl111sf_attach_tuner(struct dvb_usb_adapter *adap)
 {
 	struct mxl111sf_state *state = adap_to_priv(adap);
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	struct media_device *mdev = dvb_get_media_controller(&adap->dvb_adap);
-	int ret;
-#endif
 	int i;
 
 	pr_debug("%s()\n", __func__);
@@ -883,21 +879,6 @@ static int mxl111sf_attach_tuner(struct dvb_usb_adapter *adap)
 		adap->fe[i]->ops.read_signal_strength = adap->fe[i]->ops.tuner_ops.get_rf_strength;
 	}
 
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	state->tuner.function = MEDIA_ENT_F_TUNER;
-	state->tuner.name = "mxl111sf tuner";
-	state->tuner_pads[TUNER_PAD_RF_INPUT].flags = MEDIA_PAD_FL_SINK;
-	state->tuner_pads[TUNER_PAD_OUTPUT].flags = MEDIA_PAD_FL_SOURCE;
-
-	ret = media_entity_pads_init(&state->tuner,
-				     TUNER_NUM_PADS, state->tuner_pads);
-	if (ret)
-		return ret;
-
-	ret = media_device_register_entity(mdev, &state->tuner);
-	if (ret)
-		return ret;
-#endif
 	return 0;
 }
 
@@ -906,7 +887,7 @@ static u32 mxl111sf_i2c_func(struct i2c_adapter *adapter)
 	return I2C_FUNC_I2C;
 }
 
-static struct i2c_algorithm mxl111sf_i2c_algo = {
+struct i2c_algorithm mxl111sf_i2c_algo = {
 	.master_xfer   = mxl111sf_i2c_xfer,
 	.functionality = mxl111sf_i2c_func,
 #ifdef NEED_ALGO_CONTROL
@@ -945,7 +926,8 @@ static int mxl111sf_init(struct dvb_usb_device *d)
 	case 138001:
 		break;
 	default:
-		printk(KERN_WARNING "%s: warning: unknown hauppauge model #%d\n",
+		printk(KERN_WARNING "%s: warning: "
+		       "unknown hauppauge model #%d\n",
 		       __func__, state->tv.model);
 	}
 #endif
@@ -1443,3 +1425,9 @@ MODULE_AUTHOR("Michael Krufky <mkrufky@linuxtv.org>");
 MODULE_DESCRIPTION("Driver for MaxLinear MxL111SF");
 MODULE_VERSION("1.0");
 MODULE_LICENSE("GPL");
+
+/*
+ * Local variables:
+ * c-basic-offset: 8
+ * End:
+ */

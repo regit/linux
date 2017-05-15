@@ -29,7 +29,7 @@
 #include <linux/tty.h>
 #include <linux/vt_kern.h>		/* For unblank_screen() */
 #include <linux/highmem.h>
-#include <linux/extable.h>
+#include <linux/module.h>
 #include <linux/kprobes.h>
 #include <linux/hugetlb.h>
 #include <linux/syscalls.h>
@@ -169,7 +169,8 @@ static void wait_for_migration(pte_t *pte)
 		while (pte_migrating(*pte)) {
 			barrier();
 			if (++retries > bound)
-				panic("Hit migrating PTE (%#llx) and page PFN %#lx still migrating",
+				panic("Hit migrating PTE (%#llx) and"
+				      " page PFN %#lx still migrating",
 				      pte->val, pte_pfn(*pte));
 		}
 	}
@@ -291,10 +292,11 @@ static int handle_page_fault(struct pt_regs *regs,
 	 */
 	stack_offset = stack_pointer & (THREAD_SIZE-1);
 	if (stack_offset < THREAD_SIZE / 8) {
-		pr_alert("Potential stack overrun: sp %#lx\n", stack_pointer);
+		pr_alert("Potential stack overrun: sp %#lx\n",
+		       stack_pointer);
 		show_regs(regs);
 		pr_alert("Killing current process %d/%s\n",
-			 tsk->pid, tsk->comm);
+		       tsk->pid, tsk->comm);
 		do_group_exit(SIGKILL);
 	}
 
@@ -353,9 +355,9 @@ static int handle_page_fault(struct pt_regs *regs,
 
 	/*
 	 * If we're in an interrupt, have no user context or are running in an
-	 * region with pagefaults disabled then we must not take the fault.
+	 * atomic region then we must not take the fault.
 	 */
-	if (pagefault_disabled() || !mm) {
+	if (in_atomic() || !mm) {
 		vma = NULL;  /* happy compiler */
 		goto bad_area_nosemaphore;
 	}
@@ -419,7 +421,7 @@ good_area:
 	} else if (write) {
 #ifdef TEST_VERIFY_AREA
 		if (!is_page_fault && regs->cs == KERNEL_CS)
-			pr_err("WP fault at " REGFMT "\n", regs->eip);
+			pr_err("WP fault at "REGFMT"\n", regs->eip);
 #endif
 		if (!(vma->vm_flags & VM_WRITE))
 			goto bad_area;
@@ -434,7 +436,7 @@ good_area:
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.
 	 */
-	fault = handle_mm_fault(vma, address, flags);
+	fault = handle_mm_fault(mm, vma, address, flags);
 
 	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
 		return 0;
@@ -442,8 +444,6 @@ good_area:
 	if (unlikely(fault & VM_FAULT_ERROR)) {
 		if (fault & VM_FAULT_OOM)
 			goto out_of_memory;
-		else if (fault & VM_FAULT_SIGSEGV)
-			goto bad_area;
 		else if (fault & VM_FAULT_SIGBUS)
 			goto do_sigbus;
 		BUG();
@@ -519,15 +519,16 @@ no_context:
 		pte_t *pte = lookup_address(address);
 
 		if (pte && pte_present(*pte) && !pte_exec_kernel(*pte))
-			pr_crit("kernel tried to execute non-executable page - exploit attempt? (uid: %d)\n",
-				current->uid);
+			pr_crit("kernel tried to execute"
+			       " non-executable page - exploit attempt?"
+			       " (uid: %d)\n", current->uid);
 	}
 #endif
 	if (address < PAGE_SIZE)
 		pr_alert("Unable to handle kernel NULL pointer dereference\n");
 	else
 		pr_alert("Unable to handle kernel paging request\n");
-	pr_alert(" at virtual address " REGFMT ", pc " REGFMT "\n",
+	pr_alert(" at virtual address "REGFMT", pc "REGFMT"\n",
 		 address, regs->pc);
 
 	show_regs(regs);
@@ -574,10 +575,9 @@ do_sigbus:
 #ifndef __tilegx__
 
 /* We must release ICS before panicking or we won't get anywhere. */
-#define ics_panic(fmt, ...)					\
-do {								\
-	__insn_mtspr(SPR_INTERRUPT_CRITICAL_SECTION, 0);	\
-	panic(fmt, ##__VA_ARGS__);				\
+#define ics_panic(fmt, ...) do { \
+	__insn_mtspr(SPR_INTERRUPT_CRITICAL_SECTION, 0); \
+	panic(fmt, __VA_ARGS__); \
 } while (0)
 
 /*
@@ -615,7 +615,8 @@ struct intvec_state do_page_fault_ics(struct pt_regs *regs, int fault_num,
 	     fault_num != INT_DTLB_ACCESS)) {
 		unsigned long old_pc = regs->pc;
 		regs->pc = pc;
-		ics_panic("Bad ICS page fault args: old PC %#lx, fault %d/%d at %#lx",
+		ics_panic("Bad ICS page fault args:"
+			  " old PC %#lx, fault %d/%d at %#lx\n",
 			  old_pc, fault_num, write, address);
 	}
 
@@ -668,8 +669,8 @@ struct intvec_state do_page_fault_ics(struct pt_regs *regs, int fault_num,
 #endif
 		fixup = search_exception_tables(pc);
 		if (!fixup)
-			ics_panic("ICS atomic fault not in table: PC %#lx, fault %d",
-				  pc, fault_num);
+			ics_panic("ICS atomic fault not in table:"
+				  " PC %#lx, fault %d", pc, fault_num);
 		regs->pc = fixup->fixup;
 		regs->ex1 = PL_ICS_EX1(KERNEL_PL, 0);
 	}
@@ -698,8 +699,8 @@ struct intvec_state do_page_fault_ics(struct pt_regs *regs, int fault_num,
  * interrupt away appropriately and return immediately.  We can't do
  * page faults for user code while in kernel mode.
  */
-static inline void __do_page_fault(struct pt_regs *regs, int fault_num,
-				   unsigned long address, unsigned long write)
+void do_page_fault(struct pt_regs *regs, int fault_num,
+		   unsigned long address, unsigned long write)
 {
 	int is_page_fault;
 
@@ -750,6 +751,7 @@ static inline void __do_page_fault(struct pt_regs *regs, int fault_num,
 				 current->comm, current->pid, pc, address);
 			show_regs(regs);
 			do_group_exit(SIGKILL);
+			return;
 		}
 	}
 #else
@@ -824,7 +826,8 @@ static inline void __do_page_fault(struct pt_regs *regs, int fault_num,
 
 			set_thread_flag(TIF_ASYNC_TLB);
 			if (async->fault_num != 0) {
-				panic("Second async fault %d; old fault was %d (%#lx/%ld)",
+				panic("Second async fault %d;"
+				      " old fault was %d (%#lx/%ld)",
 				      fault_num, async->fault_num,
 				      address, write);
 			}
@@ -841,11 +844,6 @@ static inline void __do_page_fault(struct pt_regs *regs, int fault_num,
 	handle_page_fault(regs, fault_num, is_page_fault, address, write);
 }
 
-void do_page_fault(struct pt_regs *regs, int fault_num,
-		   unsigned long address, unsigned long write)
-{
-	__do_page_fault(regs, fault_num, address, write);
-}
 
 #if CHIP_HAS_TILE_DMA()
 /*

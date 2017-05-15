@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -31,14 +35,14 @@
  */
 
 #define DEBUG_SUBSYSTEM S_RPC
-#include "../include/obd_support.h"
-#include "../include/obd_class.h"
-#include "../include/lustre_net.h"
+#include <obd_support.h>
+#include <obd_class.h>
+#include <lustre_net.h>
 
 #include "ptlrpc_internal.h"
 
-static struct cfs_hash *conn_hash;
-static struct cfs_hash_ops conn_hash_ops;
+static struct cfs_hash *conn_hash = NULL;
+static cfs_hash_ops_t conn_hash_ops;
 
 struct ptlrpc_connection *
 ptlrpc_connection_get(lnet_process_id_t peer, lnet_nid_t self,
@@ -48,9 +52,9 @@ ptlrpc_connection_get(lnet_process_id_t peer, lnet_nid_t self,
 
 	conn = cfs_hash_lookup(conn_hash, &peer);
 	if (conn)
-		goto out;
+		GOTO(out, conn);
 
-	conn = kzalloc(sizeof(*conn), GFP_NOFS);
+	OBD_ALLOC_PTR(conn);
 	if (!conn)
 		return NULL;
 
@@ -68,12 +72,11 @@ ptlrpc_connection_get(lnet_process_id_t peer, lnet_nid_t self,
 	 * returned and may be compared against out object.
 	 */
 	/* In the function below, .hs_keycmp resolves to
-	 * conn_keycmp()
-	 */
+	 * conn_keycmp() */
 	/* coverity[overrun-buffer-val] */
 	conn2 = cfs_hash_findadd_unique(conn_hash, &peer, &conn->c_hash);
 	if (conn != conn2) {
-		kfree(conn);
+		OBD_FREE_PTR(conn);
 		conn = conn2;
 	}
 out:
@@ -82,6 +85,7 @@ out:
 	       libcfs_nid2str(conn->c_peer.nid));
 	return conn;
 }
+EXPORT_SYMBOL(ptlrpc_connection_get);
 
 int ptlrpc_connection_put(struct ptlrpc_connection *conn)
 {
@@ -117,6 +121,7 @@ int ptlrpc_connection_put(struct ptlrpc_connection *conn)
 
 	return rc;
 }
+EXPORT_SYMBOL(ptlrpc_connection_put);
 
 struct ptlrpc_connection *
 ptlrpc_connection_addref(struct ptlrpc_connection *conn)
@@ -128,6 +133,7 @@ ptlrpc_connection_addref(struct ptlrpc_connection *conn)
 
 	return conn;
 }
+EXPORT_SYMBOL(ptlrpc_connection_addref);
 
 int ptlrpc_connection_init(void)
 {
@@ -143,17 +149,19 @@ int ptlrpc_connection_init(void)
 
 	return 0;
 }
+EXPORT_SYMBOL(ptlrpc_connection_init);
 
 void ptlrpc_connection_fini(void)
 {
 	cfs_hash_putref(conn_hash);
 }
+EXPORT_SYMBOL(ptlrpc_connection_fini);
 
 /*
  * Hash operations for net_peer<->connection
  */
-static unsigned int
-conn_hashfn(struct cfs_hash *hs, const void *key, unsigned int mask)
+static unsigned
+conn_hashfn(struct cfs_hash *hs, const void *key, unsigned mask)
 {
 	return cfs_hash_djb2_hash(key, sizeof(lnet_process_id_t), mask);
 }
@@ -164,8 +172,8 @@ conn_keycmp(const void *key, struct hlist_node *hnode)
 	struct ptlrpc_connection *conn;
 	const lnet_process_id_t *conn_key;
 
-	LASSERT(key);
-	conn_key = key;
+	LASSERT(key != NULL);
+	conn_key = (lnet_process_id_t*)key;
 	conn = hlist_entry(hnode, struct ptlrpc_connection, c_hash);
 
 	return conn_key->nid == conn->c_peer.nid &&
@@ -176,7 +184,6 @@ static void *
 conn_key(struct hlist_node *hnode)
 {
 	struct ptlrpc_connection *conn;
-
 	conn = hlist_entry(hnode, struct ptlrpc_connection, c_hash);
 	return &conn->c_peer;
 }
@@ -219,15 +226,15 @@ conn_exit(struct cfs_hash *hs, struct hlist_node *hnode)
 	LASSERTF(atomic_read(&conn->c_refcount) == 0,
 		 "Busy connection with %d refs\n",
 		 atomic_read(&conn->c_refcount));
-	kfree(conn);
+	OBD_FREE_PTR(conn);
 }
 
-static struct cfs_hash_ops conn_hash_ops = {
+static cfs_hash_ops_t conn_hash_ops = {
 	.hs_hash	= conn_hashfn,
 	.hs_keycmp      = conn_keycmp,
-	.hs_key		= conn_key,
+	.hs_key	 = conn_key,
 	.hs_object      = conn_object,
-	.hs_get		= conn_get,
+	.hs_get	 = conn_get,
 	.hs_put_locked  = conn_put_locked,
 	.hs_exit	= conn_exit,
 };

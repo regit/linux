@@ -13,6 +13,16 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
  */
 
 /* Linux specific include files */
@@ -360,6 +370,7 @@ int omap3isp_h3a_af_init(struct isp_device *isp)
 
 	af->ops = &h3a_af_ops;
 	af->priv = af_cfg;
+	af->dma_ch = -1;
 	af->event_type = V4L2_EVENT_OMAP3ISP_AF;
 	af->isp = isp;
 
@@ -367,8 +378,8 @@ int omap3isp_h3a_af_init(struct isp_device *isp)
 	af_recover_cfg = devm_kzalloc(isp->dev, sizeof(*af_recover_cfg),
 				      GFP_KERNEL);
 	if (!af_recover_cfg) {
-		dev_err(af->isp->dev,
-			"AF: cannot allocate memory for recover configuration.\n");
+		dev_err(af->isp->dev, "AF: cannot allocate memory for recover "
+				      "configuration.\n");
 		return -ENOMEM;
 	}
 
@@ -379,8 +390,8 @@ int omap3isp_h3a_af_init(struct isp_device *isp)
 	af_recover_cfg->paxel.v_cnt = OMAP3ISP_AF_PAXEL_VERTICAL_COUNT_MIN;
 	af_recover_cfg->paxel.line_inc = OMAP3ISP_AF_PAXEL_INCREMENT_MIN;
 	if (h3a_af_validate_params(af, af_recover_cfg)) {
-		dev_err(af->isp->dev,
-			"AF: recover configuration is invalid.\n");
+		dev_err(af->isp->dev, "AF: recover configuration is "
+				      "invalid.\n");
 		return -EINVAL;
 	}
 

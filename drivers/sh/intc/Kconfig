@@ -1,8 +1,6 @@
 config SH_INTC
-	bool
+	def_bool y
 	select IRQ_DOMAIN
-
-if SH_INTC
 
 comment "Interrupt controller options"
 
@@ -39,5 +37,3 @@ config INTC_MAPPING_DEBUG
 	  between system IRQs and the per-controller id tables.
 
 	  If in doubt, say N.
-
-endif

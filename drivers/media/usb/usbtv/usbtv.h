@@ -1,6 +1,10 @@
 /*
+ * Fushicai USBTV007 Video Grabber Driver
+ *
  * Copyright (c) 2013 Lubomir Rintel
  * All rights reserved.
+ * No physical hardware was harmed running Windows during the
+ * reverse-engineering activity
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -13,24 +17,6 @@
  *
  * Alternatively, this software may be distributed under the terms of the
  * GNU General Public License ("GPL").
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-/*
- * Fushicai USBTV007 Audio-Video Grabber Driver
- *
- * No physical hardware was harmed running Windows during the
- * reverse-engineering activity
  */
 
 #include <linux/module.h>
@@ -38,15 +24,11 @@
 #include <linux/usb.h>
 
 #include <media/v4l2-device.h>
-#include <media/v4l2-ctrls.h>
-#include <media/videobuf2-v4l2.h>
 #include <media/videobuf2-vmalloc.h>
 
 /* Hardware. */
 #define USBTV_VIDEO_ENDP	0x81
-#define USBTV_AUDIO_ENDP	0x83
 #define USBTV_BASE		0xc000
-#define USBTV_CONTROL_REG	11
 #define USBTV_REQUEST_REG	12
 
 /* Number of concurrent isochronous urbs submitted.
@@ -56,10 +38,6 @@
 
 #define USBTV_CHUNK_SIZE	256
 #define USBTV_CHUNK		240
-
-#define USBTV_AUDIO_URBSIZE	20480
-#define USBTV_AUDIO_HDRSIZE	4
-#define USBTV_AUDIO_BUFFER	65536
 
 /* Chunk header. */
 #define USBTV_MAGIC_OK(chunk)	((be32_to_cpu(chunk[0]) & 0xff000000) \
@@ -78,7 +56,7 @@ struct usbtv_norm_params {
 
 /* A single videobuf2 frame buffer. */
 struct usbtv_buf {
-	struct vb2_v4l2_buffer vb;
+	struct vb2_buffer vb;
 	struct list_head list;
 };
 
@@ -89,7 +67,6 @@ struct usbtv {
 
 	/* video */
 	struct v4l2_device v4l2_dev;
-	struct v4l2_ctrl_handler ctrl;
 	struct video_device vdev;
 	struct vb2_queue vb2q;
 	struct mutex v4l2_lock;
@@ -112,26 +89,11 @@ struct usbtv {
 	int width, height;
 	int n_chunks;
 	int iso_size;
-	int last_odd;
 	unsigned int sequence;
 	struct urb *isoc_urbs[USBTV_ISOC_TRANSFERS];
-
-	/* audio */
-	struct snd_card *snd;
-	struct snd_pcm_substream *snd_substream;
-	atomic_t snd_stream;
-	struct work_struct snd_trigger;
-	struct urb *snd_bulk_urb;
-	size_t snd_buffer_pos;
-	size_t snd_period_pos;
 };
 
 int usbtv_set_regs(struct usbtv *usbtv, const u16 regs[][2], int size);
 
 int usbtv_video_init(struct usbtv *usbtv);
 void usbtv_video_free(struct usbtv *usbtv);
-
-int usbtv_audio_init(struct usbtv *usbtv);
-void usbtv_audio_free(struct usbtv *usbtv);
-void usbtv_audio_suspend(struct usbtv *usbtv);
-void usbtv_audio_resume(struct usbtv *usbtv);

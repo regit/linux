@@ -14,6 +14,10 @@
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *   GNU General Public License for more details.
  *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *
  */
 
 #include <linux/delay.h>
@@ -27,7 +31,7 @@
 #include <media/v4l2-fh.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-event.h>
-#include <media/drv-intf/tea575x.h>
+#include <media/tea575x.h>
 
 MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("Routines for control of TEA5757/5759 Philips AM/FM radio tuner chips");
@@ -222,7 +226,6 @@ void snd_tea575x_set_freq(struct snd_tea575x *tea)
 	snd_tea575x_write(tea, tea->val);
 	tea->freq = snd_tea575x_val_to_freq(tea, tea->val);
 }
-EXPORT_SYMBOL(snd_tea575x_set_freq);
 
 /*
  * Linux Video interface
@@ -244,9 +247,10 @@ static int vidioc_querycap(struct file *file, void  *priv,
 	return 0;
 }
 
-int snd_tea575x_enum_freq_bands(struct snd_tea575x *tea,
-					struct v4l2_frequency_band *band)
+static int vidioc_enum_freq_bands(struct file *file, void *priv,
+					 struct v4l2_frequency_band *band)
 {
+	struct snd_tea575x *tea = video_drvdata(file);
 	int index;
 
 	if (band->tuner != 0)
@@ -275,25 +279,18 @@ int snd_tea575x_enum_freq_bands(struct snd_tea575x *tea,
 
 	return 0;
 }
-EXPORT_SYMBOL(snd_tea575x_enum_freq_bands);
 
-static int vidioc_enum_freq_bands(struct file *file, void *priv,
-					 struct v4l2_frequency_band *band)
+static int vidioc_g_tuner(struct file *file, void *priv,
+					struct v4l2_tuner *v)
 {
 	struct snd_tea575x *tea = video_drvdata(file);
-
-	return snd_tea575x_enum_freq_bands(tea, band);
-}
-
-int snd_tea575x_g_tuner(struct snd_tea575x *tea, struct v4l2_tuner *v)
-{
 	struct v4l2_frequency_band band_fm = { 0, };
 
 	if (v->index > 0)
 		return -EINVAL;
 
 	snd_tea575x_read(tea);
-	snd_tea575x_enum_freq_bands(tea, &band_fm);
+	vidioc_enum_freq_bands(file, priv, &band_fm);
 
 	memset(v, 0, sizeof(*v));
 	strlcpy(v->name, tea->has_am ? "FM/AM" : "FM", sizeof(v->name));
@@ -306,15 +303,6 @@ int snd_tea575x_g_tuner(struct snd_tea575x *tea, struct v4l2_tuner *v)
 		V4L2_TUNER_MODE_MONO : V4L2_TUNER_MODE_STEREO;
 	v->signal = tea->tuned ? 0xffff : 0;
 	return 0;
-}
-EXPORT_SYMBOL(snd_tea575x_g_tuner);
-
-static int vidioc_g_tuner(struct file *file, void *priv,
-					struct v4l2_tuner *v)
-{
-	struct snd_tea575x *tea = video_drvdata(file);
-
-	return snd_tea575x_g_tuner(tea, v);
 }
 
 static int vidioc_s_tuner(struct file *file, void *priv,
@@ -368,9 +356,10 @@ static int vidioc_s_frequency(struct file *file, void *priv,
 	return 0;
 }
 
-int snd_tea575x_s_hw_freq_seek(struct file *file, struct snd_tea575x *tea,
-				const struct v4l2_hw_freq_seek *a)
+static int vidioc_s_hw_freq_seek(struct file *file, void *fh,
+					const struct v4l2_hw_freq_seek *a)
 {
+	struct snd_tea575x *tea = video_drvdata(file);
 	unsigned long timeout;
 	int i, spacing;
 
@@ -453,15 +442,6 @@ int snd_tea575x_s_hw_freq_seek(struct file *file, struct snd_tea575x *tea,
 	snd_tea575x_set_freq(tea);
 	return -ENODATA;
 }
-EXPORT_SYMBOL(snd_tea575x_s_hw_freq_seek);
-
-static int vidioc_s_hw_freq_seek(struct file *file, void *fh,
-					const struct v4l2_hw_freq_seek *a)
-{
-	struct snd_tea575x *tea = video_drvdata(file);
-
-	return snd_tea575x_s_hw_freq_seek(file, tea, a);
-}
 
 static int tea575x_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -543,6 +523,7 @@ int snd_tea575x_init(struct snd_tea575x *tea, struct module *owner)
 	tea->fops = tea575x_fops;
 	tea->fops.owner = owner;
 	tea->vd.fops = &tea->fops;
+	set_bit(V4L2_FL_USE_FH_PRIO, &tea->vd.flags);
 	/* disable hw_freq_seek if we can't use it */
 	if (tea->cannot_read_data)
 		v4l2_disable_ioctl(&tea->vd, VIDIOC_S_HW_FREQ_SEEK);
@@ -579,11 +560,25 @@ int snd_tea575x_init(struct snd_tea575x *tea, struct module *owner)
 
 	return 0;
 }
-EXPORT_SYMBOL(snd_tea575x_init);
 
 void snd_tea575x_exit(struct snd_tea575x *tea)
 {
 	video_unregister_device(&tea->vd);
 	v4l2_ctrl_handler_free(tea->vd.ctrl_handler);
 }
+
+static int __init alsa_tea575x_module_init(void)
+{
+	return 0;
+}
+
+static void __exit alsa_tea575x_module_exit(void)
+{
+}
+
+module_init(alsa_tea575x_module_init)
+module_exit(alsa_tea575x_module_exit)
+
+EXPORT_SYMBOL(snd_tea575x_init);
 EXPORT_SYMBOL(snd_tea575x_exit);
+EXPORT_SYMBOL(snd_tea575x_set_freq);

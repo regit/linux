@@ -22,7 +22,9 @@
 #include <linux/cper.h>
 
 #include "aerdrv.h"
-#include <ras/ras_event.h>
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/ras.h>
 
 #define AER_AGENT_RECEIVER		0
 #define AER_AGENT_REQUESTER		1
@@ -89,17 +91,15 @@ static const char *aer_correctable_error_string[] = {
 	NULL,
 	"Replay Timer Timeout",		/* Bit Position 12	*/
 	"Advisory Non-Fatal",		/* Bit Position 13	*/
-	"Corrected Internal Error",	/* Bit Position 14	*/
-	"Header Log Overflow",		/* Bit Position 15	*/
 };
 
 static const char *aer_uncorrectable_error_string[] = {
-	"Undefined",			/* Bit Position 0	*/
+	NULL,
 	NULL,
 	NULL,
 	NULL,
 	"Data Link Protocol",		/* Bit Position 4	*/
-	"Surprise Down Error",		/* Bit Position 5	*/
+	NULL,
 	NULL,
 	NULL,
 	NULL,
@@ -115,11 +115,6 @@ static const char *aer_uncorrectable_error_string[] = {
 	"Malformed TLP",		/* Bit Position 18	*/
 	"ECRC",				/* Bit Position 19	*/
 	"Unsupported Request",		/* Bit Position 20	*/
-	"ACS Violation",		/* Bit Position 21	*/
-	"Uncorrectable Internal Error",	/* Bit Position 22	*/
-	"MC Blocked TLP",		/* Bit Position 23	*/
-	"AtomicOp Egress Blocked",	/* Bit Position 24	*/
-	"TLP Prefix Blocked Error",	/* Bit Position 25	*/
 };
 
 static const char *aer_agent_string[] = {
@@ -132,8 +127,16 @@ static const char *aer_agent_string[] = {
 static void __print_tlp_header(struct pci_dev *dev,
 			       struct aer_header_log_regs *t)
 {
-	dev_err(&dev->dev, "  TLP Header: %08x %08x %08x %08x\n",
-		t->dw0, t->dw1, t->dw2, t->dw3);
+	unsigned char *tlp = (unsigned char *)&t;
+
+	dev_err(&dev->dev, "  TLP Header:"
+		" %02x%02x%02x%02x %02x%02x%02x%02x"
+		" %02x%02x%02x%02x %02x%02x%02x%02x\n",
+		*(tlp + 3), *(tlp + 2), *(tlp + 1), *tlp,
+		*(tlp + 7), *(tlp + 6), *(tlp + 5), *(tlp + 4),
+		*(tlp + 11), *(tlp + 10), *(tlp + 9),
+		*(tlp + 8), *(tlp + 15), *(tlp + 14),
+		*(tlp + 13), *(tlp + 12));
 }
 
 static void __aer_print_error(struct pci_dev *dev,
@@ -219,12 +222,14 @@ int cper_severity_to_aer(int cper_severity)
 }
 EXPORT_SYMBOL_GPL(cper_severity_to_aer);
 
-void cper_print_aer(struct pci_dev *dev, int aer_severity,
+void cper_print_aer(struct pci_dev *dev, int cper_severity,
 		    struct aer_capability_regs *aer)
 {
-	int layer, agent, status_strs_size, tlp_header_valid = 0;
+	int aer_severity, layer, agent, status_strs_size, tlp_header_valid = 0;
 	u32 status, mask;
 	const char **status_strs;
+
+	aer_severity = cper_severity_to_aer(cper_severity);
 
 	if (aer_severity == AER_CORRECTABLE) {
 		status = aer->cor_status;

@@ -24,7 +24,7 @@
 #include <linux/slab.h>
 #include <linux/kfifo.h>
 #include <linux/module.h>
-#include <media/drv-intf/cx25840.h>
+#include <media/cx25840.h>
 #include <media/rc-core.h>
 
 #include "cx25840-core.h"
@@ -224,7 +224,7 @@ static inline unsigned int lpf_count_to_us(unsigned int count)
 }
 
 /*
- * FIFO register pulse width count computations
+ * FIFO register pulse width count compuations
  */
 static u32 clock_divider_to_resolution(u16 divider)
 {
@@ -1113,8 +1113,8 @@ int cx25840_ir_log_status(struct v4l2_subdev *sd)
 			j = 0;
 			break;
 		}
-		v4l2_info(sd, "\tNext carrier edge window:	    16 clocks -%1d/+%1d, %u to %u Hz\n",
-			  i, j,
+		v4l2_info(sd, "\tNext carrier edge window:          16 clocks "
+			  "-%1d/+%1d, %u to %u Hz\n", i, j,
 			  clock_divider_to_freq(rxclk, 16 + j),
 			  clock_divider_to_freq(rxclk, 16 - i));
 	}
@@ -1124,7 +1124,8 @@ int cx25840_ir_log_status(struct v4l2_subdev *sd)
 	v4l2_info(sd, "\tLow pass filter:                   %s\n",
 		  filtr ? "enabled" : "disabled");
 	if (filtr)
-		v4l2_info(sd, "\tMin acceptable pulse width (LPF):  %u us, %u ns\n",
+		v4l2_info(sd, "\tMin acceptable pulse width (LPF):  %u us, "
+			  "%u ns\n",
 			  lpf_count_to_us(filtr),
 			  lpf_count_to_ns(filtr));
 	v4l2_info(sd, "\tPulse width timer timed-out:       %s\n",

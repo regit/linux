@@ -55,13 +55,15 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/miscdevice.h>
-#include <linux/init.h>
+#include <linux/module.h>
 
 #include "xenbus_comms.h"
 
 #include <xen/xenbus.h>
 #include <xen/xen.h>
 #include <asm/xen/hypervisor.h>
+
+MODULE_LICENSE("GPL");
 
 /*
  * An element of a list of outstanding transactions, for which we're
@@ -186,8 +188,6 @@ static int queue_reply(struct list_head *queue, const void *data, size_t len)
 
 	if (len == 0)
 		return 0;
-	if (len > XENSTORE_PAYLOAD_MAX)
-		return -EINVAL;
 
 	rb = kmalloc(sizeof(*rb) + len, GFP_KERNEL);
 	if (rb == NULL)
@@ -302,29 +302,6 @@ static void watch_fired(struct xenbus_watch *watch,
 	mutex_unlock(&adap->dev_data->reply_mutex);
 }
 
-static int xenbus_command_reply(struct xenbus_file_priv *u,
-				unsigned int msg_type, const char *reply)
-{
-	struct {
-		struct xsd_sockmsg hdr;
-		const char body[16];
-	} msg;
-	int rc;
-
-	msg.hdr = u->u.msg;
-	msg.hdr.type = msg_type;
-	msg.hdr.len = strlen(reply) + 1;
-	if (msg.hdr.len > sizeof(msg.body))
-		return -E2BIG;
-
-	mutex_lock(&u->reply_mutex);
-	rc = queue_reply(&u->read_buffers, &msg, sizeof(msg.hdr) + msg.hdr.len);
-	wake_up(&u->read_waitq);
-	mutex_unlock(&u->reply_mutex);
-
-	return rc;
-}
-
 static int xenbus_write_transaction(unsigned msg_type,
 				    struct xenbus_file_priv *u)
 {
@@ -339,31 +316,26 @@ static int xenbus_write_transaction(unsigned msg_type,
 			rc = -ENOMEM;
 			goto out;
 		}
-	} else if (u->u.msg.tx_id != 0) {
-		list_for_each_entry(trans, &u->transactions, list)
-			if (trans->handle.id == u->u.msg.tx_id)
-				break;
-		if (&trans->list == &u->transactions)
-			return xenbus_command_reply(u, XS_ERROR, "ENOENT");
 	}
 
 	reply = xenbus_dev_request_and_reply(&u->u.msg);
 	if (IS_ERR(reply)) {
-		if (msg_type == XS_TRANSACTION_START)
-			kfree(trans);
+		kfree(trans);
 		rc = PTR_ERR(reply);
 		goto out;
 	}
 
 	if (msg_type == XS_TRANSACTION_START) {
-		if (u->u.msg.type == XS_ERROR)
-			kfree(trans);
-		else {
-			trans->handle.id = simple_strtoul(reply, NULL, 0);
-			list_add(&trans->list, &u->transactions);
-		}
-	} else if (u->u.msg.type == XS_TRANSACTION_END) {
+		trans->handle.id = simple_strtoul(reply, NULL, 0);
+
+		list_add(&trans->list, &u->transactions);
+	} else if (msg_type == XS_TRANSACTION_END) {
+		list_for_each_entry(trans, &u->transactions, list)
+			if (trans->handle.id == u->u.msg.tx_id)
+				break;
+		BUG_ON(&trans->list == &u->transactions);
 		list_del(&trans->list);
+
 		kfree(trans);
 	}
 
@@ -387,7 +359,7 @@ out:
 
 static int xenbus_write_watch(unsigned msg_type, struct xenbus_file_priv *u)
 {
-	struct watch_adapter *watch;
+	struct watch_adapter *watch, *tmp_watch;
 	char *path, *token;
 	int err, rc;
 	LIST_HEAD(staging_q);
@@ -395,12 +367,12 @@ static int xenbus_write_watch(unsigned msg_type, struct xenbus_file_priv *u)
 	path = u->u.buffer + sizeof(u->u.msg);
 	token = memchr(path, 0, u->u.msg.len);
 	if (token == NULL) {
-		rc = xenbus_command_reply(u, XS_ERROR, "EINVAL");
+		rc = -EILSEQ;
 		goto out;
 	}
 	token++;
 	if (memchr(token, 0, u->u.msg.len - (token - path)) == NULL) {
-		rc = xenbus_command_reply(u, XS_ERROR, "EINVAL");
+		rc = -EILSEQ;
 		goto out;
 	}
 
@@ -422,7 +394,7 @@ static int xenbus_write_watch(unsigned msg_type, struct xenbus_file_priv *u)
 		}
 		list_add(&watch->list, &u->watches);
 	} else {
-		list_for_each_entry(watch, &u->watches, list) {
+		list_for_each_entry_safe(watch, tmp_watch, &u->watches, list) {
 			if (!strcmp(watch->token, token) &&
 			    !strcmp(watch->watch.node, path)) {
 				unregister_xenbus_watch(&watch->watch);
@@ -434,7 +406,23 @@ static int xenbus_write_watch(unsigned msg_type, struct xenbus_file_priv *u)
 	}
 
 	/* Success.  Synthesize a reply to say all is OK. */
-	rc = xenbus_command_reply(u, msg_type, "OK");
+	{
+		struct {
+			struct xsd_sockmsg hdr;
+			char body[3];
+		} __packed reply = {
+			{
+				.type = msg_type,
+				.len = sizeof(reply.body)
+			},
+			"OK"
+		};
+
+		mutex_lock(&u->reply_mutex);
+		rc = queue_reply(&u->read_buffers, &reply, sizeof(reply));
+		wake_up(&u->read_waitq);
+		mutex_unlock(&u->reply_mutex);
+	}
 
 out:
 	return rc;
@@ -545,8 +533,6 @@ static int xenbus_file_open(struct inode *inode, struct file *filp)
 
 	nonseekable_open(inode, filp);
 
-	filp->f_mode &= ~FMODE_ATOMIC_POS; /* cdev-style semantics */
-
 	u = kzalloc(sizeof(*u), GFP_KERNEL);
 	if (u == NULL)
 		return -ENOMEM;
@@ -635,4 +621,11 @@ static int __init xenbus_init(void)
 		pr_err("Could not register xenbus frontend device\n");
 	return err;
 }
-device_initcall(xenbus_init);
+
+static void __exit xenbus_exit(void)
+{
+	misc_deregister(&xenbus_dev);
+}
+
+module_init(xenbus_init);
+module_exit(xenbus_exit);

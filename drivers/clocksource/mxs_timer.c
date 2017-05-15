@@ -31,6 +31,8 @@
 #include <linux/stmp_device.h>
 #include <linux/sched_clock.h>
 
+#include <asm/mach/time.h>
+
 /*
  * There are 2 versions of the timrot on Freescale MXS-based SoCs.
  * The v1 on MX23 only gets 16 bits counter, while v2 on MX28
@@ -75,6 +77,7 @@
 #define BV_TIMROTv2_TIMCTRLn_SELECT__TICK_ALWAYS	0xf
 
 static struct clock_event_device mxs_clockevent_device;
+static enum clock_event_mode mxs_clockevent_mode = CLOCK_EVT_MODE_UNUSED;
 
 static void __iomem *mxs_timrot_base;
 static u32 timrot_major_version;
@@ -97,7 +100,7 @@ static void timrot_irq_acknowledge(void)
 		     HW_TIMROT_TIMCTRLn(0) + STMP_OFFSET_REG_CLR);
 }
 
-static u64 timrotv1_get_cycles(struct clocksource *cs)
+static cycle_t timrotv1_get_cycles(struct clocksource *cs)
 {
 	return ~((__raw_readl(mxs_timrot_base + HW_TIMROT_TIMCOUNTn(1))
 			& 0xffff0000) >> 16);
@@ -138,49 +141,64 @@ static struct irqaction mxs_timer_irq = {
 	.handler	= mxs_timer_interrupt,
 };
 
-static void mxs_irq_clear(char *state)
+#ifdef DEBUG
+static const char *clock_event_mode_label[] const = {
+	[CLOCK_EVT_MODE_PERIODIC] = "CLOCK_EVT_MODE_PERIODIC",
+	[CLOCK_EVT_MODE_ONESHOT]  = "CLOCK_EVT_MODE_ONESHOT",
+	[CLOCK_EVT_MODE_SHUTDOWN] = "CLOCK_EVT_MODE_SHUTDOWN",
+	[CLOCK_EVT_MODE_UNUSED]   = "CLOCK_EVT_MODE_UNUSED"
+};
+#endif /* DEBUG */
+
+static void mxs_set_mode(enum clock_event_mode mode,
+				struct clock_event_device *evt)
 {
 	/* Disable interrupt in timer module */
 	timrot_irq_disable();
 
-	/* Set event time into the furthest future */
-	if (timrot_is_v1())
-		__raw_writel(0xffff, mxs_timrot_base + HW_TIMROT_TIMCOUNTn(1));
-	else
-		__raw_writel(0xffffffff,
-			     mxs_timrot_base + HW_TIMROT_FIXED_COUNTn(1));
+	if (mode != mxs_clockevent_mode) {
+		/* Set event time into the furthest future */
+		if (timrot_is_v1())
+			__raw_writel(0xffff,
+				mxs_timrot_base + HW_TIMROT_TIMCOUNTn(1));
+		else
+			__raw_writel(0xffffffff,
+				mxs_timrot_base + HW_TIMROT_FIXED_COUNTn(1));
 
-	/* Clear pending interrupt */
-	timrot_irq_acknowledge();
+		/* Clear pending interrupt */
+		timrot_irq_acknowledge();
+	}
 
 #ifdef DEBUG
-	pr_info("%s: changing mode to %s\n", __func__, state)
+	pr_info("%s: changing mode from %s to %s\n", __func__,
+		clock_event_mode_label[mxs_clockevent_mode],
+		clock_event_mode_label[mode]);
 #endif /* DEBUG */
-}
 
-static int mxs_shutdown(struct clock_event_device *evt)
-{
-	mxs_irq_clear("shutdown");
+	/* Remember timer mode */
+	mxs_clockevent_mode = mode;
 
-	return 0;
-}
-
-static int mxs_set_oneshot(struct clock_event_device *evt)
-{
-	if (clockevent_state_oneshot(evt))
-		mxs_irq_clear("oneshot");
-	timrot_irq_enable();
-	return 0;
+	switch (mode) {
+	case CLOCK_EVT_MODE_PERIODIC:
+		pr_err("%s: Periodic mode is not implemented\n", __func__);
+		break;
+	case CLOCK_EVT_MODE_ONESHOT:
+		timrot_irq_enable();
+		break;
+	case CLOCK_EVT_MODE_SHUTDOWN:
+	case CLOCK_EVT_MODE_UNUSED:
+	case CLOCK_EVT_MODE_RESUME:
+		/* Left event sources disabled, no more interrupts appear */
+		break;
+	}
 }
 
 static struct clock_event_device mxs_clockevent_device = {
-	.name			= "mxs_timrot",
-	.features		= CLOCK_EVT_FEAT_ONESHOT,
-	.set_state_shutdown	= mxs_shutdown,
-	.set_state_oneshot	= mxs_set_oneshot,
-	.tick_resume		= mxs_shutdown,
-	.set_next_event		= timrotv2_set_next_event,
-	.rating			= 200,
+	.name		= "mxs_timrot",
+	.features	= CLOCK_EVT_FEAT_ONESHOT,
+	.set_mode	= mxs_set_mode,
+	.set_next_event	= timrotv2_set_next_event,
+	.rating		= 200,
 };
 
 static int __init mxs_clockevent_init(struct clk *timer_clk)
@@ -224,10 +242,10 @@ static int __init mxs_clocksource_init(struct clk *timer_clk)
 	return 0;
 }
 
-static int __init mxs_timer_init(struct device_node *np)
+static void __init mxs_timer_init(struct device_node *np)
 {
 	struct clk *timer_clk;
-	int irq, ret;
+	int irq;
 
 	mxs_timrot_base = of_iomap(np, 0);
 	WARN_ON(!mxs_timrot_base);
@@ -235,12 +253,10 @@ static int __init mxs_timer_init(struct device_node *np)
 	timer_clk = of_clk_get(np, 0);
 	if (IS_ERR(timer_clk)) {
 		pr_err("%s: failed to get clk\n", __func__);
-		return PTR_ERR(timer_clk);
+		return;
 	}
 
-	ret = clk_prepare_enable(timer_clk);
-	if (ret)
-		return ret;
+	clk_prepare_enable(timer_clk);
 
 	/*
 	 * Initialize timers to a known state
@@ -278,19 +294,11 @@ static int __init mxs_timer_init(struct device_node *np)
 			mxs_timrot_base + HW_TIMROT_FIXED_COUNTn(1));
 
 	/* init and register the timer to the framework */
-	ret = mxs_clocksource_init(timer_clk);
-	if (ret)
-		return ret;
-
-	ret = mxs_clockevent_init(timer_clk);
-	if (ret)
-		return ret;
+	mxs_clocksource_init(timer_clk);
+	mxs_clockevent_init(timer_clk);
 
 	/* Make irqs happen */
 	irq = irq_of_parse_and_map(np, 0);
-	if (irq <= 0)
-		return -EINVAL;
-
-	return setup_irq(irq, &mxs_timer_irq);
+	setup_irq(irq, &mxs_timer_irq);
 }
 CLOCKSOURCE_OF_DECLARE(mxs, "fsl,timrot", mxs_timer_init);

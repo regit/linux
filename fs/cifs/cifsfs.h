@@ -31,25 +31,19 @@
  * so that it will fit. We use hash_64 to convert the value to 31 bits, and
  * then add 1, to ensure that we don't end up with a 0 as the value.
  */
+#if BITS_PER_LONG == 64
 static inline ino_t
 cifs_uniqueid_to_ino_t(u64 fileid)
 {
-	if ((sizeof(ino_t)) < (sizeof(u64)))
-		return (ino_t)hash_64(fileid, (sizeof(ino_t) * 8) - 1) + 1;
-
 	return (ino_t)fileid;
-
 }
-
-static inline void cifs_set_time(struct dentry *dentry, unsigned long time)
+#else
+static inline ino_t
+cifs_uniqueid_to_ino_t(u64 fileid)
 {
-	dentry->d_fsdata = (void *) time;
+	return (ino_t)hash_64(fileid, (sizeof(ino_t) * 8) - 1) + 1;
 }
-
-static inline unsigned long cifs_get_time(struct dentry *dentry)
-{
-	return (unsigned long) dentry->d_fsdata;
-}
+#endif
 
 extern struct file_system_type cifs_fs_type;
 extern const struct address_space_operations cifs_addr_ops;
@@ -74,8 +68,8 @@ extern int cifs_hardlink(struct dentry *, struct inode *, struct dentry *);
 extern int cifs_mknod(struct inode *, struct dentry *, umode_t, dev_t);
 extern int cifs_mkdir(struct inode *, struct dentry *, umode_t);
 extern int cifs_rmdir(struct inode *, struct dentry *);
-extern int cifs_rename2(struct inode *, struct dentry *, struct inode *,
-			struct dentry *, unsigned int);
+extern int cifs_rename(struct inode *, struct dentry *, struct inode *,
+		       struct dentry *);
 extern int cifs_revalidate_file_attr(struct file *filp);
 extern int cifs_revalidate_dentry_attr(struct dentry *);
 extern int cifs_revalidate_file(struct file *filp);
@@ -126,23 +120,21 @@ extern struct vfsmount *cifs_dfs_d_automount(struct path *path);
 #endif
 
 /* Functions related to symlinks */
-extern const char *cifs_get_link(struct dentry *, struct inode *,
-			struct delayed_call *);
+extern void *cifs_follow_link(struct dentry *direntry, struct nameidata *nd);
+extern int cifs_readlink(struct dentry *direntry, char __user *buffer,
+			 int buflen);
 extern int cifs_symlink(struct inode *inode, struct dentry *direntry,
 			const char *symname);
-
-#ifdef CONFIG_CIFS_XATTR
-extern const struct xattr_handler *cifs_xattr_handlers[];
+extern int	cifs_removexattr(struct dentry *, const char *);
+extern int	cifs_setxattr(struct dentry *, const char *, const void *,
+			size_t, int);
+extern ssize_t	cifs_getxattr(struct dentry *, const char *, void *, size_t);
 extern ssize_t	cifs_listxattr(struct dentry *, char *, size_t);
-#else
-# define cifs_xattr_handlers NULL
-# define cifs_listxattr NULL
-#endif
-
 extern long cifs_ioctl(struct file *filep, unsigned int cmd, unsigned long arg);
+
 #ifdef CONFIG_CIFS_NFSD_EXPORT
 extern const struct export_operations cifs_export_ops;
 #endif /* CONFIG_CIFS_NFSD_EXPORT */
 
-#define CIFS_VERSION   "2.09"
+#define CIFS_VERSION   "2.03"
 #endif				/* _CIFSFS_H */

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,16 +44,6 @@
 #ifndef __ACLINUX_H__
 #define __ACLINUX_H__
 
-#ifdef __KERNEL__
-
-/* ACPICA external files should not include ACPICA headers directly. */
-
-#if !defined(BUILDING_ACPICA) && !defined(_LINUX_ACPI_H)
-#error "Please don't include <acpi/acpi.h> directly, include <linux/acpi.h> instead."
-#endif
-
-#endif
-
 /* Common (in-kernel/user-space) ACPICA configuration */
 
 #define ACPI_USE_SYSTEM_CLIBRARY
@@ -63,18 +53,10 @@
 
 #define ACPI_USE_SYSTEM_INTTYPES
 
-/* Kernel specific ACPICA configuration */
+/* Compile for reduced hardware mode only with this kernel config */
 
 #ifdef CONFIG_ACPI_REDUCED_HARDWARE_ONLY
 #define ACPI_REDUCED_HARDWARE 1
-#endif
-
-#ifdef CONFIG_ACPI_DEBUGGER
-#define ACPI_DEBUGGER
-#endif
-
-#ifdef CONFIG_ACPI_DEBUG
-#define ACPI_MUTEX_DEBUG
 #endif
 
 #include <linux/string.h>
@@ -88,11 +70,7 @@
 #ifdef EXPORT_ACPI_INTERFACES
 #include <linux/export.h>
 #endif
-#ifdef CONFIG_ACPI
 #include <asm/acenv.h>
-#endif
-
-#define ACPI_INIT_FUNCTION __init
 
 #ifndef CONFIG_ACPI
 
@@ -156,13 +134,12 @@
  */
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_readable
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_writable
-#define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_initialize_command_signals
-#define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_terminate_command_signals
 
 /*
  * OSL interfaces used by utilities
  */
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_redirect_output
+#define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_line
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_table_by_name
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_table_by_index
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_table_by_address
@@ -170,29 +147,18 @@
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_next_filename
 #define ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_close_directory
 
-#define ACPI_MSG_ERROR          KERN_ERR "ACPI Error: "
-#define ACPI_MSG_EXCEPTION      KERN_ERR "ACPI Exception: "
-#define ACPI_MSG_WARNING        KERN_WARNING "ACPI Warning: "
-#define ACPI_MSG_INFO           KERN_INFO "ACPI: "
-
-#define ACPI_MSG_BIOS_ERROR     KERN_ERR "ACPI BIOS Error (bug): "
-#define ACPI_MSG_BIOS_WARNING   KERN_WARNING "ACPI BIOS Warning (bug): "
-
 #else				/* !__KERNEL__ */
 
-#define ACPI_USE_STANDARD_HEADERS
-
-#ifdef ACPI_USE_STANDARD_HEADERS
+#include <stdarg.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
 #include <unistd.h>
-#endif
 
 /* Define/disable kernel-specific declarators */
 
 #ifndef __init
 #define __init
-#endif
-#ifndef __iomem
-#define __iomem
 #endif
 
 /* Host-dependent types and defines for user-space ACPICA */
@@ -217,5 +183,9 @@
 #endif
 
 #endif				/* __KERNEL__ */
+
+/* Linux uses GCC */
+
+#include <acpi/platform/acgcc.h>
 
 #endif				/* __ACLINUX_H__ */

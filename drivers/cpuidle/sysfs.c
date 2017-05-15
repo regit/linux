@@ -401,12 +401,10 @@ static int cpuidle_add_state_sysfs(struct cpuidle_device *device)
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(device);
 
 	/* state statistics */
-	for (i = 0; i < drv->state_count; i++) {
+	for (i = 0; i < device->state_count; i++) {
 		kobj = kzalloc(sizeof(struct cpuidle_state_kobj), GFP_KERNEL);
-		if (!kobj) {
-			ret = -ENOMEM;
+		if (!kobj)
 			goto error_state;
-		}
 		kobj->state = &drv->states[i];
 		kobj->state_usage = &device->states_usage[i];
 		init_completion(&kobj->kobj_unregister);
@@ -435,10 +433,9 @@ error_state:
  */
 static void cpuidle_remove_state_sysfs(struct cpuidle_device *device)
 {
-	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(device);
 	int i;
 
-	for (i = 0; i < drv->state_count; i++)
+	for (i = 0; i < device->state_count; i++)
 		cpuidle_free_state_kobj(device, i);
 }
 
@@ -448,7 +445,7 @@ static void cpuidle_remove_state_sysfs(struct cpuidle_device *device)
 
 #define define_one_driver_ro(_name, show)                       \
 	static struct cpuidle_driver_attr attr_driver_##_name = \
-		__ATTR(_name, 0444, show, NULL)
+		__ATTR(_name, 0644, show, NULL)
 
 struct cpuidle_driver_kobj {
 	struct cpuidle_driver *drv;

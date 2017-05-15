@@ -59,7 +59,7 @@
 #include <asm/processor.h>             /* Processor type for cache alignment. */
 #include <asm/io.h>
 #include <asm/dma.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 //#include <asm/spinlock.h>
 
 #define DRIVER_MAJOR_VERSION     1
@@ -76,7 +76,7 @@
 
 static int LMC_PKT_BUF_SZ = 1542;
 
-static const struct pci_device_id lmc_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(lmc_pci_tbl) = {
 	{ PCI_VENDOR_ID_DEC, PCI_DEVICE_ID_DEC_TULIP_FAST,
 	  PCI_VENDOR_ID_LMC, PCI_ANY_ID },
 	{ PCI_VENDOR_ID_DEC, PCI_DEVICE_ID_DEC_TULIP_FAST,
@@ -808,6 +808,7 @@ static int lmc_attach(struct net_device *dev, unsigned short encoding,
 static const struct net_device_ops lmc_ops = {
 	.ndo_open       = lmc_open,
 	.ndo_stop       = lmc_close,
+	.ndo_change_mtu = hdlc_change_mtu,
 	.ndo_start_xmit = hdlc_start_xmit,
 	.ndo_do_ioctl   = lmc_ioctl,
 	.ndo_tx_timeout = lmc_driver_timeout,
@@ -825,7 +826,7 @@ static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* lmc_trace(dev, "lmc_init_one in"); */
 
-	err = pcim_enable_device(pdev);
+	err = pci_enable_device(pdev);
 	if (err) {
 		printk(KERN_ERR "lmc: pci enable failed: %d\n", err);
 		return err;
@@ -834,20 +835,22 @@ static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	err = pci_request_regions(pdev, "lmc");
 	if (err) {
 		printk(KERN_ERR "lmc: pci_request_region failed\n");
-		return err;
+		goto err_req_io;
 	}
 
 	/*
 	 * Allocate our own device structure
 	 */
-	sc = devm_kzalloc(&pdev->dev, sizeof(lmc_softc_t), GFP_KERNEL);
-	if (!sc)
-		return -ENOMEM;
+	sc = kzalloc(sizeof(lmc_softc_t), GFP_KERNEL);
+	if (!sc) {
+		err = -ENOMEM;
+		goto err_kzalloc;
+	}
 
 	dev = alloc_hdlcdev(sc);
 	if (!dev) {
 		printk(KERN_ERR "lmc:alloc_netdev for device failed\n");
-		return -ENOMEM;
+		goto err_hdlcdev;
 	}
 
 
@@ -884,7 +887,7 @@ static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err) {
 		printk(KERN_ERR "%s: register_netdev failed.\n", dev->name);
 		free_netdev(dev);
-		return err;
+		goto err_hdlcdev;
 	}
 
     sc->lmc_cardtype = LMC_CARDTYPE_UNKNOWN;
@@ -967,6 +970,14 @@ static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
     lmc_trace(dev, "lmc_init_one out");
     return 0;
+
+err_hdlcdev:
+	kfree(sc);
+err_kzalloc:
+	pci_release_regions(pdev);
+err_req_io:
+	pci_disable_device(pdev);
+	return err;
 }
 
 /*
@@ -980,6 +991,8 @@ static void lmc_remove_one(struct pci_dev *pdev)
 		printk(KERN_DEBUG "%s: removing...\n", dev->name);
 		unregister_hdlc_device(dev);
 		free_netdev(dev);
+		pci_release_regions(pdev);
+		pci_disable_device(pdev);
 	}
 }
 
@@ -2104,7 +2117,7 @@ static void lmc_driver_timeout(struct net_device *dev)
     sc->lmc_device->stats.tx_errors++;
     sc->extra_stats.tx_ProcTimeout++; /* -baz */
 
-    netif_trans_update(dev); /* prevent tx timeout */
+    dev->trans_start = jiffies; /* prevent tx timeout */
 
 bug_out:
 

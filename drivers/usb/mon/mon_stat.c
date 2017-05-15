@@ -12,7 +12,7 @@
 #include <linux/export.h>
 #include <linux/usb.h>
 #include <linux/fs.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "usb_mon.h"
 
@@ -28,8 +28,7 @@ static int mon_stat_open(struct inode *inode, struct file *file)
 	struct mon_bus *mbus;
 	struct snap *sp;
 
-	sp = kmalloc(sizeof(struct snap), GFP_KERNEL);
-	if (sp == NULL)
+	if ((sp = kmalloc(sizeof(struct snap), GFP_KERNEL)) == NULL)
 		return -ENOMEM;
 
 	mbus = inode->i_private;

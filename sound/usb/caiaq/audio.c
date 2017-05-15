@@ -739,6 +739,7 @@ static struct urb **alloc_urbs(struct snd_usb_caiaqdev *cdev, int dir, int *ret)
 	for (i = 0; i < N_URBS; i++) {
 		urbs[i] = usb_alloc_urb(FRAMES_PER_URB, GFP_KERNEL);
 		if (!urbs[i]) {
+			dev_err(dev, "unable to usb_alloc_urb(), OOM!?\n");
 			*ret = -ENOMEM;
 			return urbs;
 		}
@@ -812,11 +813,6 @@ int snd_usb_caiaq_audio_init(struct snd_usb_caiaqdev *cdev)
 
 	if (cdev->n_streams > MAX_STREAMS) {
 		dev_err(dev, "unable to initialize device, too many streams.\n");
-		return -EINVAL;
-	}
-
-	if (cdev->n_streams < 1) {
-		dev_err(dev, "bogus number of streams: %d\n", cdev->n_streams);
 		return -EINVAL;
 	}
 

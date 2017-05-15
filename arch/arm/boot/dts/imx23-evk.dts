@@ -60,10 +60,10 @@
 				pinctrl-names = "default";
 				pinctrl-0 = <&lcdif_24bit_pins_a>;
 				lcd-supply = <&reg_lcd_3v3>;
-				display = <&display0>;
+				display = <&display>;
 				status = "okay";
 
-				display0: display0 {
+				display: display {
 					bits-per-pixel = <32>;
 					bus-width = <24>;
 

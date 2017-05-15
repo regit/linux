@@ -45,7 +45,7 @@
 
 #define REALLY_SLOW_IO
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #ifdef __arm__
 #undef  HD_IRQ
@@ -694,6 +694,16 @@ static const struct block_device_operations hd_fops = {
 	.getgeo =	hd_getgeo,
 };
 
+/*
+ * This is the hard disk IRQ description. The IRQF_DISABLED in sa_flags
+ * means we run the IRQ-handler with interrupts disabled:  this is bad for
+ * interrupt latency, but anything else has led to problems on some
+ * machines.
+ *
+ * We enable interrupts in some of the routines after making sure it's
+ * safe.
+ */
+
 static int __init hd_init(void)
 {
 	int drive;
@@ -751,7 +761,7 @@ static int __init hd_init(void)
 			p->cyl, p->head, p->sect);
 	}
 
-	if (request_irq(HD_IRQ, hd_interrupt, 0, "hd", NULL)) {
+	if (request_irq(HD_IRQ, hd_interrupt, IRQF_DISABLED, "hd", NULL)) {
 		printk("hd: unable to get IRQ%d for the hard disk driver\n",
 			HD_IRQ);
 		goto out1;

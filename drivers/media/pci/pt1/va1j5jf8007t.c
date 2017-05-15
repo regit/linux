@@ -98,7 +98,7 @@ static int va1j5jf8007t_get_frontend_algo(struct dvb_frontend *fe)
 }
 
 static int
-va1j5jf8007t_read_status(struct dvb_frontend *fe, enum fe_status *status)
+va1j5jf8007t_read_status(struct dvb_frontend *fe, fe_status_t *status)
 {
 	struct va1j5jf8007t_state *state;
 
@@ -266,7 +266,7 @@ static int
 va1j5jf8007t_tune(struct dvb_frontend *fe,
 		  bool re_tune,
 		  unsigned int mode_flags,  unsigned int *delay,
-		  enum fe_status *status)
+		  fe_status_t *status)
 {
 	struct va1j5jf8007t_state *state;
 	int ret;
@@ -427,7 +427,7 @@ static void va1j5jf8007t_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops va1j5jf8007t_ops = {
+static struct dvb_frontend_ops va1j5jf8007t_ops = {
 	.delsys = { SYS_ISDBT },
 	.info = {
 		.name = "VA1J5JF8007/VA1J5JF8011 ISDB-T",

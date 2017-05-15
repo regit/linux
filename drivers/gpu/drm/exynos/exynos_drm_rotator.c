@@ -15,12 +15,12 @@
 #include <linux/io.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
-#include <linux/of_device.h>
 #include <linux/pm_runtime.h>
 
 #include <drm/drmP.h>
 #include <drm/exynos_drm.h>
 #include "regs-rotator.h"
+#include "exynos_drm.h"
 #include "exynos_drm_drv.h"
 #include "exynos_drm_ipp.h"
 
@@ -156,7 +156,8 @@ static irqreturn_t rotator_irq_handler(int irq, void *arg)
 		event_work->ippdrv = ippdrv;
 		event_work->buf_id[EXYNOS_DRM_OPS_DST] =
 			rot->cur_buf_id[EXYNOS_DRM_OPS_DST];
-		queue_work(ippdrv->event_workq, &event_work->work);
+		queue_work(ippdrv->event_workq,
+			(struct work_struct *)event_work);
 	} else {
 		DRM_ERROR("the SFR is set illegally\n");
 	}
@@ -690,13 +691,13 @@ static const struct of_device_id exynos_rotator_match[] = {
 	},
 	{},
 };
-MODULE_DEVICE_TABLE(of, exynos_rotator_match);
 
 static int rotator_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct rot_context *rot;
 	struct exynos_drm_ippdrv *ippdrv;
+	const struct of_device_id *match;
 	int ret;
 
 	if (!dev->of_node) {
@@ -708,8 +709,13 @@ static int rotator_probe(struct platform_device *pdev)
 	if (!rot)
 		return -ENOMEM;
 
-	rot->limit_tbl = (struct rot_limit_table *)
-				of_device_get_match_data(dev);
+	match = of_match_node(exynos_rotator_match, dev->of_node);
+	if (!match) {
+		dev_err(dev, "failed to match node\n");
+		return -ENODEV;
+	}
+	rot->limit_tbl = (struct rot_limit_table *)match->data;
+
 	rot->regs_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	rot->regs = devm_ioremap_resource(dev, rot->regs_res);
 	if (IS_ERR(rot->regs))
@@ -748,7 +754,7 @@ static int rotator_probe(struct platform_device *pdev)
 		goto err_ippdrv_register;
 	}
 
-	DRM_DEBUG_KMS("ippdrv[%p]\n", ippdrv);
+	DRM_DEBUG_KMS("ippdrv[0x%x]\n", (int)ippdrv);
 
 	platform_set_drvdata(pdev, rot);
 
@@ -780,20 +786,43 @@ static int rotator_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
 static int rotator_clk_crtl(struct rot_context *rot, bool enable)
 {
 	if (enable) {
-		clk_prepare_enable(rot->clock);
+		clk_enable(rot->clock);
 		rot->suspended = false;
 	} else {
-		clk_disable_unprepare(rot->clock);
+		clk_disable(rot->clock);
 		rot->suspended = true;
 	}
 
 	return 0;
 }
 
+
+#ifdef CONFIG_PM_SLEEP
+static int rotator_suspend(struct device *dev)
+{
+	struct rot_context *rot = dev_get_drvdata(dev);
+
+	if (pm_runtime_suspended(dev))
+		return 0;
+
+	return rotator_clk_crtl(rot, false);
+}
+
+static int rotator_resume(struct device *dev)
+{
+	struct rot_context *rot = dev_get_drvdata(dev);
+
+	if (!pm_runtime_suspended(dev))
+		return rotator_clk_crtl(rot, true);
+
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_PM_RUNTIME
 static int rotator_runtime_suspend(struct device *dev)
 {
 	struct rot_context *rot = dev_get_drvdata(dev);
@@ -810,8 +839,7 @@ static int rotator_runtime_resume(struct device *dev)
 #endif
 
 static const struct dev_pm_ops rotator_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
+	SET_SYSTEM_SLEEP_PM_OPS(rotator_suspend, rotator_resume)
 	SET_RUNTIME_PM_OPS(rotator_runtime_suspend, rotator_runtime_resume,
 									NULL)
 };

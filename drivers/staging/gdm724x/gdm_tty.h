@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/tty.h>
 
+
 #define TTY_MAX_COUNT		2
 
 #define MAX_ISSUE_NUM 3

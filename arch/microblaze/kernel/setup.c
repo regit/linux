@@ -130,6 +130,8 @@ void __init machine_early_init(const char *cmdline, unsigned int ram,
 	memset(__bss_start, 0, __bss_stop-__bss_start);
 	memset(_ssbss, 0, _esbss-_ssbss);
 
+	lockdep_init();
+
 /* initialize device tree for usage in early_printk */
 	early_init_devtree(_fdt_start);
 
@@ -192,7 +194,7 @@ void __init time_init(void)
 {
 	of_clk_init(NULL);
 	setup_cpuinfo_clk();
-	clocksource_probe();
+	clocksource_of_init();
 }
 
 #ifdef CONFIG_DEBUG_FS

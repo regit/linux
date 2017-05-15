@@ -111,7 +111,7 @@ struct fscache_cookie *__fscache_acquire_cookie(
 
 	/* radix tree insertion won't use the preallocation pool unless it's
 	 * told it may not wait */
-	INIT_RADIX_TREE(&cookie->stores, GFP_NOFS & ~__GFP_DIRECT_RECLAIM);
+	INIT_RADIX_TREE(&cookie->stores, GFP_NOFS & ~__GFP_WAIT);
 
 	switch (cookie->def->type) {
 	case FSCACHE_COOKIE_TYPE_INDEX:
@@ -160,7 +160,7 @@ void __fscache_enable_cookie(struct fscache_cookie *cookie,
 	_enter("%p", cookie);
 
 	wait_on_bit_lock(&cookie->flags, FSCACHE_COOKIE_ENABLEMENT_LOCK,
-			 TASK_UNINTERRUPTIBLE);
+			 fscache_wait_bit, TASK_UNINTERRUPTIBLE);
 
 	if (test_bit(FSCACHE_COOKIE_ENABLED, &cookie->flags))
 		goto out_unlock;
@@ -255,7 +255,7 @@ static int fscache_acquire_non_index_cookie(struct fscache_cookie *cookie)
 	if (!fscache_defer_lookup) {
 		_debug("non-deferred lookup %p", &cookie->flags);
 		wait_on_bit(&cookie->flags, FSCACHE_COOKIE_LOOKING_UP,
-			    TASK_UNINTERRUPTIBLE);
+			    fscache_wait_bit, TASK_UNINTERRUPTIBLE);
 		_debug("complete");
 		if (test_bit(FSCACHE_COOKIE_UNAVAILABLE, &cookie->flags))
 			goto unavailable;
@@ -327,8 +327,7 @@ static int fscache_alloc_object(struct fscache_cache *cache,
 
 object_already_extant:
 	ret = -ENOBUFS;
-	if (fscache_object_is_dying(object) ||
-	    fscache_cache_is_broken(object)) {
+	if (fscache_object_is_dead(object)) {
 		spin_unlock(&cookie->lock);
 		goto error;
 	}
@@ -464,6 +463,7 @@ void __fscache_wait_on_invalidate(struct fscache_cookie *cookie)
 	_enter("%p", cookie);
 
 	wait_on_bit(&cookie->flags, FSCACHE_COOKIE_INVALIDATING,
+		    fscache_wait_bit_interruptible,
 		    TASK_UNINTERRUPTIBLE);
 
 	_leave("");
@@ -525,7 +525,7 @@ void __fscache_disable_cookie(struct fscache_cookie *cookie, bool invalidate)
 	}
 
 	wait_on_bit_lock(&cookie->flags, FSCACHE_COOKIE_ENABLEMENT_LOCK,
-			 TASK_UNINTERRUPTIBLE);
+			 fscache_wait_bit, TASK_UNINTERRUPTIBLE);
 	if (!test_and_clear_bit(FSCACHE_COOKIE_ENABLED, &cookie->flags))
 		goto out_unlock_enable;
 
@@ -542,7 +542,6 @@ void __fscache_disable_cookie(struct fscache_cookie *cookie, bool invalidate)
 		hlist_for_each_entry(object, &cookie->backing_objects, cookie_link) {
 			if (invalidate)
 				set_bit(FSCACHE_OBJECT_RETIRED, &object->flags);
-			clear_bit(FSCACHE_OBJECT_PENDING_WRITE, &object->flags);
 			fscache_raise_event(object, FSCACHE_OBJECT_EV_KILL);
 		}
 	} else {
@@ -560,10 +559,6 @@ void __fscache_disable_cookie(struct fscache_cookie *cookie, bool invalidate)
 	if (!atomic_dec_and_test(&cookie->n_active))
 		wait_on_atomic_t(&cookie->n_active, fscache_wait_atomic_t,
 				 TASK_UNINTERRUPTIBLE);
-
-	/* Make sure any pending writes are cancelled. */
-	if (cookie->def->type != FSCACHE_COOKIE_TYPE_INDEX)
-		fscache_invalidate_writes(cookie);
 
 	/* Reset the cookie state if it wasn't relinquished */
 	if (!test_bit(FSCACHE_COOKIE_RELINQUISHED, &cookie->flags)) {
@@ -677,7 +672,7 @@ int __fscache_check_consistency(struct fscache_cookie *cookie)
 	if (!op)
 		return -ENOMEM;
 
-	fscache_operation_init(op, NULL, NULL, NULL);
+	fscache_operation_init(op, NULL, NULL);
 	op->flags = FSCACHE_OP_MYTHREAD |
 		(1 << FSCACHE_OP_WAITING) |
 		(1 << FSCACHE_OP_UNUSE_COOKIE);
@@ -701,7 +696,8 @@ int __fscache_check_consistency(struct fscache_cookie *cookie)
 	/* the work queue now carries its own ref on the object */
 	spin_unlock(&cookie->lock);
 
-	ret = fscache_wait_for_operation_activation(object, op, NULL, NULL);
+	ret = fscache_wait_for_operation_activation(object, op,
+						    NULL, NULL, NULL);
 	if (ret == 0) {
 		/* ask the cache to honour the operation */
 		ret = object->cache->ops->check_consistency(op);

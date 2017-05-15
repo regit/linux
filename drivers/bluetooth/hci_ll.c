@@ -307,7 +307,7 @@ static int ll_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 	BT_DBG("hu %p skb %p", hu, skb);
 
 	/* Prepend skb with frame type */
-	memcpy(skb_push(skb, 1), &hci_skb_pkt_type(skb), 1);
+	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 
 	/* lock hcill state */
 	spin_lock_irqsave(&ll->hcill_lock, flags);
@@ -370,10 +370,10 @@ static inline int ll_check_data_len(struct hci_dev *hdev, struct ll_struct *ll, 
 }
 
 /* Recv data */
-static int ll_recv(struct hci_uart *hu, const void *data, int count)
+static int ll_recv(struct hci_uart *hu, void *data, int count)
 {
 	struct ll_struct *ll = hu->priv;
-	const char *ptr;
+	char *ptr;
 	struct hci_event_hdr *eh;
 	struct hci_acl_hdr   *ah;
 	struct hci_sco_hdr   *sh;
@@ -493,7 +493,7 @@ static int ll_recv(struct hci_uart *hu, const void *data, int count)
 			return -ENOMEM;
 		}
 
-		hci_skb_pkt_type(ll->rx_skb) = type;
+		bt_cb(ll->rx_skb)->pkt_type = type;
 	}
 
 	return count;
@@ -505,9 +505,8 @@ static struct sk_buff *ll_dequeue(struct hci_uart *hu)
 	return skb_dequeue(&ll->txq);
 }
 
-static const struct hci_uart_proto llp = {
+static struct hci_uart_proto llp = {
 	.id		= HCI_UART_LL,
-	.name		= "LL",
 	.open		= ll_open,
 	.close		= ll_close,
 	.recv		= ll_recv,
@@ -518,7 +517,14 @@ static const struct hci_uart_proto llp = {
 
 int __init ll_init(void)
 {
-	return hci_uart_register_proto(&llp);
+	int err = hci_uart_register_proto(&llp);
+
+	if (!err)
+		BT_INFO("HCILL protocol initialized");
+	else
+		BT_ERR("HCILL protocol registration failed");
+
+	return err;
 }
 
 int __exit ll_deinit(void)

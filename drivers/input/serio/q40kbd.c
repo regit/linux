@@ -38,7 +38,7 @@
 #include <linux/slab.h>
 
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/q40_master.h>
 #include <asm/irq.h>
 #include <asm/q40ints.h>
@@ -186,6 +186,7 @@ static int q40kbd_remove(struct platform_device *pdev)
 static struct platform_driver q40kbd_driver = {
 	.driver		= {
 		.name	= "q40kbd",
+		.owner	= THIS_MODULE,
 	},
 	.remove		= q40kbd_remove,
 };

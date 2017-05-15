@@ -51,7 +51,7 @@
 #include <asm/processor.h>	/* Processor type for cache alignment. */
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define DRV_NAME	"natsemi"
 #define DRV_VERSION	"2.1"
@@ -247,7 +247,7 @@ static struct {
 	{ "NatSemi DP8381[56]", 0, 24 },
 };
 
-static const struct pci_device_id natsemi_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(natsemi_pci_tbl) = {
 	{ PCI_VENDOR_ID_NS, 0x0020, 0x12d9,     0x000c,     0, 0, 0 },
 	{ PCI_VENDOR_ID_NS, 0x0020, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1 },
 	{ }	/* terminate list */
@@ -928,10 +928,6 @@ static int natsemi_probe1(struct pci_dev *pdev, const struct pci_device_id *ent)
 	dev->watchdog_timeo = TX_TIMEOUT;
 
 	dev->ethtool_ops = &ethtool_ops;
-
-	/* MTU range: 64 - 2024 */
-	dev->min_mtu = ETH_ZLEN + ETH_FCS_LEN;
-	dev->max_mtu = NATSEMI_RX_LIMIT - NATSEMI_HEADERS;
 
 	if (mtu)
 		dev->mtu = mtu;
@@ -1908,7 +1904,7 @@ static void ns_tx_timeout(struct net_device *dev)
 	spin_unlock_irq(&np->lock);
 	enable_irq(irq);
 
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	dev->stats.tx_errors++;
 	netif_wake_queue(dev);
 }
@@ -1941,12 +1937,6 @@ static void refill_rx(struct net_device *dev)
 				break; /* Better luck next round. */
 			np->rx_dma[entry] = pci_map_single(np->pci_dev,
 				skb->data, buflen, PCI_DMA_FROMDEVICE);
-			if (pci_dma_mapping_error(np->pci_dev,
-						  np->rx_dma[entry])) {
-				dev_kfree_skb_any(skb);
-				np->rx_skbuff[entry] = NULL;
-				break; /* Better luck next round. */
-			}
 			np->rx_ring[entry].addr = cpu_to_le32(np->rx_dma[entry]);
 		}
 		np->rx_ring[entry].cmd_status = cpu_to_le32(np->rx_buf_sz);
@@ -2103,12 +2093,6 @@ static netdev_tx_t start_tx(struct sk_buff *skb, struct net_device *dev)
 	np->tx_skbuff[entry] = skb;
 	np->tx_dma[entry] = pci_map_single(np->pci_dev,
 				skb->data,skb->len, PCI_DMA_TODEVICE);
-	if (pci_dma_mapping_error(np->pci_dev, np->tx_dma[entry])) {
-		np->tx_skbuff[entry] = NULL;
-		dev_kfree_skb_irq(skb);
-		dev->stats.tx_dropped++;
-		return NETDEV_TX_OK;
-	}
 
 	np->tx_ring[entry].addr = cpu_to_le32(np->tx_dma[entry]);
 
@@ -2530,6 +2514,9 @@ static void __set_rx_mode(struct net_device *dev)
 
 static int natsemi_change_mtu(struct net_device *dev, int new_mtu)
 {
+	if (new_mtu < 64 || new_mtu > NATSEMI_RX_LIMIT-NATSEMI_HEADERS)
+		return -EINVAL;
+
 	dev->mtu = new_mtu;
 
 	/* synchronized against open : rtnl_lock() held by caller */

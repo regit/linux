@@ -401,7 +401,7 @@ __kfifo_int_must_check_helper( \
 			((typeof(__tmp->type))__kfifo->data) : \
 			(__tmp->buf) \
 			)[__kfifo->in & __tmp->kfifo.mask] = \
-				*(typeof(__tmp->type))&__val; \
+				(typeof(*__tmp->type))__val; \
 			smp_wmb(); \
 			__kfifo->in++; \
 		} \
@@ -722,7 +722,7 @@ __kfifo_uint_must_check_helper( \
 /**
  * kfifo_dma_out_finish - finish a DMA OUT operation
  * @fifo: address of the fifo to be used
- * @len: number of bytes transferred
+ * @len: number of bytes transferrd
  *
  * This macro finish a DMA OUT operation. The out counter will be updated by
  * the len parameter. No error checking will be done.

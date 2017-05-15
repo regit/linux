@@ -14,11 +14,12 @@
 #include <linux/tty.h>
 #include <linux/delay.h>
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/kallsyms.h>
 #include <linux/ratelimit.h>
 
 #include <asm/gentrap.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/unaligned.h>
 #include <asm/sysinfo.h>
 #include <asm/hwrpb.h>

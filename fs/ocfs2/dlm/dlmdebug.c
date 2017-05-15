@@ -347,6 +347,26 @@ static struct dentry *dlm_debugfs_root;
 #define DLM_DEBUGFS_PURGE_LIST			"purge_list"
 
 /* begin - utils funcs */
+static void dlm_debug_free(struct kref *kref)
+{
+	struct dlm_debug_ctxt *dc;
+
+	dc = container_of(kref, struct dlm_debug_ctxt, debug_refcnt);
+
+	kfree(dc);
+}
+
+static void dlm_debug_put(struct dlm_debug_ctxt *dc)
+{
+	if (dc)
+		kref_put(&dc->debug_refcnt, dlm_debug_free);
+}
+
+static void dlm_debug_get(struct dlm_debug_ctxt *dc)
+{
+	kref_get(&dc->debug_refcnt);
+}
+
 static int debug_release(struct inode *inode, struct file *file)
 {
 	free_page((unsigned long)file->private_data);
@@ -386,7 +406,7 @@ static int debug_purgelist_print(struct dlm_ctxt *dlm, char *buf, int len)
 	}
 	spin_unlock(&dlm->spinlock);
 
-	out += snprintf(buf + out, len - out, "Total on list: %lu\n", total);
+	out += snprintf(buf + out, len - out, "Total on list: %ld\n", total);
 
 	return out;
 }
@@ -444,7 +464,7 @@ static int debug_mle_print(struct dlm_ctxt *dlm, char *buf, int len)
 	spin_unlock(&dlm->master_lock);
 
 	out += snprintf(buf + out, len - out,
-			"Total: %lu, Longest: %lu\n", total, longest);
+			"Total: %ld, Longest: %ld\n", total, longest);
 	return out;
 }
 
@@ -627,30 +647,41 @@ static const struct seq_operations debug_lockres_ops = {
 static int debug_lockres_open(struct inode *inode, struct file *file)
 {
 	struct dlm_ctxt *dlm = inode->i_private;
-	struct debug_lockres *dl;
-	void *buf;
+	int ret = -ENOMEM;
+	struct seq_file *seq;
+	struct debug_lockres *dl = NULL;
 
-	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!buf)
+	dl = kzalloc(sizeof(struct debug_lockres), GFP_KERNEL);
+	if (!dl) {
+		mlog_errno(ret);
 		goto bail;
-
-	dl = __seq_open_private(file, &debug_lockres_ops, sizeof(*dl));
-	if (!dl)
-		goto bailfree;
+	}
 
 	dl->dl_len = PAGE_SIZE;
-	dl->dl_buf = buf;
+	dl->dl_buf = kmalloc(dl->dl_len, GFP_KERNEL);
+	if (!dl->dl_buf) {
+		mlog_errno(ret);
+		goto bail;
+	}
+
+	ret = seq_open(file, &debug_lockres_ops);
+	if (ret) {
+		mlog_errno(ret);
+		goto bail;
+	}
+
+	seq = file->private_data;
+	seq->private = dl;
 
 	dlm_grab(dlm);
 	dl->dl_ctxt = dlm;
 
 	return 0;
-
-bailfree:
-	kfree(buf);
 bail:
-	mlog_errno(-ENOMEM);
-	return -ENOMEM;
+	if (dl)
+		kfree(dl->dl_buf);
+	kfree(dl);
+	return ret;
 }
 
 static int debug_lockres_release(struct inode *inode, struct file *file)
@@ -912,9 +943,11 @@ int dlm_debug_init(struct dlm_ctxt *dlm)
 		goto bail;
 	}
 
+	dlm_debug_get(dc);
 	return 0;
 
 bail:
+	dlm_debug_shutdown(dlm);
 	return -ENOMEM;
 }
 
@@ -927,8 +960,7 @@ void dlm_debug_shutdown(struct dlm_ctxt *dlm)
 		debugfs_remove(dc->debug_mle_dentry);
 		debugfs_remove(dc->debug_lockres_dentry);
 		debugfs_remove(dc->debug_state_dentry);
-		kfree(dc);
-		dc = NULL;
+		dlm_debug_put(dc);
 	}
 }
 
@@ -948,6 +980,7 @@ int dlm_create_debugfs_subroot(struct dlm_ctxt *dlm)
 		mlog_errno(-ENOMEM);
 		goto bail;
 	}
+	kref_init(&dlm->dlm_debug_ctxt->debug_refcnt);
 
 	return 0;
 bail:

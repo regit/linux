@@ -120,7 +120,6 @@ tconInfoAlloc(void)
 		++ret_buf->tc_count;
 		INIT_LIST_HEAD(&ret_buf->openFileList);
 		INIT_LIST_HEAD(&ret_buf->tcon_list);
-		spin_lock_init(&ret_buf->open_file_lock);
 #ifdef CONFIG_CIFS_STATS
 		spin_lock_init(&ret_buf->stat_lock);
 #endif
@@ -227,15 +226,6 @@ cifs_small_buf_release(void *buf_to_free)
 	return;
 }
 
-void
-free_rsp_buf(int resp_buftype, void *rsp)
-{
-	if (resp_buftype == CIFS_SMALL_BUFFER)
-		cifs_small_buf_release(rsp);
-	else if (resp_buftype == CIFS_LARGE_BUFFER)
-		cifs_buf_release(rsp);
-}
-
 /* NB: MID can not be set if treeCon not passed in, in that
    case it is responsbility of caller to set the mid */
 void
@@ -311,7 +301,7 @@ check_smb_hdr(struct smb_hdr *smb)
 }
 
 int
-checkSMB(char *buf, unsigned int total_read, struct TCP_Server_Info *server)
+checkSMB(char *buf, unsigned int total_read)
 {
 	struct smb_hdr *smb = (struct smb_hdr *)buf;
 	__u32 rfclen = be32_to_cpu(smb->smb_buf_length);
@@ -424,7 +414,7 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 			return true;
 		}
 		if (pSMBr->hdr.Status.CifsError) {
-			cifs_dbg(FYI, "notify err 0x%x\n",
+			cifs_dbg(FYI, "notify err 0x%d\n",
 				 pSMBr->hdr.Status.CifsError);
 			return true;
 		}
@@ -451,7 +441,7 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 	if (pSMB->hdr.WordCount != 8)
 		return false;
 
-	cifs_dbg(FYI, "oplock type 0x%x level 0x%x\n",
+	cifs_dbg(FYI, "oplock type 0x%d level 0x%d\n",
 		 pSMB->LockType, pSMB->OplockLevel);
 	if (!(pSMB->LockType & LOCKING_ANDX_OPLOCK_RELEASE))
 		return false;
@@ -466,7 +456,7 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 				continue;
 
 			cifs_stats_inc(&tcon->stats.cifs_stats.num_oplock_brks);
-			spin_lock(&tcon->open_file_lock);
+			spin_lock(&cifs_file_list_lock);
 			list_for_each(tmp2, &tcon->openFileList) {
 				netfile = list_entry(tmp2, struct cifsFileInfo,
 						     tlist);
@@ -474,7 +464,7 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 					continue;
 
 				cifs_dbg(FYI, "file id match, oplock break\n");
-				pCifsInode = CIFS_I(d_inode(netfile->dentry));
+				pCifsInode = CIFS_I(netfile->dentry->d_inode);
 
 				set_bit(CIFS_INODE_PENDING_OPLOCK_BREAK,
 					&pCifsInode->flags);
@@ -496,11 +486,11 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 					   &netfile->oplock_break);
 				netfile->oplock_break_cancelled = false;
 
-				spin_unlock(&tcon->open_file_lock);
+				spin_unlock(&cifs_file_list_lock);
 				spin_unlock(&cifs_tcp_ses_lock);
 				return true;
 			}
-			spin_unlock(&tcon->open_file_lock);
+			spin_unlock(&cifs_file_list_lock);
 			spin_unlock(&cifs_tcp_ses_lock);
 			cifs_dbg(FYI, "No matching file for oplock break\n");
 			return true;
@@ -514,11 +504,39 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 void
 dump_smb(void *buf, int smb_buf_length)
 {
+	int i, j;
+	char debug_line[17];
+	unsigned char *buffer = buf;
+
 	if (traceSMB == 0)
 		return;
 
-	print_hex_dump(KERN_DEBUG, "", DUMP_PREFIX_NONE, 8, 2, buf,
-		       smb_buf_length, true);
+	for (i = 0, j = 0; i < smb_buf_length; i++, j++) {
+		if (i % 8 == 0) {
+			/* have reached the beginning of line */
+			printk(KERN_DEBUG "| ");
+			j = 0;
+		}
+		printk("%0#4x ", buffer[i]);
+		debug_line[2 * j] = ' ';
+		if (isprint(buffer[i]))
+			debug_line[1 + (2 * j)] = buffer[i];
+		else
+			debug_line[1 + (2 * j)] = '_';
+
+		if (i % 8 == 7) {
+			/* reached end of line, time to print ascii */
+			debug_line[16] = 0;
+			printk(" | %s\n", debug_line);
+		}
+	}
+	for (; j < 8; j++) {
+		printk("     ");
+		debug_line[2 * j] = ' ';
+		debug_line[1 + (2 * j)] = ' ';
+	}
+	printk(" | %s\n", debug_line);
+	return;
 }
 
 void
@@ -547,6 +565,13 @@ void cifs_set_oplock_level(struct cifsInodeInfo *cinode, __u32 oplock)
 		cinode->oplock = 0;
 }
 
+static int
+cifs_oplock_break_wait(void *unused)
+{
+	schedule();
+	return signal_pending(current) ? -ERESTARTSYS : 0;
+}
+
 /*
  * We wait for oplock breaks to be processed before we attempt to perform
  * writes.
@@ -557,7 +582,7 @@ int cifs_get_writer(struct cifsInodeInfo *cinode)
 
 start:
 	rc = wait_on_bit(&cinode->flags, CIFS_INODE_PENDING_OPLOCK_BREAK,
-			 TASK_KILLABLE);
+				   cifs_oplock_break_wait, TASK_KILLABLE);
 	if (rc)
 		return rc;
 
@@ -614,9 +639,9 @@ backup_cred(struct cifs_sb_info *cifs_sb)
 void
 cifs_del_pending_open(struct cifs_pending_open *open)
 {
-	spin_lock(&tlink_tcon(open->tlink)->open_file_lock);
+	spin_lock(&cifs_file_list_lock);
 	list_del(&open->olist);
-	spin_unlock(&tlink_tcon(open->tlink)->open_file_lock);
+	spin_unlock(&cifs_file_list_lock);
 }
 
 void
@@ -636,7 +661,7 @@ void
 cifs_add_pending_open(struct cifs_fid *fid, struct tcon_link *tlink,
 		      struct cifs_pending_open *open)
 {
-	spin_lock(&tlink_tcon(tlink)->open_file_lock);
+	spin_lock(&cifs_file_list_lock);
 	cifs_add_pending_open_locked(fid, tlink, open);
-	spin_unlock(&tlink_tcon(open->tlink)->open_file_lock);
+	spin_unlock(&cifs_file_list_lock);
 }

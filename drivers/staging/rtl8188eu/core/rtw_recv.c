@@ -11,16 +11,19 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 #define _RTW_RECV_C_
-
-#include <linux/ieee80211.h>
 
 #include <osdep_service.h>
 #include <drv_types.h>
 #include <recv_osdep.h>
 #include <mlme_osdep.h>
-#include <mon.h>
+#include <usb_ops.h>
 #include <wifi.h>
 #include <linux/vmalloc.h>
 
@@ -39,12 +42,12 @@ static u8 rtw_rfc1042_header[] = {
        0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00
 };
 
-static void rtw_signal_stat_timer_hdl(unsigned long data);
+void rtw_signal_stat_timer_hdl(RTW_TIMER_HDL_ARGS);
 
 void _rtw_init_sta_recv_priv(struct sta_recv_priv *psta_recvpriv)
 {
 
-	memset((u8 *)psta_recvpriv, 0, sizeof(struct sta_recv_priv));
+	_rtw_memset((u8 *)psta_recvpriv, 0, sizeof (struct sta_recv_priv));
 
 	spin_lock_init(&psta_recvpriv->lock);
 
@@ -66,60 +69,89 @@ int _rtw_init_recv_priv(struct recv_priv *precvpriv, struct adapter *padapter)
 
 	precvpriv->adapter = padapter;
 
+	precvpriv->free_recvframe_cnt = NR_RECVFRAME;
+
 	precvpriv->pallocated_frame_buf = vzalloc(NR_RECVFRAME * sizeof(struct recv_frame) + RXFRAME_ALIGN_SZ);
 
-	if (!precvpriv->pallocated_frame_buf)
-		return _FAIL;
+	if (precvpriv->pallocated_frame_buf == NULL) {
+		res = _FAIL;
+		goto exit;
+	}
 
-	precvframe = PTR_ALIGN(precvpriv->pallocated_frame_buf, RXFRAME_ALIGN_SZ);
+	precvpriv->precv_frame_buf = (u8 *)N_BYTE_ALIGMENT((size_t)(precvpriv->pallocated_frame_buf), RXFRAME_ALIGN_SZ);
+
+	precvframe = (struct recv_frame *)precvpriv->precv_frame_buf;
 
 	for (i = 0; i < NR_RECVFRAME; i++) {
-		INIT_LIST_HEAD(&(precvframe->list));
+		_rtw_init_listhead(&(precvframe->list));
 
-		list_add_tail(&(precvframe->list),
+		rtw_list_insert_tail(&(precvframe->list),
 				     &(precvpriv->free_recv_queue.queue));
 
-		precvframe->pkt = NULL;
+		res = rtw_os_recv_resource_alloc(padapter, precvframe);
+
 		precvframe->len = 0;
 
 		precvframe->adapter = padapter;
 		precvframe++;
 	}
+	precvpriv->rx_pending_cnt = 1;
+
 	res = rtw_hal_init_recv_priv(padapter);
 
-	setup_timer(&precvpriv->signal_stat_timer,
-		    rtw_signal_stat_timer_hdl,
-		    (unsigned long)padapter);
+	_init_timer(&precvpriv->signal_stat_timer, padapter->pnetdev, RTW_TIMER_HDL_NAME(signal_stat), padapter);
 
 	precvpriv->signal_stat_sampling_interval = 1000; /* ms */
 
 	rtw_set_signal_stat_timer(precvpriv);
+exit:
+
 
 	return res;
 }
 
-void _rtw_free_recv_priv(struct recv_priv *precvpriv)
+void _rtw_free_recv_priv (struct recv_priv *precvpriv)
 {
 	struct adapter	*padapter = precvpriv->adapter;
 
+
 	rtw_free_uc_swdec_pending_queue(padapter);
 
-	vfree(precvpriv->pallocated_frame_buf);
+	if (precvpriv->pallocated_frame_buf) {
+		vfree(precvpriv->pallocated_frame_buf);
+	}
 
 	rtw_hal_free_recv_priv(padapter);
 
 }
 
-struct recv_frame *_rtw_alloc_recvframe(struct __queue *pfree_recv_queue)
+struct recv_frame *_rtw_alloc_recvframe (struct __queue *pfree_recv_queue)
 {
 	struct recv_frame *hdr;
+	struct list_head *plist, *phead;
+	struct adapter *padapter;
+	struct recv_priv *precvpriv;
 
-	hdr = list_first_entry_or_null(&pfree_recv_queue->queue,
-				       struct recv_frame, list);
-	if (hdr)
-		list_del_init(&hdr->list);
+	if (_rtw_queue_empty(pfree_recv_queue)) {
+		hdr = NULL;
+	} else {
+		phead = get_list_head(pfree_recv_queue);
 
-	return hdr;
+		plist = phead->next;
+
+		hdr = container_of(plist, struct recv_frame, list);
+
+		rtw_list_delete(&hdr->list);
+		padapter = hdr->adapter;
+		if (padapter != NULL) {
+			precvpriv = &padapter->recvpriv;
+			if (pfree_recv_queue == &precvpriv->free_recv_queue)
+				precvpriv->free_recvframe_cnt--;
+		}
+	}
+
+
+	return (struct recv_frame *)hdr;
 }
 
 struct recv_frame *rtw_alloc_recvframe(struct __queue *pfree_recv_queue)
@@ -135,11 +167,24 @@ struct recv_frame *rtw_alloc_recvframe(struct __queue *pfree_recv_queue)
 	return precvframe;
 }
 
+void rtw_init_recvframe(struct recv_frame *precvframe, struct recv_priv *precvpriv)
+{
+	/* Perry: This can be removed */
+	_rtw_init_listhead(&precvframe->list);
+
+	precvframe->len = 0;
+}
+
 int rtw_free_recvframe(struct recv_frame *precvframe,
 		       struct __queue *pfree_recv_queue)
 {
+	struct adapter *padapter;
+	struct recv_priv *precvpriv;
+
 	if (!precvframe)
 		return _FAIL;
+	padapter = precvframe->adapter;
+	precvpriv = &padapter->recvpriv;
 	if (precvframe->pkt) {
 		dev_kfree_skb_any(precvframe->pkt);/* free skb by driver */
 		precvframe->pkt = NULL;
@@ -147,21 +192,37 @@ int rtw_free_recvframe(struct recv_frame *precvframe,
 
 	spin_lock_bh(&pfree_recv_queue->lock);
 
-	list_del_init(&(precvframe->list));
+	rtw_list_delete(&(precvframe->list));
 
 	precvframe->len = 0;
 
-	list_add_tail(&(precvframe->list), get_list_head(pfree_recv_queue));
+	rtw_list_insert_tail(&(precvframe->list), get_list_head(pfree_recv_queue));
 
-	spin_unlock_bh(&pfree_recv_queue->lock);
+	if (padapter != NULL) {
+		if (pfree_recv_queue == &precvpriv->free_recv_queue)
+				precvpriv->free_recvframe_cnt++;
+	}
+
+      spin_unlock_bh(&pfree_recv_queue->lock);
+
 
 	return _SUCCESS;
 }
 
 int _rtw_enqueue_recvframe(struct recv_frame *precvframe, struct __queue *queue)
 {
-	list_del_init(&(precvframe->list));
-	list_add_tail(&(precvframe->list), get_list_head(queue));
+	struct adapter *padapter = precvframe->adapter;
+	struct recv_priv *precvpriv = &padapter->recvpriv;
+
+
+	rtw_list_delete(&(precvframe->list));
+	rtw_list_insert_tail(&(precvframe->list), get_list_head(queue));
+
+	if (padapter != NULL) {
+		if (queue == &precvpriv->free_recv_queue)
+			precvpriv->free_recvframe_cnt++;
+	}
+
 
 	return _SUCCESS;
 }
@@ -195,12 +256,12 @@ void rtw_free_recvframe_queue(struct __queue *pframequeue,  struct __queue *pfre
 	phead = get_list_head(pframequeue);
 	plist = phead->next;
 
-	while (phead != plist) {
+	while (rtw_end_of_queue_search(phead, plist) == false) {
 		hdr = container_of(plist, struct recv_frame, list);
 
 		plist = plist->next;
 
-		rtw_free_recvframe(hdr, pfree_recv_queue);
+		rtw_free_recvframe((struct recv_frame *)hdr, pfree_recv_queue);
 	}
 
 	spin_unlock(&pframequeue->lock);
@@ -357,6 +418,7 @@ static int recvframe_chkmic(struct adapter *adapter,
 
 exit:
 
+
 	return res;
 }
 
@@ -418,6 +480,7 @@ static struct recv_frame *decryptor(struct adapter *padapter,
 		return_packet = NULL;
 	}
 
+
 	return return_packet;
 }
 
@@ -435,6 +498,7 @@ static struct recv_frame *portctrl(struct adapter *adapter,
 	u16  eapol_type = 0x888e;/* for Funia BD's WPA issue */
 	struct rx_pkt_attrib *pattrib;
 	__be16 be_tmp;
+
 
 	pstapriv = &adapter->stapriv;
 
@@ -494,6 +558,7 @@ static struct recv_frame *portctrl(struct adapter *adapter,
 		prtnframe = precv_frame;
 	}
 
+
 		return prtnframe;
 }
 
@@ -504,6 +569,7 @@ static int recv_decache(struct recv_frame *precv_frame, u8 bretry,
 
 	u16 seq_ctrl = ((precv_frame->attrib.seq_num&0xffff) << 4) |
 		(precv_frame->attrib.frag_num & 0xf);
+
 
 	if (tid > 15) {
 		RT_TRACE(_module_rtl871x_recv_c_, _drv_notice_, ("recv_decache, (tid>15)! seq_ctrl=0x%x, tid=0x%x\n", seq_ctrl, tid));
@@ -520,6 +586,7 @@ static int recv_decache(struct recv_frame *precv_frame, u8 bretry,
 	}
 
 	prxcache->tid_rxseq[tid] = seq_ctrl;
+
 
 	return _SUCCESS;
 }
@@ -657,6 +724,7 @@ int sta2sta_data_frame(struct adapter *adapter, struct recv_frame *precv_frame,
 	u8 *sta_addr = NULL;
 	int bmcast = IS_MCAST(pattrib->dst);
 
+
 	if ((check_fwstate(pmlmepriv, WIFI_ADHOC_STATE) == true) ||
 	    (check_fwstate(pmlmepriv, WIFI_ADHOC_MASTER_STATE) == true)) {
 		/*  filter packets that SA is myself or multicast or broadcast */
@@ -722,6 +790,10 @@ int sta2sta_data_frame(struct adapter *adapter, struct recv_frame *precv_frame,
 
 	if (*psta == NULL) {
 		RT_TRACE(_module_rtl871x_recv_c_, _drv_err_, ("can't get psta under sta2sta_data_frame ; drop pkt\n"));
+		if (adapter->registrypriv.mp_mode == 1) {
+			if (check_fwstate(pmlmepriv, WIFI_MP_STATE) == true)
+			adapter->mppriv.rx_pktloss++;
+		}
 		ret = _FAIL;
 		goto exit;
 	}
@@ -730,7 +802,7 @@ exit:
 	return ret;
 }
 
-static int ap2sta_data_frame(
+static int ap2sta_data_frame (
 	struct adapter *adapter,
 	struct recv_frame *precv_frame,
 	struct sta_info **psta)
@@ -743,6 +815,7 @@ static int ap2sta_data_frame(
 	u8 *mybssid  = get_bssid(pmlmepriv);
 	u8 *myhwaddr = myid(&adapter->eeprompriv);
 	int bmcast = IS_MCAST(pattrib->dst);
+
 
 	if ((check_fwstate(pmlmepriv, WIFI_STATION_STATE) == true) &&
 	    (check_fwstate(pmlmepriv, _FW_LINKED) == true ||
@@ -835,6 +908,7 @@ static int ap2sta_data_frame(
 
 exit:
 
+
 	return ret;
 }
 
@@ -848,6 +922,7 @@ static int sta2ap_data_frame(struct adapter *adapter,
 	u8 *ptr = precv_frame->rx_data;
 	unsigned char *mybssid  = get_bssid(pmlmepriv);
 	int ret = _SUCCESS;
+
 
 	if (check_fwstate(pmlmepriv, WIFI_AP_STATE) == true) {
 		/* For AP mode, RA = BSSID, TX = STA(SRC_ADDR), A3 = DST_ADDR */
@@ -869,8 +944,9 @@ static int sta2ap_data_frame(struct adapter *adapter,
 
 		process_pwrbit_data(adapter, precv_frame);
 
-		if ((GetFrameSubType(ptr) & WIFI_QOS_DATA_TYPE) == WIFI_QOS_DATA_TYPE)
+		if ((GetFrameSubType(ptr) & WIFI_QOS_DATA_TYPE) == WIFI_QOS_DATA_TYPE) {
 			process_wmmps_data(adapter, precv_frame);
+		}
 
 		if (GetFrameSubType(ptr) & BIT(6)) {
 			/* No data, will not indicate to upper layer, temporily count it here */
@@ -891,6 +967,7 @@ static int sta2ap_data_frame(struct adapter *adapter,
 	}
 
 exit:
+
 
 	return ret;
 }
@@ -963,12 +1040,12 @@ static int validate_recv_ctrl_frame(struct adapter *padapter,
 			xmitframe_phead = get_list_head(&psta->sleep_q);
 			xmitframe_plist = xmitframe_phead->next;
 
-			if (xmitframe_phead != xmitframe_plist) {
+			if ((rtw_end_of_queue_search(xmitframe_phead, xmitframe_plist)) == false) {
 				pxmitframe = container_of(xmitframe_plist, struct xmit_frame, list);
 
 				xmitframe_plist = xmitframe_plist->next;
 
-				list_del_init(&pxmitframe->list);
+				rtw_list_delete(&pxmitframe->list);
 
 				psta->sleepq_len--;
 
@@ -1073,6 +1150,7 @@ static int validate_recv_data_frame(struct adapter *adapter,
 	struct security_priv	*psecuritypriv = &adapter->securitypriv;
 	int ret = _SUCCESS;
 
+
 	bretry = GetRetry(ptr);
 	pda = get_da(ptr);
 	psa = get_sa(ptr);
@@ -1176,6 +1254,7 @@ static int validate_recv_data_frame(struct adapter *adapter,
 
 exit:
 
+
 	return ret;
 }
 
@@ -1192,8 +1271,9 @@ static int validate_recv_frame(struct adapter *adapter,
 	u8 bDumpRxPkt;
 	struct rx_pkt_attrib *pattrib = &precv_frame->attrib;
 	u8 *ptr = precv_frame->rx_data;
-	u8  ver = (unsigned char)(*ptr)&0x3;
+	u8  ver = (unsigned char) (*ptr)&0x3;
 	struct mlme_ext_priv *pmlmeext = &adapter->mlmeextpriv;
+
 
 	if (pmlmeext->sitesurvey_res.state == SCAN_PROCESS) {
 		int ch_set_idx = rtw_ch_set_search_ch(pmlmeext->channel_set, rtw_get_oper_ch(adapter));
@@ -1225,25 +1305,32 @@ static int validate_recv_frame(struct adapter *adapter,
 	/* Dump rx packets */
 	rtw_hal_get_def_var(adapter, HAL_DEF_DBG_DUMP_RXPKT, &(bDumpRxPkt));
 	if (bDumpRxPkt == 1) {/* dump all rx packets */
-		if (_drv_err_ <= GlobalDebugLevel) {
-			pr_info(DRIVER_PREFIX "#############################\n");
-			print_hex_dump(KERN_INFO, DRIVER_PREFIX, DUMP_PREFIX_NONE,
-					16, 1, ptr, 64, false);
-			pr_info(DRIVER_PREFIX "#############################\n");
-		}
+		int i;
+		DBG_88E("#############################\n");
+
+		for (i = 0; i < 64; i = i+8)
+			DBG_88E("%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:\n", *(ptr+i),
+				*(ptr+i+1), *(ptr+i+2), *(ptr+i+3), *(ptr+i+4), *(ptr+i+5), *(ptr+i+6), *(ptr+i+7));
+		DBG_88E("#############################\n");
 	} else if (bDumpRxPkt == 2) {
-		if ((_drv_err_ <= GlobalDebugLevel) && (type == WIFI_MGT_TYPE)) {
-			pr_info(DRIVER_PREFIX "#############################\n");
-			print_hex_dump(KERN_INFO, DRIVER_PREFIX, DUMP_PREFIX_NONE,
-					16, 1, ptr, 64, false);
-			pr_info(DRIVER_PREFIX "#############################\n");
+		if (type == WIFI_MGT_TYPE) {
+			int i;
+			DBG_88E("#############################\n");
+
+			for (i = 0; i < 64; i = i+8)
+				DBG_88E("%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:\n", *(ptr+i),
+					*(ptr+i+1), *(ptr+i+2), *(ptr+i+3), *(ptr+i+4), *(ptr+i+5), *(ptr+i+6), *(ptr+i+7));
+			DBG_88E("#############################\n");
 		}
 	} else if (bDumpRxPkt == 3) {
-		if ((_drv_err_ <= GlobalDebugLevel) && (type == WIFI_DATA_TYPE)) {
-			pr_info(DRIVER_PREFIX "#############################\n");
-			print_hex_dump(KERN_INFO, DRIVER_PREFIX, DUMP_PREFIX_NONE,
-					16, 1, ptr, 64, false);
-			pr_info(DRIVER_PREFIX "#############################\n");
+		if (type == WIFI_DATA_TYPE) {
+			int i;
+			DBG_88E("#############################\n");
+
+			for (i = 0; i < 64; i = i+8)
+				DBG_88E("%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:\n", *(ptr+i),
+					*(ptr+i+1), *(ptr+i+2), *(ptr+i+3), *(ptr+i+4), *(ptr+i+5), *(ptr+i+6), *(ptr+i+7));
+			DBG_88E("#############################\n");
 		}
 	}
 	switch (type) {
@@ -1260,7 +1347,7 @@ static int validate_recv_frame(struct adapter *adapter,
 		retval = _FAIL; /*  only data frame return _SUCCESS */
 		break;
 	case WIFI_DATA_TYPE: /* data */
-		LedControl8188eu(adapter, LED_CTL_RX);
+		rtw_led_control(adapter, LED_CTL_RX);
 		pattrib->qos = (subtype & BIT(7)) ? 1 : 0;
 		retval = validate_recv_data_frame(adapter, precv_frame);
 		if (retval == _FAIL) {
@@ -1274,20 +1361,8 @@ static int validate_recv_frame(struct adapter *adapter,
 		break;
 	}
 
-	/*
-	 * This is the last moment before management and control frames get
-	 * discarded. So we need to forward them to the monitor now or never.
-	 *
-	 * At the same time data frames can still be encrypted if software
-	 * decryption is in use. However, decryption can occur not until later
-	 * (see recv_func()).
-	 *
-	 * Hence forward the frame to the monitor anyway to preserve the order
-	 * in which frames were received.
-	 */
-	rtl88eu_mon_recv_hook(adapter->pmondev, precv_frame);
-
 exit:
+
 
 	return retval;
 }
@@ -1303,6 +1378,7 @@ static int wlanhdr_to_ethhdr(struct recv_frame *precvframe)
 	u8	*psnap_type;
 	struct ieee80211_snap_hdr	*psnap;
 
+	int ret = _SUCCESS;
 	struct adapter		*adapter = precvframe->adapter;
 	struct mlme_priv	*pmlmepriv = &adapter->mlmepriv;
 	u8 *ptr = precvframe->rx_data;
@@ -1357,7 +1433,7 @@ static int wlanhdr_to_ethhdr(struct recv_frame *precvframe)
 		memcpy(ptr+12, &be_tmp, 2);
 	}
 
-	return _SUCCESS;
+	return ret;
 }
 
 /* perform defrag */
@@ -1371,14 +1447,15 @@ static struct recv_frame *recvframe_defrag(struct adapter *adapter,
 	struct recv_frame *prframe, *pnextrframe;
 	struct __queue *pfree_recv_queue;
 
+
 	curfragnum = 0;
 	pfree_recv_queue = &adapter->recvpriv.free_recv_queue;
 
 	phead = get_list_head(defrag_q);
 	plist = phead->next;
 	pfhdr = container_of(plist, struct recv_frame, list);
-	prframe = pfhdr;
-	list_del_init(&(prframe->list));
+	prframe = (struct recv_frame *)pfhdr;
+	rtw_list_delete(&(prframe->list));
 
 	if (curfragnum != pfhdr->attrib.frag_num) {
 		/* the first fragment number must be 0 */
@@ -1395,9 +1472,9 @@ static struct recv_frame *recvframe_defrag(struct adapter *adapter,
 
 	plist = plist->next;
 
-	while (phead != plist) {
+	while (rtw_end_of_queue_search(phead, plist) == false) {
 		pnfhdr = container_of(plist, struct recv_frame, list);
-		pnextrframe = pnfhdr;
+		pnextrframe = (struct recv_frame *)pnfhdr;
 
 		/* check the fragment sequence  (2nd ~n fragment frame) */
 
@@ -1435,6 +1512,7 @@ static struct recv_frame *recvframe_defrag(struct adapter *adapter,
 
 	RT_TRACE(_module_rtl871x_recv_c_, _drv_info_, ("Performance defrag!!!!!\n"));
 
+
 	return prframe;
 }
 
@@ -1451,6 +1529,7 @@ struct recv_frame *recvframe_chk_defrag(struct adapter *padapter,
 	struct list_head *phead;
 	struct recv_frame *prtnframe = NULL;
 	struct __queue *pfree_recv_queue, *pdefrag_q;
+
 
 	pstapriv = &padapter->stapriv;
 
@@ -1485,15 +1564,16 @@ struct recv_frame *recvframe_chk_defrag(struct adapter *padapter,
 		if (pdefrag_q != NULL) {
 			if (fragnum == 0) {
 				/* the first fragment */
-				if (!list_empty(&pdefrag_q->queue))
+				if (_rtw_queue_empty(pdefrag_q) == false) {
 					/* free current defrag_q */
 					rtw_free_recvframe_queue(pdefrag_q, pfree_recv_queue);
+				}
 			}
 
 			/* Then enqueue the 0~(n-1) fragment into the defrag_q */
 
 			phead = get_list_head(pdefrag_q);
-			list_add_tail(&pfhdr->list, phead);
+			rtw_list_insert_tail(&pfhdr->list, phead);
 
 			RT_TRACE(_module_rtl871x_recv_c_, _drv_info_, ("Enqueuq: ismfrag=%d, fragnum=%d\n", ismfrag, fragnum));
 
@@ -1511,7 +1591,7 @@ struct recv_frame *recvframe_chk_defrag(struct adapter *padapter,
 		/* enqueue the last fragment */
 		if (pdefrag_q != NULL) {
 			phead = get_list_head(pdefrag_q);
-			list_add_tail(&pfhdr->list, phead);
+			rtw_list_insert_tail(&pfhdr->list, phead);
 
 			/* call recvframe_defrag to defrag */
 			RT_TRACE(_module_rtl871x_recv_c_, _drv_info_, ("defrag: ismfrag=%d, fragnum=%d\n", ismfrag, fragnum));
@@ -1534,6 +1614,7 @@ struct recv_frame *recvframe_chk_defrag(struct adapter *padapter,
 		}
 	}
 
+
 	return prtnframe;
 }
 
@@ -1548,6 +1629,7 @@ static int amsdu_to_msdu(struct adapter *padapter, struct recv_frame *prframe)
 	struct sk_buff *sub_skb, *subframes[MAX_SUBFRAME_COUNT];
 	struct recv_priv *precvpriv = &padapter->recvpriv;
 	struct __queue *pfree_recv_queue = &(precvpriv->free_recv_queue);
+	int	ret = _SUCCESS;
 	nr_subframes = 0;
 
 	pattrib = &prframe->attrib;
@@ -1563,7 +1645,7 @@ static int amsdu_to_msdu(struct adapter *padapter, struct recv_frame *prframe)
 
 	while (a_len > ETH_HLEN) {
 		/* Offset 12 denote 2 mac address */
-		nSubframe_Length = get_unaligned_be16(pdata + 12);
+		nSubframe_Length = RTW_GET_BE16(pdata + 12);
 
 		if (a_len < (ETHERNET_HEADER_SIZE + nSubframe_Length)) {
 			DBG_88E("nRemain_Length is %d and nSubframe_Length is : %d\n", a_len, nSubframe_Length);
@@ -1603,8 +1685,9 @@ static int amsdu_to_msdu(struct adapter *padapter, struct recv_frame *prframe)
 		a_len -= nSubframe_Length;
 		if (a_len != 0) {
 			padding_len = 4 - ((nSubframe_Length + ETH_HLEN) & (4-1));
-			if (padding_len == 4)
+			if (padding_len == 4) {
 				padding_len = 0;
+			}
 
 			if (a_len < padding_len) {
 				goto exit;
@@ -1617,7 +1700,7 @@ static int amsdu_to_msdu(struct adapter *padapter, struct recv_frame *prframe)
 	for (i = 0; i < nr_subframes; i++) {
 		sub_skb = subframes[i];
 		/* convert hdr + possible LLC headers into Ethernet header */
-		eth_type = get_unaligned_be16(&sub_skb->data[6]);
+		eth_type = RTW_GET_BE16(&sub_skb->data[6]);
 		if (sub_skb->len >= 8 &&
 		    ((!memcmp(sub_skb->data, rtw_rfc1042_header, SNAP_SIZE) &&
 			  eth_type != ETH_P_AARP && eth_type != ETH_P_IPX) ||
@@ -1650,7 +1733,7 @@ exit:
 	prframe->len = 0;
 	rtw_free_recvframe(prframe, pfree_recv_queue);/* free this recv_frame */
 
-	return _SUCCESS;
+	return ret;
 }
 
 static int check_indicate_seq(struct recv_reorder_ctrl *preorder_ctrl, u16 seq_num)
@@ -1695,7 +1778,7 @@ static int enqueue_reorder_recvframe(struct recv_reorder_ctrl *preorder_ctrl,
 	phead = get_list_head(ppending_recvframe_queue);
 	plist = phead->next;
 
-	while (phead != plist) {
+	while (rtw_end_of_queue_search(phead, plist) == false) {
 		hdr = container_of(plist, struct recv_frame, list);
 		pnextattrib = &hdr->attrib;
 
@@ -1707,9 +1790,9 @@ static int enqueue_reorder_recvframe(struct recv_reorder_ctrl *preorder_ctrl,
 			break;
 	}
 
-	list_del_init(&(prframe->list));
+	rtw_list_delete(&(prframe->list));
 
-	list_add_tail(&(prframe->list), plist);
+	rtw_list_insert_tail(&(prframe->list), plist);
 	return true;
 }
 
@@ -1728,7 +1811,7 @@ static int recv_indicatepkts_in_order(struct adapter *padapter, struct recv_reor
 
 	/*  Handling some condition for forced indicate case. */
 	if (bforced) {
-		if (list_empty(phead))
+		if (rtw_is_list_empty(phead))
 			return true;
 
 		prhdr = container_of(plist, struct recv_frame, list);
@@ -1738,9 +1821,9 @@ static int recv_indicatepkts_in_order(struct adapter *padapter, struct recv_reor
 
 	/*  Prepare indication list and indication. */
 	/*  Check if there is any packet need indicate. */
-	while (!list_empty(phead)) {
+	while (!rtw_is_list_empty(phead)) {
 		prhdr = container_of(plist, struct recv_frame, list);
-		prframe = prhdr;
+		prframe = (struct recv_frame *)prhdr;
 		pattrib = &prframe->attrib;
 
 		if (!SN_LESS(preorder_ctrl->indicate_seq, pattrib->seq_num)) {
@@ -1748,7 +1831,7 @@ static int recv_indicatepkts_in_order(struct adapter *padapter, struct recv_reor
 				 ("recv_indicatepkts_in_order: indicate=%d seq=%d amsdu=%d\n",
 				  preorder_ctrl->indicate_seq, pattrib->seq_num, pattrib->amsdu));
 			plist = plist->next;
-			list_del_init(&(prframe->list));
+			rtw_list_delete(&(prframe->list));
 
 			if (SN_EQUAL(preorder_ctrl->indicate_seq, pattrib->seq_num))
 				preorder_ctrl->indicate_seq = (preorder_ctrl->indicate_seq + 1) & 0xFFF;
@@ -1851,8 +1934,7 @@ static int recv_indicatepkt_reorder(struct adapter *padapter,
 
 	/* recv_indicatepkts_in_order(padapter, preorder_ctrl, true); */
 	if (recv_indicatepkts_in_order(padapter, preorder_ctrl, false)) {
-		mod_timer(&preorder_ctrl->reordering_ctrl_timer,
-			  jiffies + msecs_to_jiffies(REORDER_WAIT_TIME));
+		_set_timer(&preorder_ctrl->reordering_ctrl_timer, REORDER_WAIT_TIME);
 		spin_unlock_bh(&ppending_recvframe_queue->lock);
 	} else {
 		spin_unlock_bh(&ppending_recvframe_queue->lock);
@@ -1870,9 +1952,9 @@ _err_exit:
 	return _FAIL;
 }
 
-void rtw_reordering_ctrl_timeout_handler(unsigned long data)
+void rtw_reordering_ctrl_timeout_handler(void *pcontext)
 {
-	struct recv_reorder_ctrl *preorder_ctrl = (struct recv_reorder_ctrl *)data;
+	struct recv_reorder_ctrl *preorder_ctrl = (struct recv_reorder_ctrl *)pcontext;
 	struct adapter *padapter = preorder_ctrl->padapter;
 	struct __queue *ppending_recvframe_queue = &preorder_ctrl->pending_recvframe_queue;
 
@@ -1882,8 +1964,7 @@ void rtw_reordering_ctrl_timeout_handler(unsigned long data)
 	spin_lock_bh(&ppending_recvframe_queue->lock);
 
 	if (recv_indicatepkts_in_order(padapter, preorder_ctrl, true) == true)
-		mod_timer(&preorder_ctrl->reordering_ctrl_timer,
-			  jiffies + msecs_to_jiffies(REORDER_WAIT_TIME));
+		_set_timer(&preorder_ctrl->reordering_ctrl_timer, REORDER_WAIT_TIME);
 
 	spin_unlock_bh(&ppending_recvframe_queue->lock);
 }
@@ -1905,7 +1986,7 @@ static int process_recv_indicatepkts(struct adapter *padapter,
 			}
 		}
 	} else { /* B/G mode */
-		retval = wlanhdr_to_ethhdr(prframe);
+		retval = wlanhdr_to_ethhdr (prframe);
 		if (retval != _SUCCESS) {
 			RT_TRACE(_module_rtl871x_recv_c_, _drv_err_, ("wlanhdr_to_ethhdr: drop pkt\n"));
 			return retval;
@@ -1932,7 +2013,25 @@ static int recv_func_prehandle(struct adapter *padapter,
 			       struct recv_frame *rframe)
 {
 	int ret = _SUCCESS;
+	struct rx_pkt_attrib *pattrib = &rframe->attrib;
 	struct __queue *pfree_recv_queue = &padapter->recvpriv.free_recv_queue;
+	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
+
+	if (padapter->registrypriv.mp_mode == 1) {
+		if ((check_fwstate(pmlmepriv, WIFI_MP_STATE) == true)) { /* padapter->mppriv.check_mp_pkt == 0)) */
+			if (pattrib->crc_err == 1)
+				padapter->mppriv.rx_crcerrpktcount++;
+			else
+				padapter->mppriv.rx_pktcount++;
+
+			if (check_fwstate(pmlmepriv, WIFI_MP_LPBK_STATE) == false) {
+				RT_TRACE(_module_rtl871x_recv_c_, _drv_alert_, ("MP - Not in loopback mode , drop pkt\n"));
+				ret = _FAIL;
+				rtw_free_recvframe(rframe, pfree_recv_queue);/* free this recv_frame */
+				goto exit;
+			}
+		}
+	}
 
 	/* check the frame crtl field and decache */
 	ret = validate_recv_frame(padapter, rframe);
@@ -1955,7 +2054,7 @@ static int recv_func_posthandle(struct adapter *padapter,
 	struct __queue *pfree_recv_queue = &padapter->recvpriv.free_recv_queue;
 
 	/*  DATA FRAME */
-	LedControl8188eu(padapter, LED_CTL_RX);
+	rtw_led_control(padapter, LED_CTL_RX);
 
 	prframe = decryptor(padapter, prframe);
 	if (prframe == NULL) {
@@ -2036,6 +2135,7 @@ s32 rtw_recv_entry(struct recv_frame *precvframe)
 	struct recv_priv *precvpriv;
 	s32 ret = _SUCCESS;
 
+
 	padapter = precvframe->adapter;
 
 	precvpriv = &padapter->recvpriv;
@@ -2048,15 +2148,21 @@ s32 rtw_recv_entry(struct recv_frame *precvframe)
 
 	precvpriv->rx_pkts++;
 
+
 	return ret;
 
 _recv_entry_drop:
+
+	if (padapter->registrypriv.mp_mode == 1)
+		padapter->mppriv.rx_pktloss = precvpriv->rx_drop;
+
+
 	return ret;
 }
 
-static void rtw_signal_stat_timer_hdl(unsigned long data)
+void rtw_signal_stat_timer_hdl(RTW_TIMER_HDL_ARGS)
 {
-	struct adapter *adapter = (struct adapter *)data;
+	struct adapter *adapter = (struct adapter *)FunctionContext;
 	struct recv_priv *recvpriv = &adapter->recvpriv;
 
 	u32 tmp_s, tmp_q;
@@ -2083,7 +2189,7 @@ static void rtw_signal_stat_timer_hdl(unsigned long data)
 
 		/* update value of signal_strength, rssi, signal_qual */
 		if (check_fwstate(&adapter->mlmepriv, _FW_UNDER_SURVEY) == false) {
-			tmp_s = avg_signal_strength+(_alpha-1)*recvpriv->signal_strength;
+			tmp_s = (avg_signal_strength+(_alpha-1)*recvpriv->signal_strength);
 			if (tmp_s % _alpha)
 				tmp_s = tmp_s/_alpha + 1;
 			else
@@ -2091,7 +2197,7 @@ static void rtw_signal_stat_timer_hdl(unsigned long data)
 			if (tmp_s > 100)
 				tmp_s = 100;
 
-			tmp_q = avg_signal_qual+(_alpha-1)*recvpriv->signal_qual;
+			tmp_q = (avg_signal_qual+(_alpha-1)*recvpriv->signal_qual);
 			if (tmp_q % _alpha)
 				tmp_q = tmp_q/_alpha + 1;
 			else

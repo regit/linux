@@ -522,7 +522,7 @@ static void __init n30_hwinit(void)
 	 *
 	 * The pull ups for H6/H7 are enabled on N30 but not on the
 	 * N35/PiN.  I suppose is useful for a budget model of the N30
-	 * with no bluetooth.  It doesn't hurt to have the pull ups
+	 * with no bluetooh.  It doesn't hurt to have the pull ups
 	 * enabled on the N35, so leave them enabled for all models.
 	 */
 	__raw_writel(0x0028aaaa, S3C2410_GPHCON);
@@ -599,6 +599,7 @@ MACHINE_START(N30, "Acer-N30")
 	.init_machine	= n30_init,
 	.init_irq	= s3c2410_init_irq,
 	.map_io		= n30_map_io,
+	.restart	= s3c2410_restart,
 MACHINE_END
 
 MACHINE_START(N35, "Acer-N35")
@@ -609,4 +610,5 @@ MACHINE_START(N35, "Acer-N35")
 	.init_machine	= n30_init,
 	.init_irq	= s3c2410_init_irq,
 	.map_io		= n30_map_io,
+	.restart	= s3c2410_restart,
 MACHINE_END

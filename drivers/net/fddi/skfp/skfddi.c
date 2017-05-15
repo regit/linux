@@ -88,7 +88,7 @@ static const char * const boot_msg =
 
 #include <asm/byteorder.h>
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include	"h/types.h"
 #undef ADDR			// undo Linux definition
@@ -149,7 +149,7 @@ extern void mac_drv_rx_mode(struct s_smc *smc, int mode);
 extern void mac_drv_clear_rx_queue(struct s_smc *smc);
 extern void enable_tx_irq(struct s_smc *smc, u_short queue);
 
-static const struct pci_device_id skfddi_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(skfddi_pci_tbl) = {
 	{ PCI_VENDOR_ID_SK, PCI_DEVICE_ID_SK_FP, PCI_ANY_ID, PCI_ANY_ID, },
 	{ }			/* Terminating entry */
 };
@@ -166,6 +166,7 @@ static const struct net_device_ops skfp_netdev_ops = {
 	.ndo_stop		= skfp_close,
 	.ndo_start_xmit		= skfp_send_pkt,
 	.ndo_get_stats		= skfp_ctl_get_stats,
+	.ndo_change_mtu		= fddi_change_mtu,
 	.ndo_set_rx_mode	= skfp_ctl_set_multicast_list,
 	.ndo_set_mac_address	= skfp_ctl_set_mac_address,
 	.ndo_do_ioctl		= skfp_ioctl,

@@ -61,6 +61,7 @@ static DEFINE_MUTEX(bridge_mutex);
 static int acpiphp_hotplug_notify(struct acpi_device *adev, u32 type);
 static void acpiphp_post_dock_fixup(struct acpi_device *adev);
 static void acpiphp_sanitize_bus(struct pci_bus *bus);
+static void acpiphp_set_hpp_values(struct pci_bus *bus);
 static void hotplug_event(u32 type, struct acpiphp_context *context);
 static void free_bridge(struct kref *kref);
 
@@ -79,9 +80,8 @@ static struct acpiphp_context *acpiphp_init_context(struct acpi_device *adev)
 		return NULL;
 
 	context->refcount = 1;
-	context->hp.notify = acpiphp_hotplug_notify;
-	context->hp.fixup = acpiphp_post_dock_fixup;
-	acpi_set_hp_context(adev, &context->hp);
+	acpi_set_hp_context(adev, &context->hp, acpiphp_hotplug_notify, NULL,
+			    acpiphp_post_dock_fixup);
 	return context;
 }
 
@@ -222,6 +222,35 @@ static void acpiphp_post_dock_fixup(struct acpi_device *adev)
 	acpiphp_let_context_go(context);
 }
 
+/* Check whether the PCI device is managed by native PCIe hotplug driver */
+static bool device_is_managed_by_native_pciehp(struct pci_dev *pdev)
+{
+	u32 reg32;
+	acpi_handle tmp;
+	struct acpi_pci_root *root;
+
+	/* Check whether the PCIe port supports native PCIe hotplug */
+	if (pcie_capability_read_dword(pdev, PCI_EXP_SLTCAP, &reg32))
+		return false;
+	if (!(reg32 & PCI_EXP_SLTCAP_HPC))
+		return false;
+
+	/*
+	 * Check whether native PCIe hotplug has been enabled for
+	 * this PCIe hierarchy.
+	 */
+	tmp = acpi_find_root_bridge_handle(pdev);
+	if (!tmp)
+		return false;
+	root = acpi_pci_find_root(tmp);
+	if (!root)
+		return false;
+	if (!(root->osc_control_set & OSC_PCI_EXPRESS_NATIVE_HP_CONTROL))
+		return false;
+
+	return true;
+}
+
 /**
  * acpiphp_add_context - Add ACPIPHP context to an ACPI device object.
  * @handle: ACPI handle of the object to add a context to.
@@ -305,7 +334,7 @@ static acpi_status acpiphp_add_context(acpi_handle handle, u32 lvl, void *data,
 	 * expose slots to user space in those cases.
 	 */
 	if ((acpi_pci_check_ejectable(pbus, handle) || is_dock_device(adev))
-	    && !(pdev && pdev->is_hotplug_bridge && pciehp_is_native(pdev))) {
+	    && !(pdev && device_is_managed_by_native_pciehp(pdev))) {
 		unsigned long long sun;
 		int retval;
 
@@ -338,6 +367,20 @@ static acpi_status acpiphp_add_context(acpi_handle handle, u32 lvl, void *data,
 		slot->flags |= SLOT_ENABLED;
 
 	return AE_OK;
+}
+
+static struct acpiphp_bridge *acpiphp_dev_to_bridge(struct acpi_device *adev)
+{
+	struct acpiphp_bridge *bridge = NULL;
+
+	acpi_lock_hp_context();
+	if (adev->hp) {
+		bridge = to_acpiphp_root_context(adev->hp)->root_bridge;
+		if (bridge)
+			get_bridge(bridge);
+	}
+	acpi_unlock_hp_context();
+	return bridge;
 }
 
 static void cleanup_bridge(struct acpiphp_bridge *bridge)
@@ -480,7 +523,7 @@ static void enable_slot(struct acpiphp_slot *slot)
 	__pci_bus_assign_resources(bus, &add_list, NULL);
 
 	acpiphp_sanitize_bus(bus);
-	pcie_bus_configure_settings(bus);
+	acpiphp_set_hpp_values(bus);
 	acpiphp_set_acpi_region(slot);
 
 	list_for_each_entry(dev, &bus->devices, bus_list) {
@@ -530,15 +573,19 @@ static void disable_slot(struct acpiphp_slot *slot)
 	slot->flags &= (~SLOT_ENABLED);
 }
 
+static bool acpiphp_no_hotplug(struct acpi_device *adev)
+{
+	return adev && adev->flags.no_hotplug;
+}
+
 static bool slot_no_hotplug(struct acpiphp_slot *slot)
 {
-	struct pci_bus *bus = slot->bus;
-	struct pci_dev *dev;
+	struct acpiphp_func *func;
 
-	list_for_each_entry(dev, &bus->devices, bus_list) {
-		if (PCI_SLOT(dev->devfn) == slot->device && dev->ignore_hotplug)
+	list_for_each_entry(func, &slot->funcs, sibling)
+		if (acpiphp_no_hotplug(func_to_acpi_device(func)))
 			return true;
-	}
+
 	return false;
 }
 
@@ -603,14 +650,15 @@ static void trim_stale_devices(struct pci_dev *dev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(&dev->dev);
 	struct pci_bus *bus = dev->subordinate;
-	bool alive = dev->ignore_hotplug;
+	bool alive = false;
 
 	if (adev) {
 		acpi_status status;
 		unsigned long long sta;
 
 		status = acpi_evaluate_integer(adev->handle, "_STA", NULL, &sta);
-		alive = alive || (ACPI_SUCCESS(status) && device_status_valid(sta));
+		alive = (ACPI_SUCCESS(status) && device_status_valid(sta))
+			|| acpiphp_no_hotplug(adev);
 	}
 	if (!alive)
 		alive = pci_device_is_present(dev);
@@ -646,9 +694,6 @@ static void acpiphp_check_bridge(struct acpiphp_bridge *bridge)
 	if (bridge->is_going_away)
 		return;
 
-	if (bridge->pci_dev)
-		pm_runtime_get_sync(&bridge->pci_dev->dev);
-
 	list_for_each_entry(slot, &bridge->slots, node) {
 		struct pci_bus *bus = slot->bus;
 		struct pci_dev *dev, *tmp;
@@ -668,9 +713,14 @@ static void acpiphp_check_bridge(struct acpiphp_bridge *bridge)
 			disable_slot(slot);
 		}
 	}
+}
 
-	if (bridge->pci_dev)
-		pm_runtime_put(&bridge->pci_dev->dev);
+static void acpiphp_set_hpp_values(struct pci_bus *bus)
+{
+	struct pci_dev *dev;
+
+	list_for_each_entry(dev, &bus->devices, bus_list)
+		pci_configure_slot(dev);
 }
 
 /*
@@ -684,7 +734,7 @@ static void acpiphp_sanitize_bus(struct pci_bus *bus)
 	unsigned long type_mask = IORESOURCE_IO | IORESOURCE_MEM;
 
 	list_for_each_entry_safe_reverse(dev, tmp, &bus->devices, bus_list) {
-		for (i = 0; i < PCI_BRIDGE_RESOURCES; i++) {
+		for (i=0; i<PCI_BRIDGE_RESOURCES; i++) {
 			struct resource *res = &dev->resource[i];
 			if ((res->flags & type_mask) && !res->start &&
 					res->end) {
@@ -703,15 +753,9 @@ static void acpiphp_sanitize_bus(struct pci_bus *bus)
 
 void acpiphp_check_host_bridge(struct acpi_device *adev)
 {
-	struct acpiphp_bridge *bridge = NULL;
+	struct acpiphp_bridge *bridge;
 
-	acpi_lock_hp_context();
-	if (adev->hp) {
-		bridge = to_acpiphp_root_context(adev->hp)->root_bridge;
-		if (bridge)
-			get_bridge(bridge);
-	}
-	acpi_unlock_hp_context();
+	bridge = acpiphp_dev_to_bridge(adev);
 	if (bridge) {
 		pci_lock_rescan_remove();
 
@@ -840,7 +884,7 @@ void acpiphp_enumerate_slots(struct pci_bus *bus)
 			goto err;
 
 		root_context->root_bridge = bridge;
-		acpi_set_hp_context(adev, &root_context->hp);
+		acpi_set_hp_context(adev, &root_context->hp, NULL, NULL, NULL);
 	} else {
 		struct acpiphp_context *context;
 
@@ -883,7 +927,7 @@ void acpiphp_enumerate_slots(struct pci_bus *bus)
 	kfree(bridge);
 }
 
-static void acpiphp_drop_bridge(struct acpiphp_bridge *bridge)
+void acpiphp_drop_bridge(struct acpiphp_bridge *bridge)
 {
 	if (pci_is_root_bus(bridge->pci_bus)) {
 		struct acpiphp_root_context *root_context;
@@ -930,10 +974,8 @@ int acpiphp_enable_slot(struct acpiphp_slot *slot)
 {
 	pci_lock_rescan_remove();
 
-	if (slot->flags & SLOT_IS_GOING_AWAY) {
-		pci_unlock_rescan_remove();
+	if (slot->flags & SLOT_IS_GOING_AWAY)
 		return -ENODEV;
-	}
 
 	/* configure all functions */
 	if (!(slot->flags & SLOT_ENABLED))

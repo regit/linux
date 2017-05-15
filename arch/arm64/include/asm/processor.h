@@ -29,14 +29,12 @@
 
 #include <linux/string.h>
 
-#include <asm/alternative.h>
 #include <asm/fpsimd.h>
 #include <asm/hw_breakpoint.h>
-#include <asm/lse.h>
-#include <asm/pgtable-hwdef.h>
 #include <asm/ptrace.h>
 #include <asm/types.h>
 
+#ifdef __KERNEL__
 #define STACK_TOP_MAX		TASK_SIZE_64
 #ifdef CONFIG_COMPAT
 #define AARCH32_VECTORS_BASE	0xffff0000
@@ -46,8 +44,8 @@
 #define STACK_TOP		STACK_TOP_MAX
 #endif /* CONFIG_COMPAT */
 
-extern phys_addr_t arm64_dma_phys_limit;
-#define ARCH_LOW_ADDRESS_LIMIT	(arm64_dma_phys_limit - 1)
+#define ARCH_LOW_ADDRESS_LIMIT	PHYS_MASK
+#endif /* __KERNEL__ */
 
 struct debug_info {
 	/* Have we suspended stepping by a debugger? */
@@ -78,29 +76,12 @@ struct cpu_context {
 
 struct thread_struct {
 	struct cpu_context	cpu_context;	/* cpu context */
-	unsigned long		tp_value;	/* TLS register */
-#ifdef CONFIG_COMPAT
-	unsigned long		tp2_value;
-#endif
+	unsigned long		tp_value;
 	struct fpsimd_state	fpsimd_state;
 	unsigned long		fault_address;	/* fault info */
 	unsigned long		fault_code;	/* ESR_EL1 value */
 	struct debug_info	debug;		/* debugging */
 };
-
-#ifdef CONFIG_COMPAT
-#define task_user_tls(t)						\
-({									\
-	unsigned long *__tls;						\
-	if (is_compat_thread(task_thread_info(t)))			\
-		__tls = &(t)->thread.tp2_value;				\
-	else								\
-		__tls = &(t)->thread.tp_value;				\
-	__tls;								\
- })
-#else
-#define task_user_tls(t)	(&(t)->thread.tp_value)
-#endif
 
 #define INIT_THREAD  {	}
 
@@ -142,12 +123,12 @@ struct task_struct;
 /* Free all resources held by a thread. */
 extern void release_thread(struct task_struct *);
 
+/* Prepare to copy thread state - unlazy all lazy status */
+#define prepare_to_copy(tsk)	do { } while (0)
+
 unsigned long get_wchan(struct task_struct *p);
 
-static inline void cpu_relax(void)
-{
-	asm volatile("yield" ::: "memory");
-}
+#define cpu_relax()			barrier()
 
 /* Thread switching */
 extern struct task_struct *cpu_switch_to(struct task_struct *prev,
@@ -156,8 +137,8 @@ extern struct task_struct *cpu_switch_to(struct task_struct *prev,
 #define task_pt_regs(p) \
 	((struct pt_regs *)(THREAD_START_SP + task_stack_page(p)) - 1)
 
-#define KSTK_EIP(tsk)	((unsigned long)task_pt_regs(tsk)->pc)
-#define KSTK_ESP(tsk)	user_stack_pointer(task_pt_regs(tsk))
+#define KSTK_EIP(tsk)	task_pt_regs(tsk)->pc
+#define KSTK_ESP(tsk)	task_pt_regs(tsk)->sp
 
 /*
  * Prefetching support
@@ -175,19 +156,13 @@ static inline void prefetchw(const void *ptr)
 }
 
 #define ARCH_HAS_SPINLOCK_PREFETCH
-static inline void spin_lock_prefetch(const void *ptr)
+static inline void spin_lock_prefetch(const void *x)
 {
-	asm volatile(ARM64_LSE_ATOMIC_INSN(
-		     "prfm pstl1strm, %a0",
-		     "nop") : : "p" (ptr));
+	prefetchw(x);
 }
 
 #define HAVE_ARCH_PICK_MMAP_LAYOUT
 
 #endif
-
-int cpu_enable_pan(void *__unused);
-int cpu_enable_uao(void *__unused);
-int cpu_enable_cache_maint_trap(void *__unused);
 
 #endif /* __ASM_PROCESSOR_H */

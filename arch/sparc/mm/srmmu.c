@@ -107,22 +107,17 @@ static inline int srmmu_pmd_none(pmd_t pmd)
 
 /* XXX should we hyper_flush_whole_icache here - Anton */
 static inline void srmmu_ctxd_set(ctxd_t *ctxp, pgd_t *pgdp)
-{
-	pte_t pte;
-
-	pte = __pte((SRMMU_ET_PTD | (__nocache_pa(pgdp) >> 4)));
-	set_pte((pte_t *)ctxp, pte);
-}
+{ set_pte((pte_t *)ctxp, (SRMMU_ET_PTD | (__nocache_pa((unsigned long) pgdp) >> 4))); }
 
 void pmd_set(pmd_t *pmdp, pte_t *ptep)
 {
 	unsigned long ptp;	/* Physical address, shifted right by 4 */
 	int i;
 
-	ptp = __nocache_pa(ptep) >> 4;
+	ptp = __nocache_pa((unsigned long) ptep) >> 4;
 	for (i = 0; i < PTRS_PER_PTE/SRMMU_REAL_PTRS_PER_PTE; i++) {
-		set_pte((pte_t *)&pmdp->pmdv[i], __pte(SRMMU_ET_PTD | ptp));
-		ptp += (SRMMU_REAL_PTRS_PER_PTE * sizeof(pte_t) >> 4);
+		set_pte((pte_t *)&pmdp->pmdv[i], SRMMU_ET_PTD | ptp);
+		ptp += (SRMMU_REAL_PTRS_PER_PTE*sizeof(pte_t) >> 4);
 	}
 }
 
@@ -133,8 +128,8 @@ void pmd_populate(struct mm_struct *mm, pmd_t *pmdp, struct page *ptep)
 
 	ptp = page_to_pfn(ptep) << (PAGE_SHIFT-4);	/* watch for overflow */
 	for (i = 0; i < PTRS_PER_PTE/SRMMU_REAL_PTRS_PER_PTE; i++) {
-		set_pte((pte_t *)&pmdp->pmdv[i], __pte(SRMMU_ET_PTD | ptp));
-		ptp += (SRMMU_REAL_PTRS_PER_PTE * sizeof(pte_t) >> 4);
+		set_pte((pte_t *)&pmdp->pmdv[i], SRMMU_ET_PTD | ptp);
+		ptp += (SRMMU_REAL_PTRS_PER_PTE*sizeof(pte_t) >> 4);
 	}
 }
 
@@ -465,12 +460,10 @@ static void __init sparc_context_init(int numctx)
 void switch_mm(struct mm_struct *old_mm, struct mm_struct *mm,
 	       struct task_struct *tsk)
 {
-	unsigned long flags;
-
 	if (mm->context == NO_CONTEXT) {
-		spin_lock_irqsave(&srmmu_context_spinlock, flags);
+		spin_lock(&srmmu_context_spinlock);
 		alloc_context(old_mm, mm);
-		spin_unlock_irqrestore(&srmmu_context_spinlock, flags);
+		spin_unlock(&srmmu_context_spinlock);
 		srmmu_ctxd_set(&srmmu_context_table[mm->context], mm->pgd);
 	}
 
@@ -916,7 +909,7 @@ void __init srmmu_paging_init(void)
 
 	/* ctx table has to be physically aligned to its size */
 	srmmu_context_table = __srmmu_get_nocache(num_contexts * sizeof(ctxd_t), num_contexts * sizeof(ctxd_t));
-	srmmu_ctx_table_phys = (ctxd_t *)__nocache_pa(srmmu_context_table);
+	srmmu_ctx_table_phys = (ctxd_t *)__nocache_pa((unsigned long)srmmu_context_table);
 
 	for (i = 0; i < num_contexts; i++)
 		srmmu_ctxd_set((ctxd_t *)__nocache_fix(&srmmu_context_table[i]), srmmu_swapper_pg_dir);
@@ -993,15 +986,14 @@ int init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 
 void destroy_context(struct mm_struct *mm)
 {
-	unsigned long flags;
 
 	if (mm->context != NO_CONTEXT) {
 		flush_cache_mm(mm);
 		srmmu_ctxd_set(&srmmu_context_table[mm->context], srmmu_swapper_pg_dir);
 		flush_tlb_mm(mm);
-		spin_lock_irqsave(&srmmu_context_spinlock, flags);
+		spin_lock(&srmmu_context_spinlock);
 		free_context(mm->context);
-		spin_unlock_irqrestore(&srmmu_context_spinlock, flags);
+		spin_unlock(&srmmu_context_spinlock);
 		mm->context = NO_CONTEXT;
 	}
 }

@@ -47,9 +47,9 @@
 #define XGMAC_REMOTE_WAKE	0x00000700	/* Remote Wake-Up Frm Filter */
 #define XGMAC_PMT		0x00000704	/* PMT Control and Status */
 #define XGMAC_MMC_CTRL		0x00000800	/* XGMAC MMC Control */
-#define XGMAC_MMC_INTR_RX	0x00000804	/* Receive Interrupt */
+#define XGMAC_MMC_INTR_RX	0x00000804	/* Recieve Interrupt */
 #define XGMAC_MMC_INTR_TX	0x00000808	/* Transmit Interrupt */
-#define XGMAC_MMC_INTR_MASK_RX	0x0000080c	/* Receive Interrupt Mask */
+#define XGMAC_MMC_INTR_MASK_RX	0x0000080c	/* Recieve Interrupt Mask */
 #define XGMAC_MMC_INTR_MASK_TX	0x00000810	/* Transmit Interrupt Mask */
 
 /* Hardware TX Statistics Counters */
@@ -153,7 +153,7 @@
 #define XGMAC_FLOW_CTRL_PT_MASK	0xffff0000	/* Pause Time Mask */
 #define XGMAC_FLOW_CTRL_PT_SHIFT	16
 #define XGMAC_FLOW_CTRL_DZQP	0x00000080	/* Disable Zero-Quanta Phase */
-#define XGMAC_FLOW_CTRL_PLT	0x00000020	/* Pause Low Threshold */
+#define XGMAC_FLOW_CTRL_PLT	0x00000020	/* Pause Low Threshhold */
 #define XGMAC_FLOW_CTRL_PLT_MASK 0x00000030	/* PLT MASK */
 #define XGMAC_FLOW_CTRL_UP	0x00000008	/* Unicast Pause Frame Detect */
 #define XGMAC_FLOW_CTRL_RFE	0x00000004	/* Rx Flow Control Enable */
@@ -254,18 +254,18 @@
 /* XGMAC Operation Mode Register */
 #define XGMAC_OMR_TSF		0x00200000	/* TX FIFO Store and Forward */
 #define XGMAC_OMR_FTF		0x00100000	/* Flush Transmit FIFO */
-#define XGMAC_OMR_TTC		0x00020000	/* Transmit Threshold Ctrl */
+#define XGMAC_OMR_TTC		0x00020000	/* Transmit Threshhold Ctrl */
 #define XGMAC_OMR_TTC_MASK	0x00030000
-#define XGMAC_OMR_RFD		0x00006000	/* FC Deactivation Threshold */
-#define XGMAC_OMR_RFD_MASK	0x00007000	/* FC Deact Threshold MASK */
-#define XGMAC_OMR_RFA		0x00000600	/* FC Activation Threshold */
-#define XGMAC_OMR_RFA_MASK	0x00000E00	/* FC Act Threshold MASK */
+#define XGMAC_OMR_RFD		0x00006000	/* FC Deactivation Threshhold */
+#define XGMAC_OMR_RFD_MASK	0x00007000	/* FC Deact Threshhold MASK */
+#define XGMAC_OMR_RFA		0x00000600	/* FC Activation Threshhold */
+#define XGMAC_OMR_RFA_MASK	0x00000E00	/* FC Act Threshhold MASK */
 #define XGMAC_OMR_EFC		0x00000100	/* Enable Hardware FC */
 #define XGMAC_OMR_FEF		0x00000080	/* Forward Error Frames */
 #define XGMAC_OMR_DT		0x00000040	/* Drop TCP/IP csum Errors */
 #define XGMAC_OMR_RSF		0x00000020	/* RX FIFO Store and Forward */
-#define XGMAC_OMR_RTC_256	0x00000018	/* RX Threshold Ctrl */
-#define XGMAC_OMR_RTC_MASK	0x00000018	/* RX Threshold Ctrl MASK */
+#define XGMAC_OMR_RTC_256	0x00000018	/* RX Threshhold Ctrl */
+#define XGMAC_OMR_RTC_MASK	0x00000018	/* RX Threshhold Ctrl MASK */
 
 /* XGMAC HW Features Register */
 #define DMA_HW_FEAT_TXCOESEL	0x00010000	/* TX Checksum offload */
@@ -394,7 +394,7 @@ struct xgmac_priv {
 };
 
 /* XGMAC Configuration Settings */
-#define XGMAC_MAX_MTU		9000
+#define MAX_MTU			9000
 #define PAUSE_TIME		0x400
 
 #define DMA_RX_RING_SZ		256
@@ -1360,6 +1360,20 @@ out:
  */
 static int xgmac_change_mtu(struct net_device *dev, int new_mtu)
 {
+	struct xgmac_priv *priv = netdev_priv(dev);
+	int old_mtu;
+
+	if ((new_mtu < 46) || (new_mtu > MAX_MTU)) {
+		netdev_err(priv->dev, "invalid MTU, max MTU is: %d\n", MAX_MTU);
+		return -EINVAL;
+	}
+
+	old_mtu = dev->mtu;
+
+	/* return early if the buffer sizes will not change */
+	if (old_mtu == new_mtu)
+		return 0;
+
 	/* Stop everything, get ready to change the MTU */
 	if (!netif_running(dev))
 		return 0;
@@ -1530,14 +1544,15 @@ static const struct net_device_ops xgmac_netdev_ops = {
 	.ndo_set_features = xgmac_set_features,
 };
 
-static int xgmac_ethtool_get_link_ksettings(struct net_device *dev,
-					    struct ethtool_link_ksettings *cmd)
+static int xgmac_ethtool_getsettings(struct net_device *dev,
+					  struct ethtool_cmd *cmd)
 {
-	cmd->base.autoneg = 0;
-	cmd->base.duplex = DUPLEX_FULL;
-	cmd->base.speed = 10000;
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported, 0);
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.advertising, 0);
+	cmd->autoneg = 0;
+	cmd->duplex = DUPLEX_FULL;
+	ethtool_cmd_speed_set(cmd, 10000);
+	cmd->supported = 0;
+	cmd->advertising = 0;
+	cmd->transceiver = XCVR_INTERNAL;
 	return 0;
 }
 
@@ -1680,6 +1695,7 @@ static int xgmac_set_wol(struct net_device *dev,
 }
 
 static const struct ethtool_ops xgmac_ethtool_ops = {
+	.get_settings = xgmac_ethtool_getsettings,
 	.get_link = ethtool_op_get_link,
 	.get_pauseparam = xgmac_get_pauseparam,
 	.set_pauseparam = xgmac_set_pauseparam,
@@ -1688,7 +1704,6 @@ static const struct ethtool_ops xgmac_ethtool_ops = {
 	.get_wol = xgmac_get_wol,
 	.set_wol = xgmac_set_wol,
 	.get_sset_count = xgmac_get_sset_count,
-	.get_link_ksettings = xgmac_ethtool_get_link_ksettings,
 };
 
 /**
@@ -1720,6 +1735,7 @@ static int xgmac_probe(struct platform_device *pdev)
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 	priv = netdev_priv(ndev);
 	platform_set_drvdata(pdev, ndev);
+	ether_setup(ndev);
 	ndev->netdev_ops = &xgmac_netdev_ops;
 	ndev->ethtool_ops = &xgmac_ethtool_ops;
 	spin_lock_init(&priv->stats_lock);
@@ -1788,10 +1804,6 @@ static int xgmac_probe(struct platform_device *pdev)
 				     NETIF_F_RXCSUM;
 	ndev->features |= ndev->hw_features;
 	ndev->priv_flags |= IFF_UNICAST_FLT;
-
-	/* MTU range: 46 - 9000 */
-	ndev->min_mtu = ETH_ZLEN - ETH_HLEN;
-	ndev->max_mtu = XGMAC_MAX_MTU;
 
 	/* Get the MAC address */
 	xgmac_get_mac_addr(priv->base, ndev->dev_addr, 0);

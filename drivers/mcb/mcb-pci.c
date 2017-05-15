@@ -17,7 +17,6 @@
 
 struct priv {
 	struct mcb_bus *bus;
-	phys_addr_t mapbase;
 	void __iomem *base;
 };
 
@@ -32,9 +31,10 @@ static int mcb_pci_get_irq(struct mcb_device *mdev)
 
 static int mcb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
-	struct resource *res;
 	struct priv *priv;
+	phys_addr_t mapbase;
 	int ret;
+	int num_cells;
 	unsigned long flags;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(struct priv), GFP_KERNEL);
@@ -46,29 +46,24 @@ static int mcb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_err(&pdev->dev, "Failed to enable PCI device\n");
 		return -ENODEV;
 	}
-	pci_set_master(pdev);
 
-	priv->mapbase = pci_resource_start(pdev, 0);
-	if (!priv->mapbase) {
+	mapbase = pci_resource_start(pdev, 0);
+	if (!mapbase) {
 		dev_err(&pdev->dev, "No PCI resource\n");
-		ret = -ENODEV;
-		goto out_disable;
+		goto err_start;
 	}
 
-	res = devm_request_mem_region(&pdev->dev, priv->mapbase,
-				      CHAM_HEADER_SIZE,
-				      KBUILD_MODNAME);
-	if (!res) {
-		dev_err(&pdev->dev, "Failed to request PCI memory\n");
-		ret = -EBUSY;
-		goto out_disable;
+	ret = pci_request_region(pdev, 0, KBUILD_MODNAME);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to request PCI BARs\n");
+		goto err_start;
 	}
 
-	priv->base = devm_ioremap(&pdev->dev, priv->mapbase, CHAM_HEADER_SIZE);
+	priv->base = pci_iomap(pdev, 0, 0);
 	if (!priv->base) {
 		dev_err(&pdev->dev, "Cannot ioremap\n");
 		ret = -ENOMEM;
-		goto out_disable;
+		goto err_ioremap;
 	}
 
 	flags = pci_resource_flags(pdev, 0);
@@ -76,7 +71,7 @@ static int mcb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		ret = -ENOTSUPP;
 		dev_err(&pdev->dev,
 			"IO mapped PCI devices are not supported\n");
-		goto out_disable;
+		goto err_ioremap;
 	}
 
 	pci_set_drvdata(pdev, priv);
@@ -84,24 +79,25 @@ static int mcb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	priv->bus = mcb_alloc_bus(&pdev->dev);
 	if (IS_ERR(priv->bus)) {
 		ret = PTR_ERR(priv->bus);
-		goto out_disable;
+		goto err_drvdata;
 	}
 
 	priv->bus->get_irq = mcb_pci_get_irq;
 
-	ret = chameleon_parse_cells(priv->bus, priv->mapbase, priv->base);
+	ret = chameleon_parse_cells(priv->bus, mapbase, priv->base);
 	if (ret < 0)
-		goto out_mcb_bus;
+		goto err_drvdata;
+	num_cells = ret;
 
-	dev_dbg(&pdev->dev, "Found %d cells\n", ret);
+	dev_dbg(&pdev->dev, "Found %d cells\n", num_cells);
 
 	mcb_bus_add_devices(priv->bus);
 
-	return 0;
-
-out_mcb_bus:
-	mcb_release_bus(priv->bus);
-out_disable:
+err_drvdata:
+	pci_iounmap(pdev, priv->base);
+err_ioremap:
+	pci_release_region(pdev, 0);
+err_start:
 	pci_disable_device(pdev);
 	return ret;
 }
@@ -111,8 +107,6 @@ static void mcb_pci_remove(struct pci_dev *pdev)
 	struct priv *priv = pci_get_drvdata(pdev);
 
 	mcb_release_bus(priv->bus);
-
-	pci_disable_device(pdev);
 }
 
 static const struct pci_device_id mcb_pci_tbl[] = {

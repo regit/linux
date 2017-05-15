@@ -16,7 +16,7 @@
 #include <linux/cpuidle.h>
 #include <linux/export.h>
 #include <asm/suspend.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 static unsigned long cpuidle_mode[] = {
 	SUSP_SH_SLEEP, /* regular sleep mode */
@@ -59,6 +59,7 @@ static struct cpuidle_driver cpuidle_driver = {
 			.exit_latency = 1,
 			.target_residency = 1 * 2,
 			.power_usage = 3,
+			.flags = CPUIDLE_FLAG_TIME_VALID,
 			.enter = cpuidle_sleep_enter,
 			.name = "C1",
 			.desc = "SuperH Sleep Mode",
@@ -67,6 +68,7 @@ static struct cpuidle_driver cpuidle_driver = {
 			.exit_latency = 100,
 			.target_residency = 1 * 2,
 			.power_usage = 1,
+			.flags = CPUIDLE_FLAG_TIME_VALID,
 			.enter = cpuidle_sleep_enter,
 			.name = "C2",
 			.desc = "SuperH Sleep Mode [SF]",
@@ -76,6 +78,7 @@ static struct cpuidle_driver cpuidle_driver = {
 			.exit_latency = 2300,
 			.target_residency = 1 * 2,
 			.power_usage = 1,
+			.flags = CPUIDLE_FLAG_TIME_VALID,
 			.enter = cpuidle_sleep_enter,
 			.name = "C3",
 			.desc = "SuperH Mobile Standby Mode [SF]",

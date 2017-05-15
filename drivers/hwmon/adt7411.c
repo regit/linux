@@ -7,7 +7,8 @@
  *  it under the terms of the GNU General Public License version 2 as
  *  published by the Free Software Foundation.
  *
- *  TODO: SPI, use power-down mode for suspend?, interrupt handling?
+ *  TODO: SPI, support for external temperature sensor
+ *	  use power-down mode for suspend?, interrupt handling?
  */
 
 #include <linux/kernel.h>
@@ -29,18 +30,12 @@
 
 #define ADT7411_REG_CFG1			0x18
 #define ADT7411_CFG1_START_MONITOR		(1 << 0)
-#define ADT7411_CFG1_RESERVED_BIT1		(1 << 1)
-#define ADT7411_CFG1_EXT_TDM			(1 << 2)
-#define ADT7411_CFG1_RESERVED_BIT3		(1 << 3)
 
 #define ADT7411_REG_CFG2			0x19
 #define ADT7411_CFG2_DISABLE_AVG		(1 << 5)
 
 #define ADT7411_REG_CFG3			0x1a
 #define ADT7411_CFG3_ADC_CLK_225		(1 << 0)
-#define ADT7411_CFG3_RESERVED_BIT1		(1 << 1)
-#define ADT7411_CFG3_RESERVED_BIT2		(1 << 2)
-#define ADT7411_CFG3_RESERVED_BIT3		(1 << 3)
 #define ADT7411_CFG3_REF_VDD			(1 << 4)
 
 #define ADT7411_REG_DEVICE_ID			0x4d
@@ -55,9 +50,8 @@ struct adt7411_data {
 	struct mutex device_lock;	/* for "atomic" device accesses */
 	struct mutex update_lock;
 	unsigned long next_update;
-	long vref_cached;
-	struct i2c_client *client;
-	bool use_ext_temp;
+	int vref_cached;
+	struct device *hwmon_dev;
 };
 
 /*
@@ -114,12 +108,79 @@ static int adt7411_modify_bit(struct i2c_client *client, u8 reg, u8 bit,
 	return ret;
 }
 
+static ssize_t adt7411_show_vdd(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	int ret = adt7411_read_10_bit(client, ADT7411_REG_INT_TEMP_VDD_LSB,
+			ADT7411_REG_VDD_MSB, 2);
+
+	return ret < 0 ? ret : sprintf(buf, "%u\n", ret * 7000 / 1024);
+}
+
+static ssize_t adt7411_show_temp(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	int val = adt7411_read_10_bit(client, ADT7411_REG_INT_TEMP_VDD_LSB,
+			ADT7411_REG_INT_TEMP_MSB, 0);
+
+	if (val < 0)
+		return val;
+
+	val = val & 0x200 ? val - 0x400 : val; /* 10 bit signed */
+
+	return sprintf(buf, "%d\n", val * 250);
+}
+
+static ssize_t adt7411_show_input(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	int nr = to_sensor_dev_attr(attr)->index;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adt7411_data *data = i2c_get_clientdata(client);
+	int val;
+	u8 lsb_reg, lsb_shift;
+
+	mutex_lock(&data->update_lock);
+	if (time_after_eq(jiffies, data->next_update)) {
+		val = i2c_smbus_read_byte_data(client, ADT7411_REG_CFG3);
+		if (val < 0)
+			goto exit_unlock;
+
+		if (val & ADT7411_CFG3_REF_VDD) {
+			val = adt7411_read_10_bit(client,
+					ADT7411_REG_INT_TEMP_VDD_LSB,
+					ADT7411_REG_VDD_MSB, 2);
+			if (val < 0)
+				goto exit_unlock;
+
+			data->vref_cached = val * 7000 / 1024;
+		} else {
+			data->vref_cached = 2250;
+		}
+
+		data->next_update = jiffies + HZ;
+	}
+
+	lsb_reg = ADT7411_REG_EXT_TEMP_AIN14_LSB + (nr >> 2);
+	lsb_shift = 2 * (nr & 0x03);
+	val = adt7411_read_10_bit(client, lsb_reg,
+			ADT7411_REG_EXT_TEMP_AIN1_MSB + nr, lsb_shift);
+	if (val < 0)
+		goto exit_unlock;
+
+	val = sprintf(buf, "%u\n", val * data->vref_cached / 1024);
+ exit_unlock:
+	mutex_unlock(&data->update_lock);
+	return val;
+}
+
 static ssize_t adt7411_show_bit(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct sensor_device_attribute_2 *attr2 = to_sensor_dev_attr_2(attr);
-	struct adt7411_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
 	int ret = i2c_smbus_read_byte_data(client, attr2->index);
 
 	return ret < 0 ? ret : sprintf(buf, "%u\n", !!(ret & attr2->nr));
@@ -130,8 +191,8 @@ static ssize_t adt7411_set_bit(struct device *dev,
 			       size_t count)
 {
 	struct sensor_device_attribute_2 *s_attr2 = to_sensor_dev_attr_2(attr);
-	struct adt7411_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adt7411_data *data = i2c_get_clientdata(client);
 	int ret;
 	unsigned long flag;
 
@@ -153,153 +214,40 @@ static ssize_t adt7411_set_bit(struct device *dev,
 	SENSOR_DEVICE_ATTR_2(__name, S_IRUGO | S_IWUSR, adt7411_show_bit, \
 	adt7411_set_bit, __bit, __reg)
 
+static DEVICE_ATTR(temp1_input, S_IRUGO, adt7411_show_temp, NULL);
+static DEVICE_ATTR(in0_input, S_IRUGO, adt7411_show_vdd, NULL);
+static SENSOR_DEVICE_ATTR(in1_input, S_IRUGO, adt7411_show_input, NULL, 0);
+static SENSOR_DEVICE_ATTR(in2_input, S_IRUGO, adt7411_show_input, NULL, 1);
+static SENSOR_DEVICE_ATTR(in3_input, S_IRUGO, adt7411_show_input, NULL, 2);
+static SENSOR_DEVICE_ATTR(in4_input, S_IRUGO, adt7411_show_input, NULL, 3);
+static SENSOR_DEVICE_ATTR(in5_input, S_IRUGO, adt7411_show_input, NULL, 4);
+static SENSOR_DEVICE_ATTR(in6_input, S_IRUGO, adt7411_show_input, NULL, 5);
+static SENSOR_DEVICE_ATTR(in7_input, S_IRUGO, adt7411_show_input, NULL, 6);
+static SENSOR_DEVICE_ATTR(in8_input, S_IRUGO, adt7411_show_input, NULL, 7);
 static ADT7411_BIT_ATTR(no_average, ADT7411_REG_CFG2, ADT7411_CFG2_DISABLE_AVG);
 static ADT7411_BIT_ATTR(fast_sampling, ADT7411_REG_CFG3, ADT7411_CFG3_ADC_CLK_225);
 static ADT7411_BIT_ATTR(adc_ref_vdd, ADT7411_REG_CFG3, ADT7411_CFG3_REF_VDD);
 
 static struct attribute *adt7411_attrs[] = {
+	&dev_attr_temp1_input.attr,
+	&dev_attr_in0_input.attr,
+	&sensor_dev_attr_in1_input.dev_attr.attr,
+	&sensor_dev_attr_in2_input.dev_attr.attr,
+	&sensor_dev_attr_in3_input.dev_attr.attr,
+	&sensor_dev_attr_in4_input.dev_attr.attr,
+	&sensor_dev_attr_in5_input.dev_attr.attr,
+	&sensor_dev_attr_in6_input.dev_attr.attr,
+	&sensor_dev_attr_in7_input.dev_attr.attr,
+	&sensor_dev_attr_in8_input.dev_attr.attr,
 	&sensor_dev_attr_no_average.dev_attr.attr,
 	&sensor_dev_attr_fast_sampling.dev_attr.attr,
 	&sensor_dev_attr_adc_ref_vdd.dev_attr.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(adt7411);
 
-static int adt7411_read_in_vdd(struct device *dev, u32 attr, long *val)
-{
-	struct adt7411_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
-	int ret;
-
-	switch (attr) {
-	case hwmon_in_input:
-		ret = adt7411_read_10_bit(client, ADT7411_REG_INT_TEMP_VDD_LSB,
-					  ADT7411_REG_VDD_MSB, 2);
-		if (ret < 0)
-			return ret;
-		*val = ret * 7000 / 1024;
-		return 0;
-	default:
-		return -EOPNOTSUPP;
-	}
-}
-
-static int adt7411_read_in_chan(struct device *dev, u32 attr, int channel,
-				long *val)
-{
-	struct adt7411_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
-
-	int ret;
-	int lsb_reg, lsb_shift;
-	int nr = channel - 1;
-
-	mutex_lock(&data->update_lock);
-	if (time_after_eq(jiffies, data->next_update)) {
-		ret = i2c_smbus_read_byte_data(client, ADT7411_REG_CFG3);
-		if (ret < 0)
-			goto exit_unlock;
-
-		if (ret & ADT7411_CFG3_REF_VDD) {
-			ret = adt7411_read_in_vdd(dev, hwmon_in_input,
-						  &data->vref_cached);
-			if (ret < 0)
-				goto exit_unlock;
-		} else {
-			data->vref_cached = 2250;
-		}
-
-		data->next_update = jiffies + HZ;
-	}
-
-	switch (attr) {
-	case hwmon_in_input:
-		lsb_reg = ADT7411_REG_EXT_TEMP_AIN14_LSB + (nr >> 2);
-		lsb_shift = 2 * (nr & 0x03);
-		ret = adt7411_read_10_bit(client, lsb_reg,
-					  ADT7411_REG_EXT_TEMP_AIN1_MSB + nr,
-					  lsb_shift);
-		if (ret < 0)
-			goto exit_unlock;
-		*val = ret * data->vref_cached / 1024;
-		ret = 0;
-		break;
-	default:
-		ret = -EOPNOTSUPP;
-		break;
-	}
- exit_unlock:
-	mutex_unlock(&data->update_lock);
-	return ret;
-}
-
-static int adt7411_read_in(struct device *dev, u32 attr, int channel,
-			   long *val)
-{
-	if (channel == 0)
-		return adt7411_read_in_vdd(dev, attr, val);
-	else
-		return adt7411_read_in_chan(dev, attr, channel, val);
-}
-
-static int adt7411_read_temp(struct device *dev, u32 attr, int channel,
-			     long *val)
-{
-	struct adt7411_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
-	int ret, regl, regh;
-
-	switch (attr) {
-	case hwmon_temp_input:
-		regl = channel ? ADT7411_REG_EXT_TEMP_AIN14_LSB :
-				 ADT7411_REG_INT_TEMP_VDD_LSB;
-		regh = channel ? ADT7411_REG_EXT_TEMP_AIN1_MSB :
-				 ADT7411_REG_INT_TEMP_MSB;
-		ret = adt7411_read_10_bit(client, regl, regh, 0);
-		if (ret < 0)
-			return ret;
-		ret = ret & 0x200 ? ret - 0x400 : ret; /* 10 bit signed */
-		*val = ret * 250;
-		return 0;
-	default:
-		return -EOPNOTSUPP;
-	}
-}
-
-static int adt7411_read(struct device *dev, enum hwmon_sensor_types type,
-			u32 attr, int channel, long *val)
-{
-	switch (type) {
-	case hwmon_in:
-		return adt7411_read_in(dev, attr, channel, val);
-	case hwmon_temp:
-		return adt7411_read_temp(dev, attr, channel, val);
-	default:
-		return -EOPNOTSUPP;
-	}
-}
-
-static umode_t adt7411_is_visible(const void *_data,
-				  enum hwmon_sensor_types type,
-				  u32 attr, int channel)
-{
-	const struct adt7411_data *data = _data;
-
-	switch (type) {
-	case hwmon_in:
-		if (channel > 0 && channel < 3)
-			return data->use_ext_temp ? 0 : S_IRUGO;
-		else
-			return S_IRUGO;
-	case hwmon_temp:
-		if (channel == 1)
-			return data->use_ext_temp ? S_IRUGO : 0;
-		else
-			return S_IRUGO;
-	default:
-		return 0;
-	}
-}
+static const struct attribute_group adt7411_attr_grp = {
+	.attrs = adt7411_attrs,
+};
 
 static int adt7411_detect(struct i2c_client *client,
 			  struct i2c_board_info *info)
@@ -330,121 +278,54 @@ static int adt7411_detect(struct i2c_client *client,
 	return 0;
 }
 
-static int adt7411_init_device(struct adt7411_data *data)
-{
-	int ret;
-	u8 val;
-
-	ret = i2c_smbus_read_byte_data(data->client, ADT7411_REG_CFG3);
-	if (ret < 0)
-		return ret;
-
-	/*
-	 * We must only write zero to bit 1 and bit 2 and only one to bit 3
-	 * according to the datasheet.
-	 */
-	val = ret;
-	val &= ~(ADT7411_CFG3_RESERVED_BIT1 | ADT7411_CFG3_RESERVED_BIT2);
-	val |= ADT7411_CFG3_RESERVED_BIT3;
-
-	ret = i2c_smbus_write_byte_data(data->client, ADT7411_REG_CFG3, val);
-	if (ret < 0)
-		return ret;
-
-	ret = i2c_smbus_read_byte_data(data->client, ADT7411_REG_CFG1);
-	if (ret < 0)
-		return ret;
-
-	data->use_ext_temp = ret & ADT7411_CFG1_EXT_TDM;
-
-	/*
-	 * We must only write zero to bit 1 and only one to bit 3 according to
-	 * the datasheet.
-	 */
-	val = ret;
-	val &= ~ADT7411_CFG1_RESERVED_BIT1;
-	val |= ADT7411_CFG1_RESERVED_BIT3;
-
-	/* enable monitoring */
-	val |= ADT7411_CFG1_START_MONITOR;
-
-	return i2c_smbus_write_byte_data(data->client, ADT7411_REG_CFG1, val);
-}
-
-static const u32 adt7411_in_config[] = {
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	HWMON_I_INPUT,
-	0
-};
-
-static const struct hwmon_channel_info adt7411_in = {
-	.type = hwmon_in,
-	.config = adt7411_in_config,
-};
-
-static const u32 adt7411_temp_config[] = {
-	HWMON_T_INPUT,
-	HWMON_T_INPUT,
-	0
-};
-
-static const struct hwmon_channel_info adt7411_temp = {
-	.type = hwmon_temp,
-	.config = adt7411_temp_config,
-};
-
-static const struct hwmon_channel_info *adt7411_info[] = {
-	&adt7411_in,
-	&adt7411_temp,
-	NULL
-};
-
-static const struct hwmon_ops adt7411_hwmon_ops = {
-	.is_visible = adt7411_is_visible,
-	.read = adt7411_read,
-};
-
-static const struct hwmon_chip_info adt7411_chip_info = {
-	.ops = &adt7411_hwmon_ops,
-	.info = adt7411_info,
-};
-
 static int adt7411_probe(struct i2c_client *client,
 				   const struct i2c_device_id *id)
 {
-	struct device *dev = &client->dev;
 	struct adt7411_data *data;
-	struct device *hwmon_dev;
 	int ret;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
 	i2c_set_clientdata(client, data);
-	data->client = client;
 	mutex_init(&data->device_lock);
 	mutex_init(&data->update_lock);
 
-	ret = adt7411_init_device(data);
+	ret = adt7411_modify_bit(client, ADT7411_REG_CFG1,
+				 ADT7411_CFG1_START_MONITOR, 1);
 	if (ret < 0)
 		return ret;
 
 	/* force update on first occasion */
 	data->next_update = jiffies;
 
-	hwmon_dev = devm_hwmon_device_register_with_info(dev, client->name,
-							 data,
-							 &adt7411_chip_info,
-							 adt7411_groups);
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	ret = sysfs_create_group(&client->dev.kobj, &adt7411_attr_grp);
+	if (ret)
+		return ret;
+
+	data->hwmon_dev = hwmon_device_register(&client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		ret = PTR_ERR(data->hwmon_dev);
+		goto exit_remove;
+	}
+
+	dev_info(&client->dev, "successfully registered\n");
+
+	return 0;
+
+ exit_remove:
+	sysfs_remove_group(&client->dev.kobj, &adt7411_attr_grp);
+	return ret;
+}
+
+static int adt7411_remove(struct i2c_client *client)
+{
+	struct adt7411_data *data = i2c_get_clientdata(client);
+
+	hwmon_device_unregister(data->hwmon_dev);
+	sysfs_remove_group(&client->dev.kobj, &adt7411_attr_grp);
+	return 0;
 }
 
 static const struct i2c_device_id adt7411_id[] = {
@@ -458,6 +339,7 @@ static struct i2c_driver adt7411_driver = {
 		.name		= "adt7411",
 	},
 	.probe  = adt7411_probe,
+	.remove	= adt7411_remove,
 	.id_table = adt7411_id,
 	.detect = adt7411_detect,
 	.address_list = normal_i2c,

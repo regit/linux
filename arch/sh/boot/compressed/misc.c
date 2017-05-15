@@ -11,7 +11,7 @@
  * Modified to use standard LinuxSH BIOS by Greg Banks 7Jul2000
  */
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/addrspace.h>
 #include <asm/page.h>
 
@@ -132,7 +132,7 @@ void decompress_kernel(void)
 
 	puts("Uncompressing Linux... ");
 	cache_control(CACHE_ENABLE);
-	__decompress(input_data, input_len, NULL, NULL, output, 0, NULL, error);
+	decompress(input_data, input_len, NULL, NULL, output, NULL, error);
 	cache_control(CACHE_DISABLE);
 	puts("Ok, booting the kernel.\n");
 }

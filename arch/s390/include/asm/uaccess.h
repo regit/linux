@@ -37,14 +37,14 @@
 #define get_ds()        (KERNEL_DS)
 #define get_fs()        (current->thread.mm_segment)
 
-#define set_fs(x)							\
-{									\
+#define set_fs(x) \
+({									\
 	unsigned long __pto;						\
 	current->thread.mm_segment = (x);				\
 	__pto = current->thread.mm_segment.ar4 ?			\
 		S390_lowcore.user_asce : S390_lowcore.kernel_asce;	\
 	__ctl_load(__pto, 7, 7);					\
-}
+})
 
 #define segment_eq(a,b) ((a).ar4 == (b).ar4)
 
@@ -79,12 +79,18 @@ struct exception_table_entry
 	int insn, fixup;
 };
 
+static inline unsigned long extable_insn(const struct exception_table_entry *x)
+{
+	return (unsigned long)&x->insn + x->insn;
+}
+
 static inline unsigned long extable_fixup(const struct exception_table_entry *x)
 {
 	return (unsigned long)&x->fixup + x->fixup;
 }
 
-#define ARCH_HAS_RELATIVE_EXTABLE
+#define ARCH_HAS_SORT_EXTABLE
+#define ARCH_HAS_SEARCH_EXTABLE
 
 /**
  * __copy_from_user: - Copy a block of data from user space, with less checking.
@@ -92,8 +98,7 @@ static inline unsigned long extable_fixup(const struct exception_table_entry *x)
  * @from: Source address, in user space.
  * @n:	  Number of bytes to copy.
  *
- * Context: User context only. This function may sleep if pagefaults are
- *          enabled.
+ * Context: User context only.	This function may sleep.
  *
  * Copy data from user space to kernel space.  Caller must check
  * the specified block with access_ok() before calling this function.
@@ -113,8 +118,7 @@ unsigned long __must_check __copy_from_user(void *to, const void __user *from,
  * @from: Source address, in kernel space.
  * @n:	  Number of bytes to copy.
  *
- * Context: User context only. This function may sleep if pagefaults are
- *          enabled.
+ * Context: User context only.	This function may sleep.
  *
  * Copy data from kernel space to user space.  Caller must check
  * the specified block with access_ok() before calling this function.
@@ -151,65 +155,8 @@ unsigned long __must_check __copy_to_user(void __user *to, const void *from,
 	__rc;							\
 })
 
-static inline int __put_user_fn(void *x, void __user *ptr, unsigned long size)
-{
-	unsigned long spec = 0x810000UL;
-	int rc;
-
-	switch (size) {
-	case 1:
-		rc = __put_get_user_asm((unsigned char __user *)ptr,
-					(unsigned char *)x,
-					size, spec);
-		break;
-	case 2:
-		rc = __put_get_user_asm((unsigned short __user *)ptr,
-					(unsigned short *)x,
-					size, spec);
-		break;
-	case 4:
-		rc = __put_get_user_asm((unsigned int __user *)ptr,
-					(unsigned int *)x,
-					size, spec);
-		break;
-	case 8:
-		rc = __put_get_user_asm((unsigned long __user *)ptr,
-					(unsigned long *)x,
-					size, spec);
-		break;
-	};
-	return rc;
-}
-
-static inline int __get_user_fn(void *x, const void __user *ptr, unsigned long size)
-{
-	unsigned long spec = 0x81UL;
-	int rc;
-
-	switch (size) {
-	case 1:
-		rc = __put_get_user_asm((unsigned char *)x,
-					(unsigned char __user *)ptr,
-					size, spec);
-		break;
-	case 2:
-		rc = __put_get_user_asm((unsigned short *)x,
-					(unsigned short __user *)ptr,
-					size, spec);
-		break;
-	case 4:
-		rc = __put_get_user_asm((unsigned int *)x,
-					(unsigned int __user *)ptr,
-					size, spec);
-		break;
-	case 8:
-		rc = __put_get_user_asm((unsigned long *)x,
-					(unsigned long __user *)ptr,
-					size, spec);
-		break;
-	};
-	return rc;
-}
+#define __put_user_fn(x, ptr, size) __put_get_user_asm(ptr, x, size, 0x810000UL)
+#define __get_user_fn(x, ptr, size) __put_get_user_asm(x, ptr, size, 0x81UL)
 
 #else /* CONFIG_HAVE_MARCH_Z10_FEATURES */
 
@@ -248,7 +195,7 @@ static inline int __get_user_fn(void *x, const void __user *ptr, unsigned long s
 		__put_user_bad();				\
 		break;						\
 	 }							\
-	__builtin_expect(__pu_err, 0);				\
+	__pu_err;						\
 })
 
 #define put_user(x, ptr)					\
@@ -266,28 +213,28 @@ int __put_user_bad(void) __attribute__((noreturn));
 	__chk_user_ptr(ptr);					\
 	switch (sizeof(*(ptr))) {				\
 	case 1: {						\
-		unsigned char __x = 0;				\
+		unsigned char __x;				\
 		__gu_err = __get_user_fn(&__x, ptr,		\
 					 sizeof(*(ptr)));	\
 		(x) = *(__force __typeof__(*(ptr)) *) &__x;	\
 		break;						\
 	};							\
 	case 2: {						\
-		unsigned short __x = 0;				\
+		unsigned short __x;				\
 		__gu_err = __get_user_fn(&__x, ptr,		\
 					 sizeof(*(ptr)));	\
 		(x) = *(__force __typeof__(*(ptr)) *) &__x;	\
 		break;						\
 	};							\
 	case 4: {						\
-		unsigned int __x = 0;				\
+		unsigned int __x;				\
 		__gu_err = __get_user_fn(&__x, ptr,		\
 					 sizeof(*(ptr)));	\
 		(x) = *(__force __typeof__(*(ptr)) *) &__x;	\
 		break;						\
 	};							\
 	case 8: {						\
-		unsigned long long __x = 0;			\
+		unsigned long long __x;				\
 		__gu_err = __get_user_fn(&__x, ptr,		\
 					 sizeof(*(ptr)));	\
 		(x) = *(__force __typeof__(*(ptr)) *) &__x;	\
@@ -297,7 +244,7 @@ int __put_user_bad(void) __attribute__((noreturn));
 		__get_user_bad();				\
 		break;						\
 	}							\
-	__builtin_expect(__gu_err, 0);				\
+	__gu_err;						\
 })
 
 #define get_user(x, ptr)					\
@@ -311,22 +258,13 @@ int __get_user_bad(void) __attribute__((noreturn));
 #define __put_user_unaligned __put_user
 #define __get_user_unaligned __get_user
 
-extern void __compiletime_error("usercopy buffer size is too small")
-__bad_copy_user(void);
-
-static inline void copy_user_overflow(int size, unsigned long count)
-{
-	WARN(1, "Buffer overflow detected (%d < %lu)!\n", size, count);
-}
-
 /**
  * copy_to_user: - Copy a block of data into user space.
  * @to:   Destination address, in user space.
  * @from: Source address, in kernel space.
  * @n:    Number of bytes to copy.
  *
- * Context: User context only. This function may sleep if pagefaults are
- *          enabled.
+ * Context: User context only.  This function may sleep.
  *
  * Copy data from kernel space to user space.
  *
@@ -340,14 +278,19 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 	return __copy_to_user(to, from, n);
 }
 
+void copy_from_user_overflow(void)
+#ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
+__compiletime_warning("copy_from_user() buffer size is not provably correct")
+#endif
+;
+
 /**
  * copy_from_user: - Copy a block of data from user space.
  * @to:   Destination address, in kernel space.
  * @from: Source address, in user space.
  * @n:    Number of bytes to copy.
  *
- * Context: User context only. This function may sleep if pagefaults are
- *          enabled.
+ * Context: User context only.  This function may sleep.
  *
  * Copy data from user space to kernel space.
  *
@@ -364,10 +307,7 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 
 	might_fault();
 	if (unlikely(sz != -1 && sz < n)) {
-		if (!__builtin_constant_p(n))
-			copy_user_overflow(sz, n);
-		else
-			__bad_copy_user();
+		copy_from_user_overflow();
 		return n;
 	}
 	return __copy_from_user(to, from, n);
@@ -408,8 +348,7 @@ static inline unsigned long strnlen_user(const char __user *src, unsigned long n
  * strlen_user: - Get the size of a string in user space.
  * @str: The string to measure.
  *
- * Context: User context only. This function may sleep if pagefaults are
- *          enabled.
+ * Context: User context only.  This function may sleep.
  *
  * Get the size of a NUL-terminated string in user space.
  *
@@ -433,6 +372,5 @@ static inline unsigned long __must_check clear_user(void __user *to, unsigned lo
 }
 
 int copy_to_user_real(void __user *dest, void *src, unsigned long count);
-void s390_kernel_write(void *dst, const void *src, size_t size);
 
 #endif /* __S390_UACCESS_H */

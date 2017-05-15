@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -32,10 +36,11 @@
 #define DEBUG_SUBSYSTEM S_CLASS
 
 #include <linux/vfs.h>
-#include "../include/obd_class.h"
-#include "../include/lprocfs_status.h"
+#include <obd_class.h>
+#include <lprocfs_status.h>
 #include "mgc_internal.h"
 
+LPROC_SEQ_FOPS_RO_TYPE(mgc, uuid);
 LPROC_SEQ_FOPS_RO_TYPE(mgc, connect_flags);
 LPROC_SEQ_FOPS_RO_TYPE(mgc, server_uuid);
 LPROC_SEQ_FOPS_RO_TYPE(mgc, conn_uuid);
@@ -48,10 +53,10 @@ static int mgc_ir_state_seq_show(struct seq_file *m, void *v)
 {
 	return lprocfs_mgc_rd_ir_state(m, m->private);
 }
-
 LPROC_SEQ_FOPS_RO(mgc_ir_state);
 
 static struct lprocfs_vars lprocfs_mgc_obd_vars[] = {
+	{ "uuid",	     &mgc_uuid_fops,	  NULL, 0 },
 	{ "ping",	     &mgc_ping_fops,      NULL, 0222 },
 	{ "connect_flags",   &mgc_connect_flags_fops, NULL, 0 },
 	{ "mgs_server_uuid", &mgc_server_uuid_fops,   NULL, 0 },
@@ -62,7 +67,14 @@ static struct lprocfs_vars lprocfs_mgc_obd_vars[] = {
 	{ NULL }
 };
 
+LPROC_SEQ_FOPS_RO_TYPE(mgc, numrefs);
+static struct lprocfs_vars lprocfs_mgc_module_vars[] = {
+	{ "num_refs",	&mgc_numrefs_fops,       NULL, 0 },
+	{ NULL }
+};
+
 void lprocfs_mgc_init_vars(struct lprocfs_static_vars *lvars)
 {
+	lvars->module_vars = lprocfs_mgc_module_vars;
 	lvars->obd_vars    = lprocfs_mgc_obd_vars;
 }

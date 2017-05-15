@@ -16,7 +16,6 @@
 #include <linux/acpi.h>
 #include <linux/of.h>
 #include <linux/cpufeature.h>
-#include <linux/tick.h>
 
 #include "base.h"
 
@@ -41,7 +40,7 @@ static void change_cpu_under_node(struct cpu *cpu,
 	cpu->node_id = to_nid;
 }
 
-static int cpu_subsys_online(struct device *dev)
+static int __ref cpu_subsys_online(struct device *dev)
 {
 	struct cpu *cpu = container_of(dev, struct cpu, dev);
 	int cpuid = dev->id;
@@ -200,7 +199,7 @@ static const struct attribute_group *hotplugable_cpu_attr_groups[] = {
 
 struct cpu_attr {
 	struct device_attribute attr;
-	const struct cpumask *const map;
+	const struct cpumask *const * const map;
 };
 
 static ssize_t show_cpus_attr(struct device *dev,
@@ -208,8 +207,11 @@ static ssize_t show_cpus_attr(struct device *dev,
 			      char *buf)
 {
 	struct cpu_attr *ca = container_of(attr, struct cpu_attr, attr);
+	int n = cpulist_scnprintf(buf, PAGE_SIZE-2, *(ca->map));
 
-	return cpumap_print_to_pagebuf(true, buf, ca->map);
+	buf[n++] = '\n';
+	buf[n] = '\0';
+	return n;
 }
 
 #define _CPU_ATTR(name, map) \
@@ -217,9 +219,9 @@ static ssize_t show_cpus_attr(struct device *dev,
 
 /* Keep in sync with cpu_subsys_attrs */
 static struct cpu_attr cpu_attrs[] = {
-	_CPU_ATTR(online, &__cpu_online_mask),
-	_CPU_ATTR(possible, &__cpu_possible_mask),
-	_CPU_ATTR(present, &__cpu_present_mask),
+	_CPU_ATTR(online, &cpu_online_mask),
+	_CPU_ATTR(possible, &cpu_possible_mask),
+	_CPU_ATTR(present, &cpu_present_mask),
 };
 
 /*
@@ -246,7 +248,7 @@ static ssize_t print_cpus_offline(struct device *dev,
 	if (!alloc_cpumask_var(&offline, GFP_KERNEL))
 		return -ENOMEM;
 	cpumask_andnot(offline, cpu_possible_mask, cpu_online_mask);
-	n = scnprintf(buf, len, "%*pbl", cpumask_pr_args(offline));
+	n = cpulist_scnprintf(buf, len, offline);
 	free_cpumask_var(offline);
 
 	/* display offline cpus >= nr_cpu_ids */
@@ -265,30 +267,6 @@ static ssize_t print_cpus_offline(struct device *dev,
 	return n;
 }
 static DEVICE_ATTR(offline, 0444, print_cpus_offline, NULL);
-
-static ssize_t print_cpus_isolated(struct device *dev,
-				  struct device_attribute *attr, char *buf)
-{
-	int n = 0, len = PAGE_SIZE-2;
-
-	n = scnprintf(buf, len, "%*pbl\n", cpumask_pr_args(cpu_isolated_map));
-
-	return n;
-}
-static DEVICE_ATTR(isolated, 0444, print_cpus_isolated, NULL);
-
-#ifdef CONFIG_NO_HZ_FULL
-static ssize_t print_cpus_nohz_full(struct device *dev,
-				  struct device_attribute *attr, char *buf)
-{
-	int n = 0, len = PAGE_SIZE-2;
-
-	n = scnprintf(buf, len, "%*pbl\n", cpumask_pr_args(tick_nohz_full_mask));
-
-	return n;
-}
-static DEVICE_ATTR(nohz_full, 0444, print_cpus_nohz_full, NULL);
-#endif
 
 static void cpu_device_release(struct device *dev)
 {
@@ -371,13 +349,12 @@ int register_cpu(struct cpu *cpu, int num)
 	if (cpu->hotpluggable)
 		cpu->dev.groups = hotplugable_cpu_attr_groups;
 	error = device_register(&cpu->dev);
-	if (error)
-		return error;
+	if (!error)
+		per_cpu(cpu_sys_devices, num) = &cpu->dev;
+	if (!error)
+		register_cpu_under_node(num, cpu_to_node(num));
 
-	per_cpu(cpu_sys_devices, num) = &cpu->dev;
-	register_cpu_under_node(num, cpu_to_node(num));
-
-	return 0;
+	return error;
 }
 
 struct device *get_cpu_device(unsigned cpu)
@@ -388,60 +365,6 @@ struct device *get_cpu_device(unsigned cpu)
 		return NULL;
 }
 EXPORT_SYMBOL_GPL(get_cpu_device);
-
-static void device_create_release(struct device *dev)
-{
-	kfree(dev);
-}
-
-static struct device *
-__cpu_device_create(struct device *parent, void *drvdata,
-		    const struct attribute_group **groups,
-		    const char *fmt, va_list args)
-{
-	struct device *dev = NULL;
-	int retval = -ENODEV;
-
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
-	if (!dev) {
-		retval = -ENOMEM;
-		goto error;
-	}
-
-	device_initialize(dev);
-	dev->parent = parent;
-	dev->groups = groups;
-	dev->release = device_create_release;
-	dev_set_drvdata(dev, drvdata);
-
-	retval = kobject_set_name_vargs(&dev->kobj, fmt, args);
-	if (retval)
-		goto error;
-
-	retval = device_add(dev);
-	if (retval)
-		goto error;
-
-	return dev;
-
-error:
-	put_device(dev);
-	return ERR_PTR(retval);
-}
-
-struct device *cpu_device_create(struct device *parent, void *drvdata,
-				 const struct attribute_group **groups,
-				 const char *fmt, ...)
-{
-	va_list vargs;
-	struct device *dev;
-
-	va_start(vargs, fmt);
-	dev = __cpu_device_create(parent, drvdata, groups, fmt, vargs);
-	va_end(vargs);
-	return dev;
-}
-EXPORT_SYMBOL_GPL(cpu_device_create);
 
 #ifdef CONFIG_GENERIC_CPU_AUTOPROBE
 static DEVICE_ATTR(modalias, 0444, print_cpu_modalias, NULL);
@@ -457,10 +380,6 @@ static struct attribute *cpu_root_attrs[] = {
 	&cpu_attrs[2].attr.attr,
 	&dev_attr_kernel_max.attr,
 	&dev_attr_offline.attr,
-	&dev_attr_isolated.attr,
-#ifdef CONFIG_NO_HZ_FULL
-	&dev_attr_nohz_full.attr,
-#endif
 #ifdef CONFIG_GENERIC_CPU_AUTOPROBE
 	&dev_attr_modalias.attr,
 #endif

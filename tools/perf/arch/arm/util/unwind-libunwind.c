@@ -3,7 +3,6 @@
 #include <libunwind.h>
 #include "perf_regs.h"
 #include "../../util/unwind.h"
-#include "../../util/debug.h"
 
 int libunwind__arch_reg_id(int regnum)
 {

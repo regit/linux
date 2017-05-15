@@ -37,15 +37,11 @@
  * Generic range manager structs
  */
 #include <linux/bug.h>
-#include <linux/rbtree.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #ifdef CONFIG_DEBUG_FS
 #include <linux/seq_file.h>
-#endif
-#ifdef CONFIG_DRM_DEBUG_MM
-#include <linux/stackdepot.h>
 #endif
 
 enum drm_mm_search_flags {
@@ -65,7 +61,6 @@ enum drm_mm_allocator_flags {
 struct drm_mm_node {
 	struct list_head node_list;
 	struct list_head hole_stack;
-	struct rb_node rb;
 	unsigned hole_follows : 1;
 	unsigned scanned_block : 1;
 	unsigned scanned_prev_free : 1;
@@ -73,13 +68,9 @@ struct drm_mm_node {
 	unsigned scanned_preceeds_hole : 1;
 	unsigned allocated : 1;
 	unsigned long color;
-	u64 start;
-	u64 size;
-	u64 __subtree_last;
+	unsigned long start;
+	unsigned long size;
 	struct drm_mm *mm;
-#ifdef CONFIG_DRM_DEBUG_MM
-	depot_stack_handle_t stack;
-#endif
 };
 
 struct drm_mm {
@@ -88,22 +79,19 @@ struct drm_mm {
 	/* head_node.node_list is the list of all memory nodes, ordered
 	 * according to the (increasing) start address of the memory node. */
 	struct drm_mm_node head_node;
-	/* Keep an interval_tree for fast lookup of drm_mm_nodes by address. */
-	struct rb_root interval_tree;
-
 	unsigned int scan_check_range : 1;
 	unsigned scan_alignment;
 	unsigned long scan_color;
-	u64 scan_size;
-	u64 scan_hit_start;
-	u64 scan_hit_end;
+	unsigned long scan_size;
+	unsigned long scan_hit_start;
+	unsigned long scan_hit_end;
 	unsigned scanned_blocks;
-	u64 scan_start;
-	u64 scan_end;
+	unsigned long scan_start;
+	unsigned long scan_end;
 	struct drm_mm_node *prev_scanned_node;
 
 	void (*color_adjust)(struct drm_mm_node *node, unsigned long color,
-			     u64 *start, u64 *end);
+			     unsigned long *start, unsigned long *end);
 };
 
 /**
@@ -136,7 +124,7 @@ static inline bool drm_mm_initialized(struct drm_mm *mm)
 	return mm->hole_stack.next;
 }
 
-static inline u64 __drm_mm_hole_node_start(struct drm_mm_node *hole_node)
+static inline unsigned long __drm_mm_hole_node_start(struct drm_mm_node *hole_node)
 {
 	return hole_node->start + hole_node->size;
 }
@@ -152,15 +140,16 @@ static inline u64 __drm_mm_hole_node_start(struct drm_mm_node *hole_node)
  * Returns:
  * Start of the subsequent hole.
  */
-static inline u64 drm_mm_hole_node_start(struct drm_mm_node *hole_node)
+static inline unsigned long drm_mm_hole_node_start(struct drm_mm_node *hole_node)
 {
 	BUG_ON(!hole_node->hole_follows);
 	return __drm_mm_hole_node_start(hole_node);
 }
 
-static inline u64 __drm_mm_hole_node_end(struct drm_mm_node *hole_node)
+static inline unsigned long __drm_mm_hole_node_end(struct drm_mm_node *hole_node)
 {
-	return list_next_entry(hole_node, node_list)->start;
+	return list_entry(hole_node->node_list.next,
+			  struct drm_mm_node, node_list)->start;
 }
 
 /**
@@ -174,7 +163,7 @@ static inline u64 __drm_mm_hole_node_end(struct drm_mm_node *hole_node)
  * Returns:
  * End of the subsequent hole.
  */
-static inline u64 drm_mm_hole_node_end(struct drm_mm_node *hole_node)
+static inline unsigned long drm_mm_hole_node_end(struct drm_mm_node *hole_node)
 {
 	return __drm_mm_hole_node_end(hole_node);
 }
@@ -190,14 +179,6 @@ static inline u64 drm_mm_hole_node_end(struct drm_mm_node *hole_node)
 #define drm_mm_for_each_node(entry, mm) list_for_each_entry(entry, \
 						&(mm)->head_node.node_list, \
 						node_list)
-
-#define __drm_mm_for_each_hole(entry, mm, hole_start, hole_end, backwards) \
-	for (entry = list_entry((backwards) ? (mm)->hole_stack.prev : (mm)->hole_stack.next, struct drm_mm_node, hole_stack); \
-	     &entry->hole_stack != &(mm)->hole_stack ? \
-	     hole_start = drm_mm_hole_node_start(entry), \
-	     hole_end = drm_mm_hole_node_end(entry), \
-	     1 : 0; \
-	     entry = list_entry((backwards) ? entry->hole_stack.prev : entry->hole_stack.next, struct drm_mm_node, hole_stack))
 
 /**
  * drm_mm_for_each_hole - iterator to walk over all holes
@@ -219,7 +200,20 @@ static inline u64 drm_mm_hole_node_end(struct drm_mm_node *hole_node)
  * going backwards.
  */
 #define drm_mm_for_each_hole(entry, mm, hole_start, hole_end) \
-	__drm_mm_for_each_hole(entry, mm, hole_start, hole_end, 0)
+	for (entry = list_entry((mm)->hole_stack.next, struct drm_mm_node, hole_stack); \
+	     &entry->hole_stack != &(mm)->hole_stack ? \
+	     hole_start = drm_mm_hole_node_start(entry), \
+	     hole_end = drm_mm_hole_node_end(entry), \
+	     1 : 0; \
+	     entry = list_entry(entry->hole_stack.next, struct drm_mm_node, hole_stack))
+
+#define __drm_mm_for_each_hole(entry, mm, hole_start, hole_end, backwards) \
+	for (entry = list_entry((backwards) ? (mm)->hole_stack.prev : (mm)->hole_stack.next, struct drm_mm_node, hole_stack); \
+	     &entry->hole_stack != &(mm)->hole_stack ? \
+	     hole_start = drm_mm_hole_node_start(entry), \
+	     hole_end = drm_mm_hole_node_end(entry), \
+	     1 : 0; \
+	     entry = list_entry((backwards) ? entry->hole_stack.prev : entry->hole_stack.next, struct drm_mm_node, hole_stack))
 
 /*
  * Basic range manager support (drm_mm.c)
@@ -228,7 +222,7 @@ int drm_mm_reserve_node(struct drm_mm *mm, struct drm_mm_node *node);
 
 int drm_mm_insert_node_generic(struct drm_mm *mm,
 			       struct drm_mm_node *node,
-			       u64 size,
+			       unsigned long size,
 			       unsigned alignment,
 			       unsigned long color,
 			       enum drm_mm_search_flags sflags,
@@ -251,7 +245,7 @@ int drm_mm_insert_node_generic(struct drm_mm *mm,
  */
 static inline int drm_mm_insert_node(struct drm_mm *mm,
 				     struct drm_mm_node *node,
-				     u64 size,
+				     unsigned long size,
 				     unsigned alignment,
 				     enum drm_mm_search_flags flags)
 {
@@ -261,11 +255,11 @@ static inline int drm_mm_insert_node(struct drm_mm *mm,
 
 int drm_mm_insert_node_in_range_generic(struct drm_mm *mm,
 					struct drm_mm_node *node,
-					u64 size,
+					unsigned long size,
 					unsigned alignment,
 					unsigned long color,
-					u64 start,
-					u64 end,
+					unsigned long start,
+					unsigned long end,
 					enum drm_mm_search_flags sflags,
 					enum drm_mm_allocator_flags aflags);
 /**
@@ -288,10 +282,10 @@ int drm_mm_insert_node_in_range_generic(struct drm_mm *mm,
  */
 static inline int drm_mm_insert_node_in_range(struct drm_mm *mm,
 					      struct drm_mm_node *node,
-					      u64 size,
+					      unsigned long size,
 					      unsigned alignment,
-					      u64 start,
-					      u64 end,
+					      unsigned long start,
+					      unsigned long end,
 					      enum drm_mm_search_flags flags)
 {
 	return drm_mm_insert_node_in_range_generic(mm, node, size, alignment,
@@ -302,43 +296,21 @@ static inline int drm_mm_insert_node_in_range(struct drm_mm *mm,
 void drm_mm_remove_node(struct drm_mm_node *node);
 void drm_mm_replace_node(struct drm_mm_node *old, struct drm_mm_node *new);
 void drm_mm_init(struct drm_mm *mm,
-		 u64 start,
-		 u64 size);
+		 unsigned long start,
+		 unsigned long size);
 void drm_mm_takedown(struct drm_mm *mm);
 bool drm_mm_clean(struct drm_mm *mm);
 
-struct drm_mm_node *
-__drm_mm_interval_first(struct drm_mm *mm, u64 start, u64 last);
-
-/**
- * drm_mm_for_each_node_in_range - iterator to walk over a range of
- * allocated nodes
- * @node__: drm_mm_node structure to assign to in each iteration step
- * @mm__: drm_mm allocator to walk
- * @start__: starting offset, the first node will overlap this
- * @end__: ending offset, the last node will start before this (but may overlap)
- *
- * This iterator walks over all nodes in the range allocator that lie
- * between @start and @end. It is implemented similarly to list_for_each(),
- * but using the internal interval tree to accelerate the search for the
- * starting node, and so not safe against removal of elements. It assumes
- * that @end is within (or is the upper limit of) the drm_mm allocator.
- */
-#define drm_mm_for_each_node_in_range(node__, mm__, start__, end__)	\
-	for (node__ = __drm_mm_interval_first((mm__), (start__), (end__)-1); \
-	     node__ && node__->start < (end__);				\
-	     node__ = list_next_entry(node__, node_list))
-
 void drm_mm_init_scan(struct drm_mm *mm,
-		      u64 size,
+		      unsigned long size,
 		      unsigned alignment,
 		      unsigned long color);
 void drm_mm_init_scan_with_range(struct drm_mm *mm,
-				 u64 size,
+				 unsigned long size,
 				 unsigned alignment,
 				 unsigned long color,
-				 u64 start,
-				 u64 end);
+				 unsigned long start,
+				 unsigned long end);
 bool drm_mm_scan_add_block(struct drm_mm_node *node);
 bool drm_mm_scan_remove_block(struct drm_mm_node *node);
 

@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -36,11 +40,25 @@
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include <linux/statfs.h>
-#include "../include/lustre_export.h"
-#include "../include/lustre_net.h"
-#include "../include/obd_support.h"
-#include "../include/obd_class.h"
+
+#include <lustre_export.h>
+#include <lustre_net.h>
+#include <obd_support.h>
+#include <obd_class.h>
+
+void statfs_pack(struct obd_statfs *osfs, struct kstatfs *sfs)
+{
+	memset(osfs, 0, sizeof(*osfs));
+	osfs->os_type = sfs->f_type;
+	osfs->os_blocks = sfs->f_blocks;
+	osfs->os_bfree = sfs->f_bfree;
+	osfs->os_bavail = sfs->f_bavail;
+	osfs->os_files = sfs->f_files;
+	osfs->os_ffree = sfs->f_ffree;
+	osfs->os_bsize = sfs->f_bsize;
+	osfs->os_namelen = sfs->f_namelen;
+}
+EXPORT_SYMBOL(statfs_pack);
 
 void statfs_unpack(struct kstatfs *sfs, struct obd_statfs *osfs)
 {

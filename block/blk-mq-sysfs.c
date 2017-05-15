@@ -141,26 +141,15 @@ static ssize_t blk_mq_sysfs_completed_show(struct blk_mq_ctx *ctx, char *page)
 
 static ssize_t sysfs_list_show(char *page, struct list_head *list, char *msg)
 {
+	char *start_page = page;
 	struct request *rq;
-	int len = snprintf(page, PAGE_SIZE - 1, "%s:\n", msg);
 
-	list_for_each_entry(rq, list, queuelist) {
-		const int rq_len = 2 * sizeof(rq) + 2;
+	page += sprintf(page, "%s:\n", msg);
 
-		/* if the output will be truncated */
-		if (PAGE_SIZE - 1 < len + rq_len) {
-			/* backspacing if it can't hold '\t...\n' */
-			if (PAGE_SIZE - 1 < len + 5)
-				len -= rq_len;
-			len += snprintf(page + len, PAGE_SIZE - 1 - len,
-					"\t...\n");
-			break;
-		}
-		len += snprintf(page + len, PAGE_SIZE - 1 - len,
-				"\t%p\n", rq);
-	}
+	list_for_each_entry(rq, list, queuelist)
+		page += sprintf(page, "\t%p\n", rq);
 
-	return len;
+	return page - start_page;
 }
 
 static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
@@ -172,21 +161,6 @@ static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
 	spin_unlock(&ctx->lock);
 
 	return ret;
-}
-
-static ssize_t blk_mq_hw_sysfs_poll_show(struct blk_mq_hw_ctx *hctx, char *page)
-{
-	return sprintf(page, "considered=%lu, invoked=%lu, success=%lu\n",
-		       hctx->poll_considered, hctx->poll_invoked,
-		       hctx->poll_success);
-}
-
-static ssize_t blk_mq_hw_sysfs_poll_store(struct blk_mq_hw_ctx *hctx,
-					  const char *page, size_t size)
-{
-	hctx->poll_considered = hctx->poll_invoked = hctx->poll_success = 0;
-
-	return size;
 }
 
 static ssize_t blk_mq_hw_sysfs_queued_show(struct blk_mq_hw_ctx *hctx,
@@ -208,14 +182,12 @@ static ssize_t blk_mq_hw_sysfs_dispatched_show(struct blk_mq_hw_ctx *hctx,
 
 	page += sprintf(page, "%8u\t%lu\n", 0U, hctx->dispatched[0]);
 
-	for (i = 1; i < BLK_MQ_MAX_DISPATCH_ORDER - 1; i++) {
-		unsigned int d = 1U << (i - 1);
+	for (i = 1; i < BLK_MQ_MAX_DISPATCH_ORDER; i++) {
+		unsigned long d = 1U << (i - 1);
 
-		page += sprintf(page, "%8u\t%lu\n", d, hctx->dispatched[i]);
+		page += sprintf(page, "%8lu\t%lu\n", d, hctx->dispatched[i]);
 	}
 
-	page += sprintf(page, "%8u+\t%lu\n", 1U << (i - 1),
-						hctx->dispatched[i]);
 	return page - start_page;
 }
 
@@ -246,6 +218,8 @@ static ssize_t blk_mq_hw_sysfs_cpus_show(struct blk_mq_hw_ctx *hctx, char *page)
 	unsigned int i, first = 1;
 	ssize_t ret = 0;
 
+	blk_mq_disable_hotplug();
+
 	for_each_cpu(i, hctx->cpumask) {
 		if (first)
 			ret += sprintf(ret + page, "%u", i);
@@ -255,48 +229,9 @@ static ssize_t blk_mq_hw_sysfs_cpus_show(struct blk_mq_hw_ctx *hctx, char *page)
 		first = 0;
 	}
 
+	blk_mq_enable_hotplug();
+
 	ret += sprintf(ret + page, "\n");
-	return ret;
-}
-
-static void blk_mq_stat_clear(struct blk_mq_hw_ctx *hctx)
-{
-	struct blk_mq_ctx *ctx;
-	unsigned int i;
-
-	hctx_for_each_ctx(hctx, ctx, i) {
-		blk_stat_init(&ctx->stat[BLK_STAT_READ]);
-		blk_stat_init(&ctx->stat[BLK_STAT_WRITE]);
-	}
-}
-
-static ssize_t blk_mq_hw_sysfs_stat_store(struct blk_mq_hw_ctx *hctx,
-					  const char *page, size_t count)
-{
-	blk_mq_stat_clear(hctx);
-	return count;
-}
-
-static ssize_t print_stat(char *page, struct blk_rq_stat *stat, const char *pre)
-{
-	return sprintf(page, "%s samples=%llu, mean=%lld, min=%lld, max=%lld\n",
-			pre, (long long) stat->nr_samples,
-			(long long) stat->mean, (long long) stat->min,
-			(long long) stat->max);
-}
-
-static ssize_t blk_mq_hw_sysfs_stat_show(struct blk_mq_hw_ctx *hctx, char *page)
-{
-	struct blk_rq_stat stat[2];
-	ssize_t ret;
-
-	blk_stat_init(&stat[BLK_STAT_READ]);
-	blk_stat_init(&stat[BLK_STAT_WRITE]);
-
-	blk_hctx_stat_get(hctx, stat);
-
-	ret = print_stat(page, &stat[BLK_STAT_READ], "read :");
-	ret += print_stat(page + ret, &stat[BLK_STAT_WRITE], "write:");
 	return ret;
 }
 
@@ -353,16 +288,6 @@ static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_cpus = {
 	.attr = {.name = "cpu_list", .mode = S_IRUGO },
 	.show = blk_mq_hw_sysfs_cpus_show,
 };
-static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_poll = {
-	.attr = {.name = "io_poll", .mode = S_IWUSR | S_IRUGO },
-	.show = blk_mq_hw_sysfs_poll_show,
-	.store = blk_mq_hw_sysfs_poll_store,
-};
-static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_stat = {
-	.attr = {.name = "stats", .mode = S_IRUGO | S_IWUSR },
-	.show = blk_mq_hw_sysfs_stat_show,
-	.store = blk_mq_hw_sysfs_stat_store,
-};
 
 static struct attribute *default_hw_ctx_attrs[] = {
 	&blk_mq_hw_sysfs_queued.attr,
@@ -372,8 +297,6 @@ static struct attribute *default_hw_ctx_attrs[] = {
 	&blk_mq_hw_sysfs_tags.attr,
 	&blk_mq_hw_sysfs_cpus.attr,
 	&blk_mq_hw_sysfs_active.attr,
-	&blk_mq_hw_sysfs_poll.attr,
-	&blk_mq_hw_sysfs_stat.attr,
 	NULL,
 };
 
@@ -409,7 +332,7 @@ static void blk_mq_unregister_hctx(struct blk_mq_hw_ctx *hctx)
 	struct blk_mq_ctx *ctx;
 	int i;
 
-	if (!hctx->nr_ctx)
+	if (!hctx->nr_ctx || !(hctx->flags & BLK_MQ_F_SYSFS_UP))
 		return;
 
 	hctx_for_each_ctx(hctx, ctx, i)
@@ -424,7 +347,7 @@ static int blk_mq_register_hctx(struct blk_mq_hw_ctx *hctx)
 	struct blk_mq_ctx *ctx;
 	int i, ret;
 
-	if (!hctx->nr_ctx)
+	if (!hctx->nr_ctx || !(hctx->flags & BLK_MQ_F_SYSFS_UP))
 		return 0;
 
 	ret = kobject_add(&hctx->kobj, &q->mq_kobj, "%u", hctx->queue_num);
@@ -440,8 +363,9 @@ static int blk_mq_register_hctx(struct blk_mq_hw_ctx *hctx)
 	return ret;
 }
 
-static void __blk_mq_unregister_dev(struct device *dev, struct request_queue *q)
+void blk_mq_unregister_disk(struct gendisk *disk)
 {
+	struct request_queue *q = disk->queue;
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
 	int i, j;
@@ -459,75 +383,59 @@ static void __blk_mq_unregister_dev(struct device *dev, struct request_queue *q)
 	kobject_del(&q->mq_kobj);
 	kobject_put(&q->mq_kobj);
 
-	kobject_put(&dev->kobj);
-
-	q->mq_sysfs_init_done = false;
-}
-
-void blk_mq_unregister_dev(struct device *dev, struct request_queue *q)
-{
-	blk_mq_disable_hotplug();
-	__blk_mq_unregister_dev(dev, q);
-	blk_mq_enable_hotplug();
-}
-
-void blk_mq_hctx_kobj_init(struct blk_mq_hw_ctx *hctx)
-{
-	kobject_init(&hctx->kobj, &blk_mq_hw_ktype);
+	kobject_put(&disk_to_dev(disk)->kobj);
 }
 
 static void blk_mq_sysfs_init(struct request_queue *q)
 {
+	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
-	int cpu;
+	int i, j;
 
 	kobject_init(&q->mq_kobj, &blk_mq_ktype);
 
-	for_each_possible_cpu(cpu) {
-		ctx = per_cpu_ptr(q->queue_ctx, cpu);
-		kobject_init(&ctx->kobj, &blk_mq_ctx_ktype);
+	queue_for_each_hw_ctx(q, hctx, i) {
+		kobject_init(&hctx->kobj, &blk_mq_hw_ktype);
+
+		hctx_for_each_ctx(hctx, ctx, j)
+			kobject_init(&ctx->kobj, &blk_mq_ctx_ktype);
 	}
 }
 
-int blk_mq_register_dev(struct device *dev, struct request_queue *q)
+int blk_mq_register_disk(struct gendisk *disk)
 {
+	struct device *dev = disk_to_dev(disk);
+	struct request_queue *q = disk->queue;
 	struct blk_mq_hw_ctx *hctx;
 	int ret, i;
-
-	blk_mq_disable_hotplug();
 
 	blk_mq_sysfs_init(q);
 
 	ret = kobject_add(&q->mq_kobj, kobject_get(&dev->kobj), "%s", "mq");
 	if (ret < 0)
-		goto out;
+		return ret;
 
 	kobject_uevent(&q->mq_kobj, KOBJ_ADD);
 
 	queue_for_each_hw_ctx(q, hctx, i) {
+		hctx->flags |= BLK_MQ_F_SYSFS_UP;
 		ret = blk_mq_register_hctx(hctx);
 		if (ret)
 			break;
 	}
 
-	if (ret)
-		__blk_mq_unregister_dev(dev, q);
-	else
-		q->mq_sysfs_init_done = true;
-out:
-	blk_mq_enable_hotplug();
+	if (ret) {
+		blk_mq_unregister_disk(disk);
+		return ret;
+	}
 
-	return ret;
+	return 0;
 }
-EXPORT_SYMBOL_GPL(blk_mq_register_dev);
 
 void blk_mq_sysfs_unregister(struct request_queue *q)
 {
 	struct blk_mq_hw_ctx *hctx;
 	int i;
-
-	if (!q->mq_sysfs_init_done)
-		return;
 
 	queue_for_each_hw_ctx(q, hctx, i)
 		blk_mq_unregister_hctx(hctx);
@@ -537,9 +445,6 @@ int blk_mq_sysfs_register(struct request_queue *q)
 {
 	struct blk_mq_hw_ctx *hctx;
 	int i, ret = 0;
-
-	if (!q->mq_sysfs_init_done)
-		return ret;
 
 	queue_for_each_hw_ctx(q, hctx, i) {
 		ret = blk_mq_register_hctx(hctx);

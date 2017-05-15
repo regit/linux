@@ -178,7 +178,7 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
 		       idev->id_vendor, idev->id_device);
 }
 
-ipack_device_attr(id_format, "0x%hhx\n");
+ipack_device_attr(id_format, "0x%hhu\n");
 
 static DEVICE_ATTR_RO(id);
 static DEVICE_ATTR_RO(id_device);
@@ -206,8 +206,7 @@ static struct bus_type ipack_bus_type = {
 };
 
 struct ipack_bus_device *ipack_bus_register(struct device *parent, int slots,
-					    const struct ipack_bus_ops *ops,
-					    struct module *owner)
+					    const struct ipack_bus_ops *ops)
 {
 	int bus_nr;
 	struct ipack_bus_device *bus;
@@ -226,7 +225,6 @@ struct ipack_bus_device *ipack_bus_register(struct device *parent, int slots,
 	bus->parent = parent;
 	bus->slots = slots;
 	bus->ops = ops;
-	bus->owner = owner;
 	return bus;
 }
 EXPORT_SYMBOL_GPL(ipack_bus_register);

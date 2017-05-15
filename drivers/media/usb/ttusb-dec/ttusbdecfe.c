@@ -39,7 +39,7 @@ struct ttusbdecfe_state {
 
 
 static int ttusbdecfe_dvbs_read_status(struct dvb_frontend *fe,
-				       enum fe_status *status)
+	fe_status_t *status)
 {
 	*status = FE_HAS_SIGNAL | FE_HAS_VITERBI |
 		FE_HAS_SYNC | FE_HAS_CARRIER | FE_HAS_LOCK;
@@ -48,7 +48,7 @@ static int ttusbdecfe_dvbs_read_status(struct dvb_frontend *fe,
 
 
 static int ttusbdecfe_dvbt_read_status(struct dvb_frontend *fe,
-				       enum fe_status *status)
+	fe_status_t *status)
 {
 	struct ttusbdecfe_state* state = fe->demodulator_priv;
 	u8 b[] = { 0x00, 0x00, 0x00, 0x00,
@@ -156,9 +156,6 @@ static int ttusbdecfe_dvbs_diseqc_send_master_cmd(struct dvb_frontend* fe, struc
 		   0x00, 0x00, 0x00, 0x00,
 		   0x00, 0x00 };
 
-	if (cmd->msg_len > sizeof(b) - 4)
-		return -EINVAL;
-
 	memcpy(&b[4], cmd->msg, cmd->msg_len);
 
 	state->config->send_command(fe, 0x72,
@@ -169,8 +166,7 @@ static int ttusbdecfe_dvbs_diseqc_send_master_cmd(struct dvb_frontend* fe, struc
 }
 
 
-static int ttusbdecfe_dvbs_set_tone(struct dvb_frontend *fe,
-				    enum fe_sec_tone_mode tone)
+static int ttusbdecfe_dvbs_set_tone(struct dvb_frontend* fe, fe_sec_tone_mode_t tone)
 {
 	struct ttusbdecfe_state* state = (struct ttusbdecfe_state*) fe->demodulator_priv;
 
@@ -180,8 +176,7 @@ static int ttusbdecfe_dvbs_set_tone(struct dvb_frontend *fe,
 }
 
 
-static int ttusbdecfe_dvbs_set_voltage(struct dvb_frontend *fe,
-				       enum fe_sec_voltage voltage)
+static int ttusbdecfe_dvbs_set_voltage(struct dvb_frontend* fe, fe_sec_voltage_t voltage)
 {
 	struct ttusbdecfe_state* state = (struct ttusbdecfe_state*) fe->demodulator_priv;
 
@@ -205,7 +200,7 @@ static void ttusbdecfe_release(struct dvb_frontend* fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops ttusbdecfe_dvbt_ops;
+static struct dvb_frontend_ops ttusbdecfe_dvbt_ops;
 
 struct dvb_frontend* ttusbdecfe_dvbt_attach(const struct ttusbdecfe_config* config)
 {
@@ -225,7 +220,7 @@ struct dvb_frontend* ttusbdecfe_dvbt_attach(const struct ttusbdecfe_config* conf
 	return &state->frontend;
 }
 
-static const struct dvb_frontend_ops ttusbdecfe_dvbs_ops;
+static struct dvb_frontend_ops ttusbdecfe_dvbs_ops;
 
 struct dvb_frontend* ttusbdecfe_dvbs_attach(const struct ttusbdecfe_config* config)
 {
@@ -247,7 +242,7 @@ struct dvb_frontend* ttusbdecfe_dvbs_attach(const struct ttusbdecfe_config* conf
 	return &state->frontend;
 }
 
-static const struct dvb_frontend_ops ttusbdecfe_dvbt_ops = {
+static struct dvb_frontend_ops ttusbdecfe_dvbt_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name			= "TechnoTrend/Hauppauge DEC2000-t Frontend",
@@ -270,7 +265,7 @@ static const struct dvb_frontend_ops ttusbdecfe_dvbt_ops = {
 	.read_status = ttusbdecfe_dvbt_read_status,
 };
 
-static const struct dvb_frontend_ops ttusbdecfe_dvbs_ops = {
+static struct dvb_frontend_ops ttusbdecfe_dvbs_ops = {
 	.delsys = { SYS_DVBS },
 	.info = {
 		.name			= "TechnoTrend/Hauppauge DEC3000-s Frontend",

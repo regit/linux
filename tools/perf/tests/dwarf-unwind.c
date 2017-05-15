@@ -9,21 +9,13 @@
 #include "perf_regs.h"
 #include "map.h"
 #include "thread.h"
-#include "callchain.h"
-
-#if defined (__x86_64__) || defined (__i386__) || defined (__powerpc__)
-#include "arch-tests.h"
-#endif
-
-/* For bsearch. We try to unwind functions in shared object. */
-#include <stdlib.h>
 
 static int mmap_handler(struct perf_tool *tool __maybe_unused,
 			union perf_event *event,
-			struct perf_sample *sample,
+			struct perf_sample *sample __maybe_unused,
 			struct machine *machine)
 {
-	return machine__process_mmap2_event(machine, event, sample);
+	return machine__process_mmap2_event(machine, event, NULL);
 }
 
 static int init_live_machine(struct machine *machine)
@@ -32,10 +24,10 @@ static int init_live_machine(struct machine *machine)
 	pid_t pid = getpid();
 
 	return perf_event__synthesize_mmap_events(NULL, &event, pid, pid,
-						  mmap_handler, machine, true, 500);
+						  mmap_handler, machine, true);
 }
 
-#define MAX_STACK 8
+#define MAX_STACK 6
 
 static int unwind_entry(struct unwind_entry *entry, void *arg)
 {
@@ -44,19 +36,11 @@ static int unwind_entry(struct unwind_entry *entry, void *arg)
 	static const char *funcs[MAX_STACK] = {
 		"test__arch_unwind_sample",
 		"unwind_thread",
-		"compare",
-		"bsearch",
 		"krava_3",
 		"krava_2",
 		"krava_1",
 		"test__dwarf_unwind"
 	};
-	/*
-	 * The funcs[MAX_STACK] array index, based on the
-	 * callchain order setup.
-	 */
-	int idx = callchain_param.order == ORDER_CALLER ?
-		  MAX_STACK - *cnt - 1 : *cnt;
 
 	if (*cnt >= MAX_STACK) {
 		pr_debug("failed: crossed the max stack value %d\n", MAX_STACK);
@@ -69,14 +53,12 @@ static int unwind_entry(struct unwind_entry *entry, void *arg)
 		return -1;
 	}
 
-	(*cnt)++;
-	pr_debug("got: %s 0x%" PRIx64 ", expecting %s\n",
-		 symbol, entry->ip, funcs[idx]);
-	return strcmp((const char *) symbol, funcs[idx]);
+	pr_debug("got: %s 0x%" PRIx64 "\n", symbol, entry->ip);
+	return strcmp((const char *) symbol, funcs[(*cnt)++]);
 }
 
 __attribute__ ((noinline))
-static int unwind_thread(struct thread *thread)
+static int unwind_thread(struct thread *thread, struct machine *machine)
 {
 	struct perf_sample sample;
 	unsigned long cnt = 0;
@@ -89,7 +71,7 @@ static int unwind_thread(struct thread *thread)
 		goto out;
 	}
 
-	err = unwind__get_entries(unwind_entry, &cnt, thread,
+	err = unwind__get_entries(unwind_entry, &cnt, machine, thread,
 				  &sample, MAX_STACK);
 	if (err)
 		pr_debug("unwind failed\n");
@@ -105,77 +87,38 @@ static int unwind_thread(struct thread *thread)
 	return err;
 }
 
-static int global_unwind_retval = -INT_MAX;
-
 __attribute__ ((noinline))
-static int compare(void *p1, void *p2)
+static int krava_3(struct thread *thread, struct machine *machine)
 {
-	/* Any possible value should be 'thread' */
-	struct thread *thread = *(struct thread **)p1;
-
-	if (global_unwind_retval == -INT_MAX) {
-		/* Call unwinder twice for both callchain orders. */
-		callchain_param.order = ORDER_CALLER;
-
-		global_unwind_retval = unwind_thread(thread);
-		if (!global_unwind_retval) {
-			callchain_param.order = ORDER_CALLEE;
-			global_unwind_retval = unwind_thread(thread);
-		}
-	}
-
-	return p1 - p2;
+	return unwind_thread(thread, machine);
 }
 
 __attribute__ ((noinline))
-static int krava_3(struct thread *thread)
+static int krava_2(struct thread *thread, struct machine *machine)
 {
-	struct thread *array[2] = {thread, thread};
-	void *fp = &bsearch;
-	/*
-	 * make _bsearch a volatile function pointer to
-	 * prevent potential optimization, which may expand
-	 * bsearch and call compare directly from this function,
-	 * instead of libc shared object.
-	 */
-	void *(*volatile _bsearch)(void *, void *, size_t,
-			size_t, int (*)(void *, void *));
-
-	_bsearch = fp;
-	_bsearch(array, &thread, 2, sizeof(struct thread **), compare);
-	return global_unwind_retval;
+	return krava_3(thread, machine);
 }
 
 __attribute__ ((noinline))
-static int krava_2(struct thread *thread)
+static int krava_1(struct thread *thread, struct machine *machine)
 {
-	return krava_3(thread);
+	return krava_2(thread, machine);
 }
 
-__attribute__ ((noinline))
-static int krava_1(struct thread *thread)
+int test__dwarf_unwind(void)
 {
-	return krava_2(thread);
-}
-
-int test__dwarf_unwind(int subtest __maybe_unused)
-{
+	struct machines machines;
 	struct machine *machine;
 	struct thread *thread;
 	int err = -1;
 
-	machine = machine__new_host();
+	machines__init(&machines);
+
+	machine = machines__find(&machines, HOST_KERNEL_ID);
 	if (!machine) {
 		pr_err("Could not get machine\n");
 		return -1;
 	}
-
-	if (machine__create_kernel_maps(machine)) {
-		pr_err("Failed to create kernel maps\n");
-		return -1;
-	}
-
-	callchain_param.record_mode = CALLCHAIN_DWARF;
 
 	if (init_live_machine(machine)) {
 		pr_err("Could not init machine\n");
@@ -191,11 +134,11 @@ int test__dwarf_unwind(int subtest __maybe_unused)
 		goto out;
 	}
 
-	err = krava_1(thread);
-	thread__put(thread);
+	err = krava_1(thread, machine);
 
  out:
 	machine__delete_threads(machine);
-	machine__delete(machine);
+	machine__exit(machine);
+	machines__exit(&machines);
 	return err;
 }

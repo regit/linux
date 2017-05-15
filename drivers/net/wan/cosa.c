@@ -432,6 +432,7 @@ module_exit(cosa_exit);
 static const struct net_device_ops cosa_ops = {
 	.ndo_open       = cosa_net_open,
 	.ndo_stop       = cosa_net_close,
+	.ndo_change_mtu = hdlc_change_mtu,
 	.ndo_start_xmit = hdlc_start_xmit,
 	.ndo_do_ioctl   = cosa_net_ioctl,
 	.ndo_tx_timeout = cosa_net_timeout,
@@ -516,7 +517,7 @@ static int cosa_probe(int base, int irq, int dma)
 		 */
 		set_current_state(TASK_INTERRUPTIBLE);
 		cosa_putstatus(cosa, SR_TX_INT_ENA);
-		schedule_timeout(msecs_to_jiffies(300));
+		schedule_timeout(30);
 		irq = probe_irq_off(irqs);
 		/* Disable all IRQs from the card */
 		cosa_putstatus(cosa, 0);
@@ -578,7 +579,6 @@ static int cosa_probe(int base, int irq, int dma)
 		/* Register the network interface */
 		if (!(chan->netdev = alloc_hdlcdev(chan))) {
 			pr_warn("%s: alloc_hdlcdev failed\n", chan->name);
-			err = -ENOMEM;
 			goto err_hdlcdev;
 		}
 		dev_to_hdlc(chan->netdev)->attach = cosa_net_attach;
@@ -588,8 +588,7 @@ static int cosa_probe(int base, int irq, int dma)
 		chan->netdev->base_addr = chan->cosa->datareg;
 		chan->netdev->irq = chan->cosa->irq;
 		chan->netdev->dma = chan->cosa->dma;
-		err = register_hdlc_device(chan->netdev);
-		if (err) {
+		if (register_hdlc_device(chan->netdev)) {
 			netdev_warn(chan->netdev,
 				    "register_hdlc_device() failed\n");
 			free_netdev(chan->netdev);
@@ -738,7 +737,7 @@ static char *cosa_net_setup_rx(struct channel_data *chan, int size)
 		chan->netdev->stats.rx_dropped++;
 		return NULL;
 	}
-	netif_trans_update(chan->netdev);
+	chan->netdev->trans_start = jiffies;
 	return skb_put(chan->rx_skb, size);
 }
 
@@ -807,21 +806,21 @@ static ssize_t cosa_read(struct file *file,
 	spin_lock_irqsave(&cosa->lock, flags);
 	add_wait_queue(&chan->rxwaitq, &wait);
 	while (!chan->rx_status) {
-		set_current_state(TASK_INTERRUPTIBLE);
+		current->state = TASK_INTERRUPTIBLE;
 		spin_unlock_irqrestore(&cosa->lock, flags);
 		schedule();
 		spin_lock_irqsave(&cosa->lock, flags);
 		if (signal_pending(current) && chan->rx_status == 0) {
 			chan->rx_status = 1;
 			remove_wait_queue(&chan->rxwaitq, &wait);
-			__set_current_state(TASK_RUNNING);
+			current->state = TASK_RUNNING;
 			spin_unlock_irqrestore(&cosa->lock, flags);
 			mutex_unlock(&chan->rlock);
 			return -ERESTARTSYS;
 		}
 	}
 	remove_wait_queue(&chan->rxwaitq, &wait);
-	__set_current_state(TASK_RUNNING);
+	current->state = TASK_RUNNING;
 	kbuf = chan->rxdata;
 	count = chan->rxsize;
 	spin_unlock_irqrestore(&cosa->lock, flags);
@@ -891,14 +890,14 @@ static ssize_t cosa_write(struct file *file,
 	spin_lock_irqsave(&cosa->lock, flags);
 	add_wait_queue(&chan->txwaitq, &wait);
 	while (!chan->tx_status) {
-		set_current_state(TASK_INTERRUPTIBLE);
+		current->state = TASK_INTERRUPTIBLE;
 		spin_unlock_irqrestore(&cosa->lock, flags);
 		schedule();
 		spin_lock_irqsave(&cosa->lock, flags);
 		if (signal_pending(current) && chan->tx_status == 0) {
 			chan->tx_status = 1;
 			remove_wait_queue(&chan->txwaitq, &wait);
-			__set_current_state(TASK_RUNNING);
+			current->state = TASK_RUNNING;
 			chan->tx_status = 1;
 			spin_unlock_irqrestore(&cosa->lock, flags);
 			up(&chan->wsem);
@@ -906,7 +905,7 @@ static ssize_t cosa_write(struct file *file,
 		}
 	}
 	remove_wait_queue(&chan->txwaitq, &wait);
-	__set_current_state(TASK_RUNNING);
+	current->state = TASK_RUNNING;
 	up(&chan->wsem);
 	spin_unlock_irqrestore(&cosa->lock, flags);
 	kfree(kbuf);

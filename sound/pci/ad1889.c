@@ -40,12 +40,13 @@
 #include <linux/compiler.h>
 #include <linux/delay.h>
 #include <linux/module.h>
-#include <linux/io.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/initval.h>
 #include <sound/ac97_codec.h>
+
+#include <asm/io.h>
 
 #include "ad1889.h"
 #include "ac97/ac97_id.h"
@@ -571,7 +572,7 @@ snd_ad1889_capture_pointer(struct snd_pcm_substream *ss)
 	return bytes_to_frames(ss->runtime, ptr);
 }
 
-static const struct snd_pcm_ops snd_ad1889_playback_ops = {
+static struct snd_pcm_ops snd_ad1889_playback_ops = {
 	.open = snd_ad1889_playback_open,
 	.close = snd_ad1889_playback_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -582,7 +583,7 @@ static const struct snd_pcm_ops snd_ad1889_playback_ops = {
 	.pointer = snd_ad1889_playback_pointer, 
 };
 
-static const struct snd_pcm_ops snd_ad1889_capture_ops = {
+static struct snd_pcm_ops snd_ad1889_capture_ops = {
 	.open = snd_ad1889_capture_open,
 	.close = snd_ad1889_capture_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -622,10 +623,13 @@ snd_ad1889_interrupt(int irq, void *dev_id)
 }
 
 static int
-snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device)
+snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device, struct snd_pcm **rpcm)
 {
 	int err;
 	struct snd_pcm *pcm;
+
+	if (rpcm)
+		*rpcm = NULL;
 
 	err = snd_pcm_new(chip->card, chip->card->driver, device, 1, 1, &pcm);
 	if (err < 0)
@@ -654,6 +658,9 @@ snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device)
 		return err;
 	}
 	
+	if (rpcm)
+		*rpcm = pcm;
+	
 	return 0;
 }
 
@@ -674,7 +681,7 @@ snd_ad1889_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffe
 	
 	/* WARQ is at offset 12 */
 	tmp = (reg & AD_DS_WSMC_WARQ) ?
-		((((reg & AD_DS_WSMC_WARQ) >> 12) & 0x01) ? 12 : 18) : 4;
+			(((reg & AD_DS_WSMC_WARQ >> 12) & 0x01) ? 12 : 18) : 4;
 	tmp /= (reg & AD_DS_WSMC_WAST) ? 2 : 1;
 	
 	snd_iprintf(buffer, "Wave FIFO: %d %s words\n\n", tmp,
@@ -686,7 +693,7 @@ snd_ad1889_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffe
 	
 	/* SYRQ is at offset 4 */
 	tmp = (reg & AD_DS_WSMC_SYRQ) ?
-		((((reg & AD_DS_WSMC_SYRQ) >> 4) & 0x01) ? 12 : 18) : 4;
+			(((reg & AD_DS_WSMC_SYRQ >> 4) & 0x01) ? 12 : 18) : 4;
 	tmp /= (reg & AD_DS_WSMC_WAST) ? 2 : 1;
 	
 	snd_iprintf(buffer, "Synthesis FIFO: %d %s words\n\n", tmp,
@@ -702,7 +709,7 @@ snd_ad1889_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffe
 	
 	/* ACRQ is at offset 4 */
 	tmp = (reg & AD_DS_RAMC_ACRQ) ?
-		((((reg & AD_DS_RAMC_ACRQ) >> 4) & 0x01) ? 12 : 18) : 4;
+			(((reg & AD_DS_RAMC_ACRQ >> 4) & 0x01) ? 12 : 18) : 4;
 	tmp /= (reg & AD_DS_RAMC_ADST) ? 2 : 1;
 	
 	snd_iprintf(buffer, "ADC FIFO: %d %s words\n\n", tmp,
@@ -713,7 +720,7 @@ snd_ad1889_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffe
 			
 	/* RERQ is at offset 12 */
 	tmp = (reg & AD_DS_RAMC_RERQ) ?
-		((((reg & AD_DS_RAMC_RERQ) >> 12) & 0x01) ? 12 : 18) : 4;
+			(((reg & AD_DS_RAMC_RERQ >> 12) & 0x01) ? 12 : 18) : 4;
 	tmp /= (reg & AD_DS_RAMC_ADST) ? 2 : 1;
 	
 	snd_iprintf(buffer, "Resampler FIFO: %d %s words\n\n", tmp,
@@ -747,7 +754,7 @@ snd_ad1889_proc_init(struct snd_ad1889 *chip)
 		snd_info_set_text_ops(entry, chip, snd_ad1889_proc_read);
 }
 
-static const struct ac97_quirk ac97_quirks[] = {
+static struct ac97_quirk ac97_quirks[] = {
 	{
 		.subvendor = 0x11d4,	/* AD */
 		.subdevice = 0x1889,	/* AD1889 */
@@ -852,9 +859,12 @@ snd_ad1889_free(struct snd_ad1889 *chip)
 		free_irq(chip->irq, chip);
 
 skip_hw:
-	iounmap(chip->iobase);
+	if (chip->iobase)
+		iounmap(chip->iobase);
+
 	pci_release_regions(chip->pci);
 	pci_disable_device(chip->pci);
+
 	kfree(chip);
 	return 0;
 }
@@ -898,8 +908,8 @@ snd_ad1889_create(struct snd_card *card,
 		return err;
 
 	/* check PCI availability (32bit DMA) */
-	if (dma_set_mask(&pci->dev, DMA_BIT_MASK(32)) < 0 ||
-	    dma_set_coherent_mask(&pci->dev, DMA_BIT_MASK(32)) < 0) {
+	if (pci_set_dma_mask(pci, DMA_BIT_MASK(32)) < 0 ||
+	    pci_set_consistent_dma_mask(pci, DMA_BIT_MASK(32)) < 0) {
 		dev_err(card->dev, "error setting 32-bit DMA mask.\n");
 		pci_disable_device(pci);
 		return -ENXIO;
@@ -1006,7 +1016,7 @@ snd_ad1889_probe(struct pci_dev *pci,
 	if (err < 0)
 		goto free_and_ret;
 	
-	err = snd_ad1889_pcm_init(chip, 0);
+	err = snd_ad1889_pcm_init(chip, 0, NULL);
 	if (err < 0)
 		goto free_and_ret;
 
@@ -1035,7 +1045,7 @@ snd_ad1889_remove(struct pci_dev *pci)
 	snd_card_free(pci_get_drvdata(pci));
 }
 
-static const struct pci_device_id snd_ad1889_ids[] = {
+static DEFINE_PCI_DEVICE_TABLE(snd_ad1889_ids) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_ANALOG_DEVICES, PCI_DEVICE_ID_AD1889JS) },
 	{ 0, },
 };

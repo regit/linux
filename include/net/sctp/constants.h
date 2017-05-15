@@ -214,7 +214,7 @@ typedef enum {
 	SCTP_SS_LISTENING      = TCP_LISTEN,
 	SCTP_SS_ESTABLISHING   = TCP_SYN_SENT,
 	SCTP_SS_ESTABLISHED    = TCP_ESTABLISHED,
-	SCTP_SS_CLOSING        = TCP_CLOSE_WAIT,
+	SCTP_SS_CLOSING        = TCP_CLOSING,
 } sctp_sock_state_t;
 
 /* These functions map various type to printable names.  */
@@ -311,7 +311,7 @@ typedef enum {
 	SCTP_XMIT_OK,
 	SCTP_XMIT_PMTU_FULL,
 	SCTP_XMIT_RWND_FULL,
-	SCTP_XMIT_DELAY,
+	SCTP_XMIT_NAGLE_DELAY,
 } sctp_xmit_t;
 
 /* These are the commands for manipulating transports.  */

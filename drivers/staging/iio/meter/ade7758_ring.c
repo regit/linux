@@ -33,19 +33,23 @@ static int ade7758_spi_read_burst(struct iio_dev *indio_dev)
 	return ret;
 }
 
-static int ade7758_write_waveform_type(struct device *dev, unsigned int type)
+static int ade7758_write_waveform_type(struct device *dev, unsigned type)
 {
 	int ret;
 	u8 reg;
 
-	ret = ade7758_spi_read_reg_8(dev, ADE7758_WAVMODE, &reg);
+	ret = ade7758_spi_read_reg_8(dev,
+			ADE7758_WAVMODE,
+			&reg);
 	if (ret)
 		goto out;
 
 	reg &= ~0x1F;
 	reg |= type & 0x1F;
 
-	ret = ade7758_spi_write_reg_8(dev, ADE7758_WAVMODE, reg);
+	ret = ade7758_spi_write_reg_8(dev,
+			ADE7758_WAVMODE,
+			reg);
 out:
 	return ret;
 }
@@ -81,16 +85,17 @@ static irqreturn_t ade7758_trigger_handler(int irq, void *p)
  **/
 static int ade7758_ring_preenable(struct iio_dev *indio_dev)
 {
-	unsigned int channel;
+	struct ade7758_state *st = iio_priv(indio_dev);
+	unsigned channel;
 
-	if (bitmap_empty(indio_dev->active_scan_mask, indio_dev->masklength))
+	if (!bitmap_empty(indio_dev->active_scan_mask, indio_dev->masklength))
 		return -EINVAL;
 
 	channel = find_first_bit(indio_dev->active_scan_mask,
 				 indio_dev->masklength);
 
 	ade7758_write_waveform_type(&indio_dev->dev,
-				    indio_dev->channels[channel].address);
+		st->ade7758_ring_channels[channel].address);
 
 	return 0;
 }
@@ -114,9 +119,11 @@ int ade7758_configure_ring(struct iio_dev *indio_dev)
 	struct iio_buffer *buffer;
 	int ret = 0;
 
-	buffer = iio_kfifo_allocate();
-	if (!buffer)
-		return -ENOMEM;
+	buffer = iio_kfifo_allocate(indio_dev);
+	if (!buffer) {
+		ret = -ENOMEM;
+		return ret;
+	}
 
 	iio_device_attach_buffer(indio_dev, buffer);
 
@@ -128,7 +135,7 @@ int ade7758_configure_ring(struct iio_dev *indio_dev)
 						 indio_dev,
 						 "ade7759_consumer%d",
 						 indio_dev->id);
-	if (!indio_dev->pollfunc) {
+	if (indio_dev->pollfunc == NULL) {
 		ret = -ENOMEM;
 		goto error_iio_kfifo_free;
 	}
@@ -173,4 +180,9 @@ int ade7758_configure_ring(struct iio_dev *indio_dev)
 error_iio_kfifo_free:
 	iio_kfifo_free(indio_dev->buffer);
 	return ret;
+}
+
+void ade7758_uninitialize_ring(struct iio_dev *indio_dev)
+{
+	iio_buffer_unregister(indio_dev);
 }

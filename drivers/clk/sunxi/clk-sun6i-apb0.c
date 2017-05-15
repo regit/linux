@@ -9,7 +9,7 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 
@@ -57,7 +57,7 @@ static int sun6i_a31_apb0_clk_probe(struct platform_device *pdev)
 	return of_clk_add_provider(np, of_clk_src_simple_get, clk);
 }
 
-static const struct of_device_id sun6i_a31_apb0_clk_dt_ids[] = {
+const struct of_device_id sun6i_a31_apb0_clk_dt_ids[] = {
 	{ .compatible = "allwinner,sun6i-a31-apb0-clk" },
 	{ /* sentinel */ }
 };
@@ -65,8 +65,13 @@ static const struct of_device_id sun6i_a31_apb0_clk_dt_ids[] = {
 static struct platform_driver sun6i_a31_apb0_clk_driver = {
 	.driver = {
 		.name = "sun6i-a31-apb0-clk",
+		.owner = THIS_MODULE,
 		.of_match_table = sun6i_a31_apb0_clk_dt_ids,
 	},
 	.probe = sun6i_a31_apb0_clk_probe,
 };
-builtin_platform_driver(sun6i_a31_apb0_clk_driver);
+module_platform_driver(sun6i_a31_apb0_clk_driver);
+
+MODULE_AUTHOR("Boris BREZILLON <boris.brezillon@free-electrons.com>");
+MODULE_DESCRIPTION("Allwinner A31 APB0 clock Driver");
+MODULE_LICENSE("GPL v2");

@@ -16,7 +16,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <linux/kbd_kern.h>
 #include <linux/vt_kern.h>
@@ -347,18 +347,15 @@ int paste_selection(struct tty_struct *tty)
 	console_unlock();
 
 	ld = tty_ldisc_ref_wait(tty);
-	if (!ld)
-		return -EIO;	/* ldisc was hung up */
 	tty_buffer_lock_exclusive(&vc->port);
 
 	add_wait_queue(&vc->paste_wait, &wait);
 	while (sel_buffer && sel_buffer_lth > pasted) {
 		set_current_state(TASK_INTERRUPTIBLE);
-		if (tty_throttled(tty)) {
+		if (test_bit(TTY_THROTTLED, &tty->flags)) {
 			schedule();
 			continue;
 		}
-		__set_current_state(TASK_RUNNING);
 		count = sel_buffer_lth - pasted;
 		count = tty_ldisc_receive_buf(ld, sel_buffer + pasted, NULL,
 					      count);

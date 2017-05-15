@@ -130,6 +130,7 @@ static int afs_vlocation_access_vl_by_id(struct afs_vlocation *vl,
 					/* second+ BUSY - sleep a little bit */
 					set_current_state(TASK_UNINTERRUPTIBLE);
 					schedule_timeout(1);
+					__set_current_state(TASK_RUNNING);
 				}
 				continue;
 			}
@@ -594,8 +595,8 @@ static void afs_vlocation_reaper(struct work_struct *work)
  */
 int __init afs_vlocation_update_init(void)
 {
-	afs_vlocation_update_worker = alloc_workqueue("kafs_vlupdated",
-						      WQ_MEM_RECLAIM, 0);
+	afs_vlocation_update_worker =
+		create_singlethread_workqueue("kafs_vlupdated");
 	return afs_vlocation_update_worker ? 0 : -ENOMEM;
 }
 

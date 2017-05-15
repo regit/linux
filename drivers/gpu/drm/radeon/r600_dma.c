@@ -124,6 +124,15 @@ int r600_dma_resume(struct radeon_device *rdev)
 	u32 rb_bufsz;
 	int r;
 
+	/* Reset dma */
+	if (rdev->family >= CHIP_RV770)
+		WREG32(SRBM_SOFT_RESET, RV770_SOFT_RESET_DMA);
+	else
+		WREG32(SRBM_SOFT_RESET, SOFT_RESET_DMA);
+	RREG32(SRBM_SOFT_RESET);
+	udelay(50);
+	WREG32(SRBM_SOFT_RESET, 0);
+
 	WREG32(DMA_SEM_INCOMPLETE_TIMER_CNTL, 0);
 	WREG32(DMA_SEM_WAIT_FAIL_TIMER_CNTL, 0);
 
@@ -232,19 +241,16 @@ int r600_dma_ring_test(struct radeon_device *rdev,
 {
 	unsigned i;
 	int r;
-	unsigned index;
+	void __iomem *ptr = (void *)rdev->vram_scratch.ptr;
 	u32 tmp;
-	u64 gpu_addr;
 
-	if (ring->idx == R600_RING_TYPE_DMA_INDEX)
-		index = R600_WB_DMA_RING_TEST_OFFSET;
-	else
-		index = CAYMAN_WB_DMA1_RING_TEST_OFFSET;
-
-	gpu_addr = rdev->wb.gpu_addr + index;
+	if (!ptr) {
+		DRM_ERROR("invalid vram scratch pointer\n");
+		return -EINVAL;
+	}
 
 	tmp = 0xCAFEDEAD;
-	rdev->wb.wb[index/4] = cpu_to_le32(tmp);
+	writel(tmp, ptr);
 
 	r = radeon_ring_lock(rdev, ring, 4);
 	if (r) {
@@ -252,13 +258,13 @@ int r600_dma_ring_test(struct radeon_device *rdev,
 		return r;
 	}
 	radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_WRITE, 0, 0, 1));
-	radeon_ring_write(ring, lower_32_bits(gpu_addr));
-	radeon_ring_write(ring, upper_32_bits(gpu_addr) & 0xff);
+	radeon_ring_write(ring, rdev->vram_scratch.gpu_addr & 0xfffffffc);
+	radeon_ring_write(ring, upper_32_bits(rdev->vram_scratch.gpu_addr) & 0xff);
 	radeon_ring_write(ring, 0xDEADBEEF);
-	radeon_ring_unlock_commit(rdev, ring, false);
+	radeon_ring_unlock_commit(rdev, ring);
 
 	for (i = 0; i < rdev->usec_timeout; i++) {
-		tmp = le32_to_cpu(rdev->wb.wb[index/4]);
+		tmp = readl(ptr);
 		if (tmp == 0xDEADBEEF)
 			break;
 		DRM_UDELAY(1);
@@ -338,17 +344,17 @@ int r600_dma_ib_test(struct radeon_device *rdev, struct radeon_ring *ring)
 {
 	struct radeon_ib ib;
 	unsigned i;
-	unsigned index;
 	int r;
+	void __iomem *ptr = (void *)rdev->vram_scratch.ptr;
 	u32 tmp = 0;
-	u64 gpu_addr;
 
-	if (ring->idx == R600_RING_TYPE_DMA_INDEX)
-		index = R600_WB_DMA_RING_TEST_OFFSET;
-	else
-		index = CAYMAN_WB_DMA1_RING_TEST_OFFSET;
+	if (!ptr) {
+		DRM_ERROR("invalid vram scratch pointer\n");
+		return -EINVAL;
+	}
 
-	gpu_addr = rdev->wb.gpu_addr + index;
+	tmp = 0xCAFEDEAD;
+	writel(tmp, ptr);
 
 	r = radeon_ib_get(rdev, ring->idx, &ib, NULL, 256);
 	if (r) {
@@ -357,29 +363,24 @@ int r600_dma_ib_test(struct radeon_device *rdev, struct radeon_ring *ring)
 	}
 
 	ib.ptr[0] = DMA_PACKET(DMA_PACKET_WRITE, 0, 0, 1);
-	ib.ptr[1] = lower_32_bits(gpu_addr);
-	ib.ptr[2] = upper_32_bits(gpu_addr) & 0xff;
+	ib.ptr[1] = rdev->vram_scratch.gpu_addr & 0xfffffffc;
+	ib.ptr[2] = upper_32_bits(rdev->vram_scratch.gpu_addr) & 0xff;
 	ib.ptr[3] = 0xDEADBEEF;
 	ib.length_dw = 4;
 
-	r = radeon_ib_schedule(rdev, &ib, NULL, false);
+	r = radeon_ib_schedule(rdev, &ib, NULL);
 	if (r) {
 		radeon_ib_free(rdev, &ib);
 		DRM_ERROR("radeon: failed to schedule ib (%d).\n", r);
 		return r;
 	}
-	r = radeon_fence_wait_timeout(ib.fence, false, usecs_to_jiffies(
-		RADEON_USEC_IB_TEST_TIMEOUT));
-	if (r < 0) {
+	r = radeon_fence_wait(ib.fence, false);
+	if (r) {
 		DRM_ERROR("radeon: fence wait failed (%d).\n", r);
 		return r;
-	} else if (r == 0) {
-		DRM_ERROR("radeon: fence wait timed out.\n");
-		return -ETIMEDOUT;
 	}
-	r = 0;
 	for (i = 0; i < rdev->usec_timeout; i++) {
-		tmp = le32_to_cpu(rdev->wb.wb[index/4]);
+		tmp = readl(ptr);
 		if (tmp == 0xDEADBEEF)
 			break;
 		DRM_UDELAY(1);
@@ -435,38 +436,41 @@ void r600_dma_ring_ib_execute(struct radeon_device *rdev, struct radeon_ib *ib)
  * @src_offset: src GPU address
  * @dst_offset: dst GPU address
  * @num_gpu_pages: number of GPU pages to xfer
- * @resv: reservation object to sync to
+ * @fence: radeon fence object
  *
  * Copy GPU paging using the DMA engine (r6xx).
  * Used by the radeon ttm implementation to move pages if
  * registered as the asic copy callback.
  */
-struct radeon_fence *r600_copy_dma(struct radeon_device *rdev,
-				   uint64_t src_offset, uint64_t dst_offset,
-				   unsigned num_gpu_pages,
-				   struct reservation_object *resv)
+int r600_copy_dma(struct radeon_device *rdev,
+		  uint64_t src_offset, uint64_t dst_offset,
+		  unsigned num_gpu_pages,
+		  struct radeon_fence **fence)
 {
-	struct radeon_fence *fence;
-	struct radeon_sync sync;
+	struct radeon_semaphore *sem = NULL;
 	int ring_index = rdev->asic->copy.dma_ring_index;
 	struct radeon_ring *ring = &rdev->ring[ring_index];
 	u32 size_in_dw, cur_size_in_dw;
 	int i, num_loops;
 	int r = 0;
 
-	radeon_sync_create(&sync);
+	r = radeon_semaphore_create(rdev, &sem);
+	if (r) {
+		DRM_ERROR("radeon: moving bo (%d).\n", r);
+		return r;
+	}
 
 	size_in_dw = (num_gpu_pages << RADEON_GPU_PAGE_SHIFT) / 4;
 	num_loops = DIV_ROUND_UP(size_in_dw, 0xFFFE);
 	r = radeon_ring_lock(rdev, ring, num_loops * 4 + 8);
 	if (r) {
 		DRM_ERROR("radeon: moving bo (%d).\n", r);
-		radeon_sync_free(rdev, &sync, NULL);
-		return ERR_PTR(r);
+		radeon_semaphore_free(rdev, &sem, NULL);
+		return r;
 	}
 
-	radeon_sync_resv(rdev, &sync, resv, false);
-	radeon_sync_rings(rdev, &sync, ring->idx);
+	radeon_semaphore_sync_to(sem, *fence);
+	radeon_semaphore_sync_rings(rdev, sem, ring->idx);
 
 	for (i = 0; i < num_loops; i++) {
 		cur_size_in_dw = size_in_dw;
@@ -482,15 +486,15 @@ struct radeon_fence *r600_copy_dma(struct radeon_device *rdev,
 		dst_offset += cur_size_in_dw * 4;
 	}
 
-	r = radeon_fence_emit(rdev, &fence, ring->idx);
+	r = radeon_fence_emit(rdev, fence, ring->idx);
 	if (r) {
 		radeon_ring_unlock_undo(rdev, ring);
-		radeon_sync_free(rdev, &sync, NULL);
-		return ERR_PTR(r);
+		radeon_semaphore_free(rdev, &sem, NULL);
+		return r;
 	}
 
-	radeon_ring_unlock_commit(rdev, ring, false);
-	radeon_sync_free(rdev, &sync, fence);
+	radeon_ring_unlock_commit(rdev, ring);
+	radeon_semaphore_free(rdev, &sem, *fence);
 
-	return fence;
+	return r;
 }

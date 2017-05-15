@@ -31,15 +31,6 @@
 #include <asm/msr.h>
 #include <asm/processor-flags.h>
 #include <asm/asm-offsets.h>
-#include <asm/bootparam.h>
-
-/*
- * Locally defined symbols should be marked hidden:
- */
-	.hidden _bss
-	.hidden _ebss
-	.hidden _got
-	.hidden _egot
 
 	__HEAD
 	.code32
@@ -55,7 +46,7 @@ ENTRY(startup_32)
 	 * Test KEEP_SEGMENTS flag to see if the bootloader is asking
 	 * us to not reload segments
 	 */
-	testb $KEEP_SEGMENTS, BP_loadflags(%esi)
+	testb $(1<<6), BP_loadflags(%esi)
 	jnz 1f
 
 	cli
@@ -110,16 +101,15 @@ ENTRY(startup_32)
 1:
 
 	/* Target address to relocate to for decompression */
-	movl	BP_init_size(%esi), %eax
-	subl	$_end, %eax
-	addl	%eax, %ebx
+	addl	$z_extract_offset, %ebx
 
 /*
  * Prepare for entering 64 bit mode
  */
 
 	/* Load new GDT with the 64bit segments using 32bit descriptor */
-	addl	%ebp, gdt+2(%ebp)
+	leal	gdt(%ebp), %eax
+	movl	%eax, gdt+2(%ebp)
 	lgdt	gdt(%ebp)
 
 	/* Enable PAE mode */
@@ -133,7 +123,7 @@ ENTRY(startup_32)
 	/* Initialize Page tables to 0 */
 	leal	pgtable(%ebx), %edi
 	xorl	%eax, %eax
-	movl	$(BOOT_INIT_PGT_SIZE/4), %ecx
+	movl	$((4096*6)/4), %ecx
 	rep	stosl
 
 	/* Build Level 4 */
@@ -174,7 +164,7 @@ ENTRY(startup_32)
 	/* After gdt is loaded */
 	xorl	%eax, %eax
 	lldt	%ax
-	movl    $__BOOT_TSS, %eax
+	movl    $0x20, %eax
 	ltr	%ax
 
 	/*
@@ -264,7 +254,7 @@ ENTRY(efi_pe_entry)
 	/*
 	 * Relocate efi_config->call().
 	 */
-	addq	%rbp, efi64_config+32(%rip)
+	addq	%rbp, efi64_config+88(%rip)
 
 	movq	%rax, %rdi
 	call	make_boot_params
@@ -284,7 +274,7 @@ handover_entry:
 	 * Relocate efi_config->call().
 	 */
 	movq	efi_config(%rip), %rax
-	addq	%rbp, 32(%rax)
+	addq	%rbp, 88(%rax)
 2:
 	movq	efi_config(%rip), %rdi
 	call	efi_main
@@ -339,9 +329,7 @@ preferred_addr:
 1:
 
 	/* Target address to relocate to for decompression */
-	movl	BP_init_size(%rsi), %ebx
-	subl	$_end, %ebx
-	addq	%rbp, %rbx
+	leaq	z_extract_offset(%rbp), %rbx
 
 	/* Set up the stack */
 	leaq	boot_stack_end(%rbx), %rsp
@@ -411,7 +399,7 @@ relocated:
 2:
 	
 /*
- * Do the extraction, and jump to the new kernel..
+ * Do the decompression, and jump to the new kernel..
  */
 	pushq	%rsi			/* Save the real mode argument */
 	movq	%rsi, %rdi		/* real mode address */
@@ -419,8 +407,8 @@ relocated:
 	leaq	input_data(%rip), %rdx  /* input_data */
 	movl	$z_input_len, %ecx	/* input_len */
 	movq	%rbp, %r8		/* output target address */
-	movq	$z_output_len, %r9	/* decompressed length, end of relocs */
-	call	extract_kernel		/* returns kernel location in %rax */
+	movq	$z_output_len, %r9	/* decompressed length */
+	call	decompress_kernel	/* returns kernel location in %rax */
 	popq	%rsi
 
 /*
@@ -456,14 +444,14 @@ efi_config:
 #ifdef CONFIG_EFI_MIXED
 	.global efi32_config
 efi32_config:
-	.fill	4,8,0
+	.fill	11,8,0
 	.quad	efi64_thunk
 	.byte	0
 #endif
 
 	.global efi64_config
 efi64_config:
-	.fill	4,8,0
+	.fill	11,8,0
 	.quad	efi_call
 	.byte	1
 #endif /* CONFIG_EFI_STUB */
@@ -485,4 +473,4 @@ boot_stack_end:
 	.section ".pgtable","a",@nobits
 	.balign 4096
 pgtable:
-	.fill BOOT_PGT_SIZE, 1, 0
+	.fill 6*4096, 1, 0

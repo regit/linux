@@ -12,91 +12,8 @@
 
 #include <asm/mipsregs.h>
 
-#ifndef __ASSEMBLY__
-
-#include <asm/inst.h>
-
 extern void _save_msa(struct task_struct *);
 extern void _restore_msa(struct task_struct *);
-extern void _init_msa_upper(void);
-
-extern void read_msa_wr_b(unsigned idx, union fpureg *to);
-extern void read_msa_wr_h(unsigned idx, union fpureg *to);
-extern void read_msa_wr_w(unsigned idx, union fpureg *to);
-extern void read_msa_wr_d(unsigned idx, union fpureg *to);
-
-/**
- * read_msa_wr() - Read a single MSA vector register
- * @idx:	The index of the vector register to read
- * @to:		The FPU register union to store the registers value in
- * @fmt:	The format of the data in the vector register
- *
- * Read the value of MSA vector register idx into the FPU register
- * union to, using the format fmt.
- */
-static inline void read_msa_wr(unsigned idx, union fpureg *to,
-			       enum msa_2b_fmt fmt)
-{
-	switch (fmt) {
-	case msa_fmt_b:
-		read_msa_wr_b(idx, to);
-		break;
-
-	case msa_fmt_h:
-		read_msa_wr_h(idx, to);
-		break;
-
-	case msa_fmt_w:
-		read_msa_wr_w(idx, to);
-		break;
-
-	case msa_fmt_d:
-		read_msa_wr_d(idx, to);
-		break;
-
-	default:
-		BUG();
-	}
-}
-
-extern void write_msa_wr_b(unsigned idx, union fpureg *from);
-extern void write_msa_wr_h(unsigned idx, union fpureg *from);
-extern void write_msa_wr_w(unsigned idx, union fpureg *from);
-extern void write_msa_wr_d(unsigned idx, union fpureg *from);
-
-/**
- * write_msa_wr() - Write a single MSA vector register
- * @idx:	The index of the vector register to write
- * @from:	The FPU register union to take the registers value from
- * @fmt:	The format of the data in the vector register
- *
- * Write the value from the FPU register union from into MSA vector
- * register idx, using the format fmt.
- */
-static inline void write_msa_wr(unsigned idx, union fpureg *from,
-				enum msa_2b_fmt fmt)
-{
-	switch (fmt) {
-	case msa_fmt_b:
-		write_msa_wr_b(idx, from);
-		break;
-
-	case msa_fmt_h:
-		write_msa_wr_h(idx, from);
-		break;
-
-	case msa_fmt_w:
-		write_msa_wr_w(idx, from);
-		break;
-
-	case msa_fmt_d:
-		write_msa_wr_d(idx, from);
-		break;
-
-	default:
-		BUG();
-	}
-}
 
 static inline void enable_msa(void)
 {
@@ -147,19 +64,6 @@ static inline void restore_msa(struct task_struct *t)
 		_restore_msa(t);
 }
 
-static inline void init_msa_upper(void)
-{
-	/*
-	 * Check cpu_has_msa only if it's a constant. This will allow the
-	 * compiler to optimise out code for CPUs without MSA without adding
-	 * an extra redundant check for CPUs with MSA.
-	 */
-	if (__builtin_constant_p(cpu_has_msa) && !cpu_has_msa)
-		return;
-
-	_init_msa_upper();
-}
-
 #ifdef TOOLCHAIN_SUPPORTS_MSA
 
 #define __BUILD_MSA_CTL_REG(name, cs)				\
@@ -168,7 +72,6 @@ static inline unsigned int read_msa_##name(void)		\
 	unsigned int reg;					\
 	__asm__ __volatile__(					\
 	"	.set	push\n"					\
-	"	.set	fp=64\n"				\
 	"	.set	msa\n"					\
 	"	cfcmsa	%0, $" #cs "\n"				\
 	"	.set	pop\n"					\
@@ -180,7 +83,6 @@ static inline void write_msa_##name(unsigned int val)		\
 {								\
 	__asm__ __volatile__(					\
 	"	.set	push\n"					\
-	"	.set	fp=64\n"				\
 	"	.set	msa\n"					\
 	"	ctcmsa	$" #cs ", %0\n"				\
 	"	.set	pop\n"					\
@@ -194,6 +96,13 @@ static inline void write_msa_##name(unsigned int val)		\
  * allow compilation with toolchains that do not support MSA. Once all
  * toolchains in use support MSA these can be removed.
  */
+#ifdef CONFIG_CPU_MICROMIPS
+#define CFC_MSA_INSN	0x587e0056
+#define CTC_MSA_INSN	0x583e0816
+#else
+#define CFC_MSA_INSN	0x787e0059
+#define CTC_MSA_INSN	0x783e0819
+#endif
 
 #define __BUILD_MSA_CTL_REG(name, cs)				\
 static inline unsigned int read_msa_##name(void)		\
@@ -202,12 +111,11 @@ static inline unsigned int read_msa_##name(void)		\
 	__asm__ __volatile__(					\
 	"	.set	push\n"					\
 	"	.set	noat\n"					\
-	"	# cfcmsa $1, $%1\n"				\
-	_ASM_INSN_IF_MIPS(0x787e0059 | %1 << 11)		\
-	_ASM_INSN32_IF_MM(0x587e0056 | %1 << 11)		\
+	"	.insn\n"					\
+	"	.word	#CFC_MSA_INSN | (" #cs " << 11)\n"	\
 	"	move	%0, $1\n"				\
 	"	.set	pop\n"					\
-	: "=r"(reg) : "i"(cs));					\
+	: "=r"(reg));						\
 	return reg;						\
 }								\
 								\
@@ -217,25 +125,13 @@ static inline void write_msa_##name(unsigned int val)		\
 	"	.set	push\n"					\
 	"	.set	noat\n"					\
 	"	move	$1, %0\n"				\
-	"	# ctcmsa $%1, $1\n"				\
-	_ASM_INSN_IF_MIPS(0x783e0819 | %1 << 6)			\
-	_ASM_INSN32_IF_MM(0x583e0816 | %1 << 6)			\
+	"	.insn\n"					\
+	"	.word	#CTC_MSA_INSN | (" #cs " << 6)\n"	\
 	"	.set	pop\n"					\
-	: : "r"(val), "i"(cs));					\
+	: : "r"(val));						\
 }
 
 #endif /* !TOOLCHAIN_SUPPORTS_MSA */
-
-__BUILD_MSA_CTL_REG(ir, 0)
-__BUILD_MSA_CTL_REG(csr, 1)
-__BUILD_MSA_CTL_REG(access, 2)
-__BUILD_MSA_CTL_REG(save, 3)
-__BUILD_MSA_CTL_REG(modify, 4)
-__BUILD_MSA_CTL_REG(request, 5)
-__BUILD_MSA_CTL_REG(map, 6)
-__BUILD_MSA_CTL_REG(unmap, 7)
-
-#endif /* !__ASSEMBLY__ */
 
 #define MSA_IR		0
 #define MSA_CSR		1
@@ -245,6 +141,15 @@ __BUILD_MSA_CTL_REG(unmap, 7)
 #define MSA_REQUEST	5
 #define MSA_MAP		6
 #define MSA_UNMAP	7
+
+__BUILD_MSA_CTL_REG(ir, 0)
+__BUILD_MSA_CTL_REG(csr, 1)
+__BUILD_MSA_CTL_REG(access, 2)
+__BUILD_MSA_CTL_REG(save, 3)
+__BUILD_MSA_CTL_REG(modify, 4)
+__BUILD_MSA_CTL_REG(request, 5)
+__BUILD_MSA_CTL_REG(map, 6)
+__BUILD_MSA_CTL_REG(unmap, 7)
 
 /* MSA Implementation Register (MSAIR) */
 #define MSA_IR_REVB		0

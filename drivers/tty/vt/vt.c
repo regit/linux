@@ -108,7 +108,6 @@
 #define CON_DRIVER_FLAG_MODULE 1
 #define CON_DRIVER_FLAG_INIT   2
 #define CON_DRIVER_FLAG_ATTR   4
-#define CON_DRIVER_FLAG_ZOMBIE 8
 
 struct con_driver {
 	const struct consw *con;
@@ -136,7 +135,6 @@ const struct consw *conswitchp;
  */
 #define DEFAULT_BELL_PITCH	750
 #define DEFAULT_BELL_DURATION	(HZ/8)
-#define DEFAULT_CURSOR_BLINK_MS	200
 
 struct vc vc_cons [MAX_NR_CONSOLES];
 
@@ -155,11 +153,8 @@ static int set_vesa_blanking(char __user *p);
 static void set_cursor(struct vc_data *vc);
 static void hide_cursor(struct vc_data *vc);
 static void console_callback(struct work_struct *ignored);
-static void con_driver_unregister_callback(struct work_struct *ignored);
 static void blank_screen_t(unsigned long dummy);
 static void set_palette(struct vc_data *vc);
-
-#define vt_get_kmsg_redirect() vt_kmsg_redirect(-1)
 
 static int printable;		/* Is console ready for printing? */
 int default_utf8 = true;
@@ -185,7 +180,6 @@ static int blankinterval = 10*60;
 core_param(consoleblank, blankinterval, int, 0444);
 
 static DECLARE_WORK(console_work, console_callback);
-static DECLARE_WORK(con_driver_unregister_work, con_driver_unregister_callback);
 
 /*
  * fg_console is the current virtual console,
@@ -277,15 +271,13 @@ static void notify_update(struct vc_data *vc)
  *	Low-Level Functions
  */
 
-static inline bool con_is_fg(const struct vc_data *vc)
-{
-	return vc->vc_num == fg_console;
-}
+#define IS_FG(vc)	((vc)->vc_num == fg_console)
 
-static inline bool con_should_update(const struct vc_data *vc)
-{
-	return con_is_visible(vc) && !console_blanked;
-}
+#ifdef VT_BUF_VRAM_ONLY
+#define DO_UPDATE(vc)	0
+#else
+#define DO_UPDATE(vc)	(CON_IS_VISIBLE(vc) && !console_blanked)
+#endif
 
 static inline unsigned short *screenpos(struct vc_data *vc, int offset, int viewed)
 {
@@ -315,31 +307,43 @@ void schedule_console_callback(void)
 	schedule_work(&console_work);
 }
 
-static void con_scroll(struct vc_data *vc, unsigned int t, unsigned int b,
-		enum con_scroll dir, unsigned int nr)
+static void scrup(struct vc_data *vc, unsigned int t, unsigned int b, int nr)
 {
-	u16 *clear, *d, *s;
+	unsigned short *d, *s;
 
-	if (t + nr >= b)
+	if (t+nr >= b)
 		nr = b - t - 1;
 	if (b > vc->vc_rows || t >= b || nr < 1)
 		return;
-	if (con_is_visible(vc) && vc->vc_sw->con_scroll(vc, t, b, dir, nr))
+	if (CON_IS_VISIBLE(vc) && vc->vc_sw->con_scroll(vc, t, b, SM_UP, nr))
 		return;
-
-	s = clear = (u16 *)(vc->vc_origin + vc->vc_size_row * t);
-	d = (u16 *)(vc->vc_origin + vc->vc_size_row * (t + nr));
-
-	if (dir == SM_UP) {
-		clear = s + (b - t - nr) * vc->vc_cols;
-		swap(s, d);
-	}
+	d = (unsigned short *)(vc->vc_origin + vc->vc_size_row * t);
+	s = (unsigned short *)(vc->vc_origin + vc->vc_size_row * (t + nr));
 	scr_memmovew(d, s, (b - t - nr) * vc->vc_size_row);
-	scr_memsetw(clear, vc->vc_video_erase_char, vc->vc_size_row * nr);
+	scr_memsetw(d + (b - t - nr) * vc->vc_cols, vc->vc_video_erase_char,
+		    vc->vc_size_row * nr);
+}
+
+static void scrdown(struct vc_data *vc, unsigned int t, unsigned int b, int nr)
+{
+	unsigned short *s;
+	unsigned int step;
+
+	if (t+nr >= b)
+		nr = b - t - 1;
+	if (b > vc->vc_rows || t >= b || nr < 1)
+		return;
+	if (CON_IS_VISIBLE(vc) && vc->vc_sw->con_scroll(vc, t, b, SM_DOWN, nr))
+		return;
+	s = (unsigned short *)(vc->vc_origin + vc->vc_size_row * t);
+	step = vc->vc_cols * nr;
+	scr_memmovew(s + step, s, (b - t - nr) * vc->vc_size_row);
+	scr_memsetw(s, vc->vc_video_erase_char, 2 * step);
 }
 
 static void do_update_region(struct vc_data *vc, unsigned long start, int count)
 {
+#ifndef VT_BUF_VRAM_ONLY
 	unsigned int xx, yy, offset;
 	u16 *p;
 
@@ -380,13 +384,14 @@ static void do_update_region(struct vc_data *vc, unsigned long start, int count)
 			start = vc->vc_sw->con_getxy(vc, start, NULL, NULL);
 		}
 	}
+#endif
 }
 
 void update_region(struct vc_data *vc, unsigned long start, int count)
 {
 	WARN_CONSOLE_UNLOCKED();
 
-	if (con_should_update(vc)) {
+	if (DO_UPDATE(vc)) {
 		hide_cursor(vc);
 		do_update_region(vc, start, count);
 		set_cursor(vc);
@@ -402,6 +407,7 @@ static u8 build_attr(struct vc_data *vc, u8 _color, u8 _intensity, u8 _blink,
 		return vc->vc_sw->con_build_attr(vc, _color, _intensity,
 		       _blink, _underline, _reverse, _italic);
 
+#ifndef VT_BUF_VRAM_ONLY
 /*
  * ++roman: I completely changed the attribute format for monochrome
  * mode (!can_do_color). The formerly used MDA (monochrome display
@@ -436,6 +442,9 @@ static u8 build_attr(struct vc_data *vc, u8 _color, u8 _intensity, u8 _blink,
 		a <<= 1;
 	return a;
 	}
+#else
+	return 0;
+#endif
 }
 
 static void update_attr(struct vc_data *vc)
@@ -455,9 +464,10 @@ void invert_screen(struct vc_data *vc, int offset, int count, int viewed)
 
 	count /= 2;
 	p = screenpos(vc, offset, viewed);
-	if (vc->vc_sw->con_invert_region) {
+	if (vc->vc_sw->con_invert_region)
 		vc->vc_sw->con_invert_region(vc, p, count);
-	} else {
+#ifndef VT_BUF_VRAM_ONLY
+	else {
 		u16 *q = p;
 		int cnt = count;
 		u16 a;
@@ -485,10 +495,9 @@ void invert_screen(struct vc_data *vc, int offset, int count, int viewed)
 			}
 		}
 	}
-
-	if (con_should_update(vc))
+#endif
+	if (DO_UPDATE(vc))
 		do_update_region(vc, (unsigned long) p, count);
-	notify_update(vc);
 }
 
 /* used by selection: complement pointer position */
@@ -503,9 +512,8 @@ void complement_pos(struct vc_data *vc, int offset)
 	if (old_offset != -1 && old_offset >= 0 &&
 	    old_offset < vc->vc_screenbuf_size) {
 		scr_writew(old, screenpos(vc, old_offset, 1));
-		if (con_should_update(vc))
+		if (DO_UPDATE(vc))
 			vc->vc_sw->con_putc(vc, old, oldy, oldx);
-		notify_update(vc);
 	}
 
 	old_offset = offset;
@@ -518,13 +526,13 @@ void complement_pos(struct vc_data *vc, int offset)
 		old = scr_readw(p);
 		new = old ^ vc->vc_complement_mask;
 		scr_writew(new, p);
-		if (con_should_update(vc)) {
+		if (DO_UPDATE(vc)) {
 			oldx = (offset >> 1) % vc->vc_cols;
 			oldy = (offset >> 1) / vc->vc_cols;
 			vc->vc_sw->con_putc(vc, new, oldy, oldx);
 		}
-		notify_update(vc);
 	}
+
 }
 
 static void insert_char(struct vc_data *vc, unsigned int nr)
@@ -534,7 +542,7 @@ static void insert_char(struct vc_data *vc, unsigned int nr)
 	scr_memmovew(p + nr, p, (vc->vc_cols - vc->vc_x - nr) * 2);
 	scr_memsetw(p, vc->vc_video_erase_char, nr * 2);
 	vc->vc_need_wrap = 0;
-	if (con_should_update(vc))
+	if (DO_UPDATE(vc))
 		do_update_region(vc, (unsigned long) p,
 			vc->vc_cols - vc->vc_x);
 }
@@ -547,12 +555,12 @@ static void delete_char(struct vc_data *vc, unsigned int nr)
 	scr_memsetw(p + vc->vc_cols - vc->vc_x - nr, vc->vc_video_erase_char,
 			nr * 2);
 	vc->vc_need_wrap = 0;
-	if (con_should_update(vc))
+	if (DO_UPDATE(vc))
 		do_update_region(vc, (unsigned long) p,
 			vc->vc_cols - vc->vc_x);
 }
 
-static int softcursor_original = -1;
+static int softcursor_original;
 
 static void add_softcursor(struct vc_data *vc)
 {
@@ -567,7 +575,7 @@ static void add_softcursor(struct vc_data *vc)
 	if ((type & 0x20) && ((softcursor_original & 0x7000) == (i & 0x7000))) i ^= 0x7000;
 	if ((type & 0x40) && ((i & 0x700) == ((i & 0x7000) >> 4))) i ^= 0x0700;
 	scr_writew(i, (u16 *) vc->vc_pos);
-	if (con_should_update(vc))
+	if (DO_UPDATE(vc))
 		vc->vc_sw->con_putc(vc, i, vc->vc_y, vc->vc_x);
 }
 
@@ -575,7 +583,7 @@ static void hide_softcursor(struct vc_data *vc)
 {
 	if (softcursor_original != -1) {
 		scr_writew(softcursor_original, (u16 *)vc->vc_pos);
-		if (con_should_update(vc))
+		if (DO_UPDATE(vc))
 			vc->vc_sw->con_putc(vc, softcursor_original,
 					vc->vc_y, vc->vc_x);
 		softcursor_original = -1;
@@ -592,7 +600,8 @@ static void hide_cursor(struct vc_data *vc)
 
 static void set_cursor(struct vc_data *vc)
 {
-	if (!con_is_fg(vc) || console_blanked || vc->vc_mode == KD_GRAPHICS)
+	if (!IS_FG(vc) || console_blanked ||
+	    vc->vc_mode == KD_GRAPHICS)
 		return;
 	if (vc->vc_deccm) {
 		if (vc == sel_cons)
@@ -608,7 +617,7 @@ static void set_origin(struct vc_data *vc)
 {
 	WARN_CONSOLE_UNLOCKED();
 
-	if (!con_is_visible(vc) ||
+	if (!CON_IS_VISIBLE(vc) ||
 	    !vc->vc_sw->con_set_origin ||
 	    !vc->vc_sw->con_set_origin(vc))
 		vc->vc_origin = (unsigned long)vc->vc_screenbuf;
@@ -617,7 +626,7 @@ static void set_origin(struct vc_data *vc)
 	vc->vc_pos = vc->vc_origin + vc->vc_size_row * vc->vc_y + 2 * vc->vc_x;
 }
 
-static void save_screen(struct vc_data *vc)
+static inline void save_screen(struct vc_data *vc)
 {
 	WARN_CONSOLE_UNLOCKED();
 
@@ -656,12 +665,12 @@ void redraw_screen(struct vc_data *vc, int is_switch)
 		struct vc_data *old_vc = vc_cons[fg_console].d;
 		if (old_vc == vc)
 			return;
-		if (!con_is_visible(vc))
+		if (!CON_IS_VISIBLE(vc))
 			redraw = 1;
 		*vc->vc_display_fg = vc;
 		fg_console = vc->vc_num;
 		hide_cursor(old_vc);
-		if (!con_is_visible(old_vc)) {
+		if (!CON_IS_VISIBLE(old_vc)) {
 			save_screen(old_vc);
 			set_origin(old_vc);
 		}
@@ -725,15 +734,12 @@ static void visual_init(struct vc_data *vc, int num, int init)
 	__module_get(vc->vc_sw->owner);
 	vc->vc_num = num;
 	vc->vc_display_fg = &master_display_fg;
-	if (vc->vc_uni_pagedir_loc)
-		con_free_unimap(vc);
 	vc->vc_uni_pagedir_loc = &vc->vc_uni_pagedir;
 	vc->vc_uni_pagedir = NULL;
 	vc->vc_hi_font_mask = 0;
 	vc->vc_complement_mask = 0;
 	vc->vc_can_do_color = 0;
 	vc->vc_panic_force_write = false;
-	vc->vc_cur_blink_ms = DEFAULT_CURSOR_BLINK_MS;
 	vc->vc_sw->con_init(vc, init);
 	if (!vc->vc_complement_mask)
 		vc->vc_complement_mask = vc->vc_can_do_color ? 0x7700 : 0x0800;
@@ -744,54 +750,50 @@ static void visual_init(struct vc_data *vc, int num, int init)
 
 int vc_allocate(unsigned int currcons)	/* return 0 on success */
 {
-	struct vt_notifier_param param;
-	struct vc_data *vc;
-
 	WARN_CONSOLE_UNLOCKED();
 
 	if (currcons >= MAX_NR_CONSOLES)
 		return -ENXIO;
+	if (!vc_cons[currcons].d) {
+	    struct vc_data *vc;
+	    struct vt_notifier_param param;
 
-	if (vc_cons[currcons].d)
-		return 0;
+	    /* prevent users from taking too much memory */
+	    if (currcons >= MAX_NR_USER_CONSOLES && !capable(CAP_SYS_RESOURCE))
+	      return -EPERM;
 
-	/* due to the granularity of kmalloc, we waste some memory here */
-	/* the alloc is done in two steps, to optimize the common situation
-	   of a 25x80 console (structsize=216, screenbuf_size=4000) */
-	/* although the numbers above are not valid since long ago, the
-	   point is still up-to-date and the comment still has its value
-	   even if only as a historical artifact.  --mj, July 1998 */
-	param.vc = vc = kzalloc(sizeof(struct vc_data), GFP_KERNEL);
-	if (!vc)
+	    /* due to the granularity of kmalloc, we waste some memory here */
+	    /* the alloc is done in two steps, to optimize the common situation
+	       of a 25x80 console (structsize=216, screenbuf_size=4000) */
+	    /* although the numbers above are not valid since long ago, the
+	       point is still up-to-date and the comment still has its value
+	       even if only as a historical artifact.  --mj, July 1998 */
+	    param.vc = vc = kzalloc(sizeof(struct vc_data), GFP_KERNEL);
+	    if (!vc)
 		return -ENOMEM;
-
-	vc_cons[currcons].d = vc;
-	tty_port_init(&vc->port);
-	INIT_WORK(&vc_cons[currcons].SAK_work, vc_SAK);
-
-	visual_init(vc, currcons, 1);
-
-	if (!*vc->vc_uni_pagedir_loc)
+	    vc_cons[currcons].d = vc;
+	    tty_port_init(&vc->port);
+	    INIT_WORK(&vc_cons[currcons].SAK_work, vc_SAK);
+	    visual_init(vc, currcons, 1);
+	    if (!*vc->vc_uni_pagedir_loc)
 		con_set_default_unimap(vc);
+	    vc->vc_screenbuf = kmalloc(vc->vc_screenbuf_size, GFP_KERNEL);
+	    if (!vc->vc_screenbuf) {
+		kfree(vc);
+		vc_cons[currcons].d = NULL;
+		return -ENOMEM;
+	    }
 
-	vc->vc_screenbuf = kmalloc(vc->vc_screenbuf_size, GFP_KERNEL);
-	if (!vc->vc_screenbuf)
-		goto err_free;
+	    /* If no drivers have overridden us and the user didn't pass a
+	       boot option, default to displaying the cursor */
+	    if (global_cursor_default == -1)
+		    global_cursor_default = 1;
 
-	/* If no drivers have overridden us and the user didn't pass a
-	   boot option, default to displaying the cursor */
-	if (global_cursor_default == -1)
-		global_cursor_default = 1;
-
-	vc_init(vc, vc->vc_rows, vc->vc_cols, 1);
-	vcs_make_sysfs(currcons);
-	atomic_notifier_call_chain(&vt_notifier_list, VT_ALLOCATE, &param);
-
+	    vc_init(vc, vc->vc_rows, vc->vc_cols, 1);
+	    vcs_make_sysfs(currcons);
+	    atomic_notifier_call_chain(&vt_notifier_list, VT_ALLOCATE, &param);
+	}
 	return 0;
-err_free:
-	kfree(vc);
-	vc_cons[currcons].d = NULL;
-	return -ENOMEM;
 }
 
 static inline int resize_screen(struct vc_data *vc, int width, int height,
@@ -859,14 +861,9 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 	if (new_cols == vc->vc_cols && new_rows == vc->vc_rows)
 		return 0;
 
-	if (new_screen_size > (4 << 20))
-		return -EINVAL;
 	newscreen = kmalloc(new_screen_size, GFP_USER);
 	if (!newscreen)
 		return -ENOMEM;
-
-	if (vc == sel_cons)
-		clear_selection();
 
 	old_rows = vc->vc_rows;
 	old_row_size = vc->vc_size_row;
@@ -942,7 +939,7 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 		tty_do_resize(tty, &ws);
 	}
 
-	if (con_is_visible(vc))
+	if (CON_IS_VISIBLE(vc))
 		update_screen(vc);
 	vt_event_post(VT_EVENT_RESIZE, vc->vc_num, vc->vc_num);
 	return err;
@@ -1028,27 +1025,20 @@ struct vc_data *vc_deallocate(unsigned int currcons)
 #define VT100ID "\033[?1;2c"
 #define VT102ID "\033[?6c"
 
-const unsigned char color_table[] = { 0, 4, 2, 6, 1, 5, 3, 7,
+unsigned char color_table[] = { 0, 4, 2, 6, 1, 5, 3, 7,
 				       8,12,10,14, 9,13,11,15 };
 
 /* the default colour table, for VGA+ colour systems */
-unsigned char default_red[] = {
-	0x00, 0xaa, 0x00, 0xaa, 0x00, 0xaa, 0x00, 0xaa,
-	0x55, 0xff, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff
-};
-module_param_array(default_red, byte, NULL, S_IRUGO | S_IWUSR);
+int default_red[] = {0x00,0xaa,0x00,0xaa,0x00,0xaa,0x00,0xaa,
+    0x55,0xff,0x55,0xff,0x55,0xff,0x55,0xff};
+int default_grn[] = {0x00,0x00,0xaa,0x55,0x00,0x00,0xaa,0xaa,
+    0x55,0x55,0xff,0xff,0x55,0x55,0xff,0xff};
+int default_blu[] = {0x00,0x00,0x00,0x00,0xaa,0xaa,0xaa,0xaa,
+    0x55,0x55,0x55,0x55,0xff,0xff,0xff,0xff};
 
-unsigned char default_grn[] = {
-	0x00, 0x00, 0xaa, 0x55, 0x00, 0x00, 0xaa, 0xaa,
-	0x55, 0x55, 0xff, 0xff, 0x55, 0x55, 0xff, 0xff
-};
-module_param_array(default_grn, byte, NULL, S_IRUGO | S_IWUSR);
-
-unsigned char default_blu[] = {
-	0x00, 0x00, 0x00, 0x00, 0xaa, 0xaa, 0xaa, 0xaa,
-	0x55, 0x55, 0x55, 0x55, 0xff, 0xff, 0xff, 0xff
-};
-module_param_array(default_blu, byte, NULL, S_IRUGO | S_IWUSR);
+module_param_array(default_red, int, NULL, S_IRUGO | S_IWUSR);
+module_param_array(default_grn, int, NULL, S_IRUGO | S_IWUSR);
+module_param_array(default_blu, int, NULL, S_IRUGO | S_IWUSR);
 
 /*
  * gotoxy() must verify all boundaries, because the arguments
@@ -1091,9 +1081,11 @@ static void gotoxay(struct vc_data *vc, int new_x, int new_y)
 	gotoxy(vc, new_x, vc->vc_decom ? (vc->vc_top + new_y) : new_y);
 }
 
-void scrollback(struct vc_data *vc)
+void scrollback(struct vc_data *vc, int lines)
 {
-	scrolldelta(-(vc->vc_rows / 2));
+	if (!lines)
+		lines = vc->vc_rows / 2;
+	scrolldelta(-lines);
 }
 
 void scrollfront(struct vc_data *vc, int lines)
@@ -1109,7 +1101,7 @@ static void lf(struct vc_data *vc)
 	 * if below scrolling region
 	 */
     	if (vc->vc_y + 1 == vc->vc_bottom)
-		con_scroll(vc, vc->vc_top, vc->vc_bottom, SM_UP, 1);
+		scrup(vc, vc->vc_top, vc->vc_bottom, 1);
 	else if (vc->vc_y < vc->vc_rows - 1) {
 	    	vc->vc_y++;
 		vc->vc_pos += vc->vc_size_row;
@@ -1124,7 +1116,7 @@ static void ri(struct vc_data *vc)
 	 * if above scrolling region
 	 */
 	if (vc->vc_y == vc->vc_top)
-		con_scroll(vc, vc->vc_top, vc->vc_bottom, SM_DOWN, 1);
+		scrdown(vc, vc->vc_top, vc->vc_bottom, 1);
 	else if (vc->vc_y > 0) {
 		vc->vc_y--;
 		vc->vc_pos -= vc->vc_size_row;
@@ -1170,9 +1162,9 @@ static void csi_J(struct vc_data *vc, int vpar)
 			break;
 		case 3: /* erase scroll-back buffer (and whole display) */
 			scr_memsetw(vc->vc_screenbuf, vc->vc_video_erase_char,
-				    vc->vc_screenbuf_size);
+				    vc->vc_screenbuf_size >> 1);
 			set_origin(vc);
-			if (con_is_visible(vc))
+			if (CON_IS_VISIBLE(vc))
 				update_screen(vc);
 			/* fall through */
 		case 2: /* erase whole display */
@@ -1183,7 +1175,7 @@ static void csi_J(struct vc_data *vc, int vpar)
 			return;
 	}
 	scr_memsetw(start, vc->vc_video_erase_char, 2 * count);
-	if (con_should_update(vc))
+	if (DO_UPDATE(vc))
 		do_update_region(vc, (unsigned long) start, count);
 	vc->vc_need_wrap = 0;
 }
@@ -1211,7 +1203,7 @@ static void csi_K(struct vc_data *vc, int vpar)
 	}
 	scr_memsetw(start, vc->vc_video_erase_char, 2 * count);
 	vc->vc_need_wrap = 0;
-	if (con_should_update(vc))
+	if (DO_UPDATE(vc))
 		do_update_region(vc, (unsigned long) start, count);
 }
 
@@ -1224,7 +1216,7 @@ static void csi_X(struct vc_data *vc, int vpar) /* erase the following vpar posi
 	count = (vpar > vc->vc_cols - vc->vc_x) ? (vc->vc_cols - vc->vc_x) : vpar;
 
 	scr_memsetw((unsigned short *)vc->vc_pos, vc->vc_video_erase_char, 2 * count);
-	if (con_should_update(vc))
+	if (DO_UPDATE(vc))
 		vc->vc_sw->con_clear(vc, vc->vc_y, vc->vc_x, 1, count);
 	vc->vc_need_wrap = 0;
 }
@@ -1241,87 +1233,48 @@ static void default_attr(struct vc_data *vc)
 
 struct rgb { u8 r; u8 g; u8 b; };
 
-static void rgb_from_256(int i, struct rgb *c)
+struct rgb rgb_from_256(int i)
 {
+	struct rgb c;
 	if (i < 8) {            /* Standard colours. */
-		c->r = i&1 ? 0xaa : 0x00;
-		c->g = i&2 ? 0xaa : 0x00;
-		c->b = i&4 ? 0xaa : 0x00;
+		c.r = i&1 ? 0xaa : 0x00;
+		c.g = i&2 ? 0xaa : 0x00;
+		c.b = i&4 ? 0xaa : 0x00;
 	} else if (i < 16) {
-		c->r = i&1 ? 0xff : 0x55;
-		c->g = i&2 ? 0xff : 0x55;
-		c->b = i&4 ? 0xff : 0x55;
+		c.r = i&1 ? 0xff : 0x55;
+		c.g = i&2 ? 0xff : 0x55;
+		c.b = i&4 ? 0xff : 0x55;
 	} else if (i < 232) {   /* 6x6x6 colour cube. */
-		c->r = (i - 16) / 36 * 85 / 2;
-		c->g = (i - 16) / 6 % 6 * 85 / 2;
-		c->b = (i - 16) % 6 * 85 / 2;
+		c.r = (i - 16) / 36 * 85 / 2;
+		c.g = (i - 16) / 6 % 6 * 85 / 2;
+		c.b = (i - 16) % 6 * 85 / 2;
 	} else                  /* Grayscale ramp. */
-		c->r = c->g = c->b = i * 10 - 2312;
+		c.r = c.g = c.b = i * 10 - 2312;
+	return c;
 }
 
-static void rgb_foreground(struct vc_data *vc, const struct rgb *c)
+static void rgb_foreground(struct vc_data *vc, struct rgb c)
 {
-	u8 hue = 0, max = max3(c->r, c->g, c->b);
-
-	if (c->r > max / 2)
-		hue |= 4;
-	if (c->g > max / 2)
-		hue |= 2;
-	if (c->b > max / 2)
-		hue |= 1;
-
-	if (hue == 7 && max <= 0x55) {
-		hue = 0;
-		vc->vc_intensity = 2;
-	} else if (max > 0xaa)
-		vc->vc_intensity = 2;
+	u8 hue, max = c.r;
+	if (c.g > max)
+		max = c.g;
+	if (c.b > max)
+		max = c.b;
+	hue = (c.r > max/2 ? 4 : 0)
+	    | (c.g > max/2 ? 2 : 0)
+	    | (c.b > max/2 ? 1 : 0);
+	if (hue == 7 && max <= 0x55)
+		hue = 0, vc->vc_intensity = 2;
 	else
-		vc->vc_intensity = 1;
-
+		vc->vc_intensity = (max > 0xaa) + 1;
 	vc->vc_color = (vc->vc_color & 0xf0) | hue;
 }
 
-static void rgb_background(struct vc_data *vc, const struct rgb *c)
+static void rgb_background(struct vc_data *vc, struct rgb c)
 {
 	/* For backgrounds, err on the dark side. */
 	vc->vc_color = (vc->vc_color & 0x0f)
-		| (c->r&0x80) >> 1 | (c->g&0x80) >> 2 | (c->b&0x80) >> 3;
-}
-
-/*
- * ITU T.416 Higher colour modes. They break the usual properties of SGR codes
- * and thus need to be detected and ignored by hand. Strictly speaking, that
- * standard also wants : rather than ; as separators, contrary to ECMA-48, but
- * no one produces such codes and almost no one accepts them.
- *
- * Subcommands 3 (CMY) and 4 (CMYK) are so insane there's no point in
- * supporting them.
- */
-static int vc_t416_color(struct vc_data *vc, int i,
-		void(*set_color)(struct vc_data *vc, const struct rgb *c))
-{
-	struct rgb c;
-
-	i++;
-	if (i > vc->vc_npar)
-		return i;
-
-	if (vc->vc_par[i] == 5 && i + 1 <= vc->vc_npar) {
-		/* 256 colours */
-		i++;
-		rgb_from_256(vc->vc_par[i], &c);
-	} else if (vc->vc_par[i] == 2 && i + 3 <= vc->vc_npar) {
-		/* 24 bit */
-		c.r = vc->vc_par[i + 1];
-		c.g = vc->vc_par[i + 2];
-		c.b = vc->vc_par[i + 3];
-		i += 3;
-	} else
-		return i;
-
-	set_color(vc, &c);
-
-	return i;
+		| (c.r&0x80) >> 1 | (c.g&0x80) >> 2 | (c.b&0x80) >> 3;
 }
 
 /* console_lock is held */
@@ -1331,96 +1284,131 @@ static void csi_m(struct vc_data *vc)
 
 	for (i = 0; i <= vc->vc_npar; i++)
 		switch (vc->vc_par[i]) {
-		case 0:	/* all attributes off */
-			default_attr(vc);
-			break;
-		case 1:
-			vc->vc_intensity = 2;
-			break;
-		case 2:
-			vc->vc_intensity = 0;
-			break;
-		case 3:
-			vc->vc_italic = 1;
-			break;
-		case 4:
-			vc->vc_underline = 1;
-			break;
-		case 5:
-			vc->vc_blink = 1;
-			break;
-		case 7:
-			vc->vc_reverse = 1;
-			break;
-		case 10: /* ANSI X3.64-1979 (SCO-ish?)
-			  * Select primary font, don't display control chars if
-			  * defined, don't set bit 8 on output.
-			  */
-			vc->vc_translate = set_translate(vc->vc_charset == 0
-					? vc->vc_G0_charset
-					: vc->vc_G1_charset, vc);
-			vc->vc_disp_ctrl = 0;
-			vc->vc_toggle_meta = 0;
-			break;
-		case 11: /* ANSI X3.64-1979 (SCO-ish?)
-			  * Select first alternate font, lets chars < 32 be
-			  * displayed as ROM chars.
-			  */
-			vc->vc_translate = set_translate(IBMPC_MAP, vc);
-			vc->vc_disp_ctrl = 1;
-			vc->vc_toggle_meta = 0;
-			break;
-		case 12: /* ANSI X3.64-1979 (SCO-ish?)
-			  * Select second alternate font, toggle high bit
-			  * before displaying as ROM char.
-			  */
-			vc->vc_translate = set_translate(IBMPC_MAP, vc);
-			vc->vc_disp_ctrl = 1;
-			vc->vc_toggle_meta = 1;
-			break;
-		case 21:
-		case 22:
-			vc->vc_intensity = 1;
-			break;
-		case 23:
-			vc->vc_italic = 0;
-			break;
-		case 24:
-			vc->vc_underline = 0;
-			break;
-		case 25:
-			vc->vc_blink = 0;
-			break;
-		case 27:
-			vc->vc_reverse = 0;
-			break;
-		case 38:
-			i = vc_t416_color(vc, i, rgb_foreground);
-			break;
-		case 48:
-			i = vc_t416_color(vc, i, rgb_background);
-			break;
-		case 39:
-			vc->vc_color = (vc->vc_def_color & 0x0f) |
-				(vc->vc_color & 0xf0);
-			break;
-		case 49:
-			vc->vc_color = (vc->vc_def_color & 0xf0) |
-				(vc->vc_color & 0x0f);
-			break;
-		default:
-			if (vc->vc_par[i] >= 90 && vc->vc_par[i] <= 107) {
-				if (vc->vc_par[i] < 100)
-					vc->vc_intensity = 2;
-				vc->vc_par[i] -= 60;
-			}
-			if (vc->vc_par[i] >= 30 && vc->vc_par[i] <= 37)
-				vc->vc_color = color_table[vc->vc_par[i] - 30]
-					| (vc->vc_color & 0xf0);
-			else if (vc->vc_par[i] >= 40 && vc->vc_par[i] <= 47)
-				vc->vc_color = (color_table[vc->vc_par[i] - 40] << 4)
-					| (vc->vc_color & 0x0f);
-			break;
+			case 0:	/* all attributes off */
+				default_attr(vc);
+				break;
+			case 1:
+				vc->vc_intensity = 2;
+				break;
+			case 2:
+				vc->vc_intensity = 0;
+				break;
+			case 3:
+				vc->vc_italic = 1;
+				break;
+			case 4:
+				vc->vc_underline = 1;
+				break;
+			case 5:
+				vc->vc_blink = 1;
+				break;
+			case 7:
+				vc->vc_reverse = 1;
+				break;
+			case 10: /* ANSI X3.64-1979 (SCO-ish?)
+				  * Select primary font, don't display
+				  * control chars if defined, don't set
+				  * bit 8 on output.
+				  */
+				vc->vc_translate = set_translate(vc->vc_charset == 0
+						? vc->vc_G0_charset
+						: vc->vc_G1_charset, vc);
+				vc->vc_disp_ctrl = 0;
+				vc->vc_toggle_meta = 0;
+				break;
+			case 11: /* ANSI X3.64-1979 (SCO-ish?)
+				  * Select first alternate font, lets
+				  * chars < 32 be displayed as ROM chars.
+				  */
+				vc->vc_translate = set_translate(IBMPC_MAP, vc);
+				vc->vc_disp_ctrl = 1;
+				vc->vc_toggle_meta = 0;
+				break;
+			case 12: /* ANSI X3.64-1979 (SCO-ish?)
+				  * Select second alternate font, toggle
+				  * high bit before displaying as ROM char.
+				  */
+				vc->vc_translate = set_translate(IBMPC_MAP, vc);
+				vc->vc_disp_ctrl = 1;
+				vc->vc_toggle_meta = 1;
+				break;
+			case 21:
+			case 22:
+				vc->vc_intensity = 1;
+				break;
+			case 23:
+				vc->vc_italic = 0;
+				break;
+			case 24:
+				vc->vc_underline = 0;
+				break;
+			case 25:
+				vc->vc_blink = 0;
+				break;
+			case 27:
+				vc->vc_reverse = 0;
+				break;
+			case 38: /* ITU T.416
+				  * Higher colour modes.
+				  * They break the usual properties of SGR codes
+				  * and thus need to be detected and ignored by
+				  * hand.  Strictly speaking, that standard also
+				  * wants : rather than ; as separators, contrary
+				  * to ECMA-48, but no one produces such codes
+				  * and almost no one accepts them.
+				  */
+				i++;
+				if (i > vc->vc_npar)
+					break;
+				if (vc->vc_par[i] == 5 &&  /* 256 colours */
+				    i < vc->vc_npar) {     /* ubiquitous */
+					i++;
+					rgb_foreground(vc,
+						rgb_from_256(vc->vc_par[i]));
+				} else if (vc->vc_par[i] == 2 &&  /* 24 bit */
+				           i <= vc->vc_npar + 3) {/* extremely rare */
+					struct rgb c = {r:vc->vc_par[i+1],
+							g:vc->vc_par[i+2],
+							b:vc->vc_par[i+3]};
+					rgb_foreground(vc, c);
+					i += 3;
+				}
+				/* Subcommands 3 (CMY) and 4 (CMYK) are so insane
+				 * there's no point in supporting them.
+				 */
+				break;
+			case 48:
+				i++;
+				if (i > vc->vc_npar)
+					break;
+				if (vc->vc_par[i] == 5 &&  /* 256 colours */
+				    i < vc->vc_npar) {
+					i++;
+					rgb_background(vc,
+						rgb_from_256(vc->vc_par[i]));
+				} else if (vc->vc_par[i] == 2 && /* 24 bit */
+				           i <= vc->vc_npar + 3) {
+					struct rgb c = {r:vc->vc_par[i+1],
+							g:vc->vc_par[i+2],
+							b:vc->vc_par[i+3]};
+					rgb_background(vc, c);
+					i += 3;
+				}
+				break;
+			case 39:
+				vc->vc_color = (vc->vc_def_color & 0x0f) | (vc->vc_color & 0xf0);
+				break;
+			case 49:
+				vc->vc_color = (vc->vc_def_color & 0xf0) | (vc->vc_color & 0x0f);
+				break;
+			default:
+				if (vc->vc_par[i] >= 30 && vc->vc_par[i] <= 37)
+					vc->vc_color = color_table[vc->vc_par[i] - 30]
+						| (vc->vc_color & 0xf0);
+				else if (vc->vc_par[i] >= 40 && vc->vc_par[i] <= 47)
+					vc->vc_color = (color_table[vc->vc_par[i] - 40] << 4)
+						| (vc->vc_color & 0x0f);
+				break;
 		}
 	update_attr(vc);
 }
@@ -1482,6 +1470,7 @@ static void set_mode(struct vc_data *vc, int on_off)
 					clr_kbd(vc, decckm);
 				break;
 			case 3:	/* 80/132 mode switch unimplemented */
+				vc->vc_deccolm = on_off;
 #if 0
 				vc_resize(deccolm ? 132 : 80, vc->vc_rows);
 				/* this alone does not suffice; some user mode
@@ -1576,7 +1565,7 @@ static void setterm_command(struct vc_data *vc)
 		case 11: /* set bell duration in msec */
 			if (vc->vc_npar >= 1)
 				vc->vc_bell_duration = (vc->vc_par[1] < 2000) ?
-					msecs_to_jiffies(vc->vc_par[1]) : 0;
+					vc->vc_par[1] * HZ / 1000 : 0;
 			else
 				vc->vc_bell_duration = DEFAULT_BELL_DURATION;
 			break;
@@ -1592,13 +1581,6 @@ static void setterm_command(struct vc_data *vc)
 			break;
 		case 15: /* activate the previous console */
 			set_console(last_console);
-			break;
-		case 16: /* set cursor blink duration in msec */
-			if (vc->vc_npar >= 1 && vc->vc_par[1] >= 50 &&
-					vc->vc_par[1] <= USHRT_MAX)
-				vc->vc_cur_blink_ms = vc->vc_par[1];
-			else
-				vc->vc_cur_blink_ms = DEFAULT_CURSOR_BLINK_MS;
 			break;
 	}
 }
@@ -1620,7 +1602,7 @@ static void csi_L(struct vc_data *vc, unsigned int nr)
 		nr = vc->vc_rows - vc->vc_y;
 	else if (!nr)
 		nr = 1;
-	con_scroll(vc, vc->vc_y, vc->vc_bottom, SM_DOWN, nr);
+	scrdown(vc, vc->vc_y, vc->vc_bottom, nr);
 	vc->vc_need_wrap = 0;
 }
 
@@ -1641,7 +1623,7 @@ static void csi_M(struct vc_data *vc, unsigned int nr)
 		nr = vc->vc_rows - vc->vc_y;
 	else if (!nr)
 		nr=1;
-	con_scroll(vc, vc->vc_y, vc->vc_bottom, SM_UP, nr);
+	scrup(vc, vc->vc_y, vc->vc_bottom, nr);
 	vc->vc_need_wrap = 0;
 }
 
@@ -1727,7 +1709,6 @@ static void reset_terminal(struct vc_data *vc, int do_clear)
 
 	vc->vc_bell_pitch = DEFAULT_BELL_PITCH;
 	vc->vc_bell_duration = DEFAULT_BELL_DURATION;
-	vc->vc_cur_blink_ms = DEFAULT_CURSOR_BLINK_MS;
 
 	gotoxy(vc, 0, 0);
 	save_cur(vc);
@@ -2163,20 +2144,18 @@ static int is_double_width(uint32_t ucs)
 	return bisearch(ucs, double_width, ARRAY_SIZE(double_width) - 1);
 }
 
-static void con_flush(struct vc_data *vc, unsigned long draw_from,
-		unsigned long draw_to, int *draw_x)
-{
-	if (*draw_x < 0)
-		return;
-
-	vc->vc_sw->con_putcs(vc, (u16 *)draw_from,
-			(u16 *)draw_to - (u16 *)draw_from, vc->vc_y, *draw_x);
-	*draw_x = -1;
-}
-
 /* acquires console_lock */
 static int do_con_write(struct tty_struct *tty, const unsigned char *buf, int count)
 {
+#ifdef VT_BUF_VRAM_ONLY
+#define FLUSH do { } while(0);
+#else
+#define FLUSH if (draw_x >= 0) { \
+	vc->vc_sw->con_putcs(vc, (u16 *)draw_from, (u16 *)draw_to - (u16 *)draw_from, vc->vc_y, draw_x); \
+	draw_x = -1; \
+	}
+#endif
+
 	int c, tc, ok, n = 0, draw_x = -1;
 	unsigned int currcons;
 	unsigned long draw_from = 0, draw_to = 0;
@@ -2213,7 +2192,7 @@ static int do_con_write(struct tty_struct *tty, const unsigned char *buf, int co
 	charmask = himask ? 0x1ff : 0xff;
 
 	/* undraw cursor first */
-	if (con_is_fg(vc))
+	if (IS_FG(vc))
 		hide_cursor(vc);
 
 	param.vc = vc;
@@ -2368,13 +2347,12 @@ rescan_last_byte:
 				} else {
 					vc_attr = ((vc->vc_attr) & 0x88) | (((vc->vc_attr) & 0x70) >> 4) | (((vc->vc_attr) & 0x07) << 4);
 				}
-				con_flush(vc, draw_from, draw_to, &draw_x);
+				FLUSH
 			}
 
 			while (1) {
 				if (vc->vc_need_wrap || vc->vc_decim)
-					con_flush(vc, draw_from, draw_to,
-							&draw_x);
+					FLUSH
 				if (vc->vc_need_wrap) {
 					cr(vc);
 					lf(vc);
@@ -2385,7 +2363,7 @@ rescan_last_byte:
 					     ((vc_attr << 8) & ~himask) + ((tc & 0x100) ? himask : 0) + (tc & 0xff) :
 					     (vc_attr << 8) + tc,
 					   (u16 *) vc->vc_pos);
-				if (con_should_update(vc) && draw_x < 0) {
+				if (DO_UPDATE(vc) && draw_x < 0) {
 					draw_x = vc->vc_x;
 					draw_from = vc->vc_pos;
 				}
@@ -2404,8 +2382,9 @@ rescan_last_byte:
 			}
 			notify_write(vc, c);
 
-			if (inverse)
-				con_flush(vc, draw_from, draw_to, &draw_x);
+			if (inverse) {
+				FLUSH
+			}
 
 			if (rescan) {
 				rescan = 0;
@@ -2416,14 +2395,15 @@ rescan_last_byte:
 			}
 			continue;
 		}
-		con_flush(vc, draw_from, draw_to, &draw_x);
+		FLUSH
 		do_con_trol(tty, vc, orig);
 	}
-	con_flush(vc, draw_from, draw_to, &draw_x);
+	FLUSH
 	console_conditional_schedule();
 	console_unlock();
 	notify_update(vc);
 	return n;
+#undef FLUSH
 }
 
 /*
@@ -2457,7 +2437,7 @@ static void console_callback(struct work_struct *ignored)
 	if (scrollback_delta) {
 		struct vc_data *vc = vc_cons[fg_console].d;
 		clear_selection();
-		if (vc->vc_mode == KD_TEXT && vc->vc_sw->con_scrolldelta)
+		if (vc->vc_mode == KD_TEXT)
 			vc->vc_sw->con_scrolldelta(vc, scrollback_delta);
 		scrollback_delta = 0;
 	}
@@ -2569,7 +2549,7 @@ static void vt_console_print(struct console *co, const char *b, unsigned count)
 		goto quit;
 
 	/* undraw cursor first */
-	if (con_is_fg(vc))
+	if (IS_FG(vc))
 		hide_cursor(vc);
 
 	start = (ushort *)vc->vc_pos;
@@ -2580,7 +2560,7 @@ static void vt_console_print(struct console *co, const char *b, unsigned count)
 		c = *b++;
 		if (c == 10 || c == 13 || c == 8 || vc->vc_need_wrap) {
 			if (cnt > 0) {
-				if (con_is_visible(vc))
+				if (CON_IS_VISIBLE(vc))
 					vc->vc_sw->con_putcs(vc, start, cnt, vc->vc_y, vc->vc_x);
 				vc->vc_x += cnt;
 				if (vc->vc_need_wrap)
@@ -2612,7 +2592,7 @@ static void vt_console_print(struct console *co, const char *b, unsigned count)
 		myx++;
 	}
 	if (cnt > 0) {
-		if (con_is_visible(vc))
+		if (CON_IS_VISIBLE(vc))
 			vc->vc_sw->con_putcs(vc, start, cnt, vc->vc_y, vc->vc_x);
 		vc->vc_x += cnt;
 		if (vc->vc_x == vc->vc_cols) {
@@ -3053,24 +3033,17 @@ static ssize_t show_tty_active(struct device *dev,
 }
 static DEVICE_ATTR(active, S_IRUGO, show_tty_active, NULL);
 
-static struct attribute *vt_dev_attrs[] = {
-	&dev_attr_active.attr,
-	NULL
-};
-
-ATTRIBUTE_GROUPS(vt_dev);
-
 int __init vty_init(const struct file_operations *console_fops)
 {
 	cdev_init(&vc0_cdev, console_fops);
 	if (cdev_add(&vc0_cdev, MKDEV(TTY_MAJOR, 0), 1) ||
 	    register_chrdev_region(MKDEV(TTY_MAJOR, 0), 1, "/dev/vc/0") < 0)
 		panic("Couldn't register /dev/tty0 driver\n");
-	tty0dev = device_create_with_groups(tty_class, NULL,
-					    MKDEV(TTY_MAJOR, 0), NULL,
-					    vt_dev_groups, "tty0");
+	tty0dev = device_create(tty_class, NULL, MKDEV(TTY_MAJOR, 0), NULL, "tty0");
 	if (IS_ERR(tty0dev))
 		tty0dev = NULL;
+	else
+		WARN_ON(device_create_file(tty0dev, &dev_attr_active) < 0);
 
 	vcs_init();
 
@@ -3159,7 +3132,7 @@ static int do_bind_con_driver(const struct consw *csw, int first, int last,
 
 		j = i;
 
-		if (con_is_visible(vc)) {
+		if (CON_IS_VISIBLE(vc)) {
 			k = i;
 			save_screen(vc);
 		}
@@ -3181,11 +3154,11 @@ static int do_bind_con_driver(const struct consw *csw, int first, int last,
 
 	pr_info("Console: switching ");
 	if (!deflt)
-		printk(KERN_CONT "consoles %d-%d ", first+1, last+1);
+		printk("consoles %d-%d ", first+1, last+1);
 	if (j >= 0) {
 		struct vc_data *vc = vc_cons[j].d;
 
-		printk(KERN_CONT "to %s %s %dx%d\n",
+		printk("to %s %s %dx%d\n",
 		       vc->vc_can_do_color ? "colour" : "mono",
 		       desc, vc->vc_cols, vc->vc_rows);
 
@@ -3194,7 +3167,7 @@ static int do_bind_con_driver(const struct consw *csw, int first, int last,
 			update_screen(vc);
 		}
 	} else
-		printk(KERN_CONT "to %s\n", desc);
+		printk("to %s\n", desc);
 
 	retval = 0;
 err:
@@ -3204,6 +3177,22 @@ err:
 
 
 #ifdef CONFIG_VT_HW_CONSOLE_BINDING
+static int con_is_graphics(const struct consw *csw, int first, int last)
+{
+	int i, retval = 0;
+
+	for (i = first; i <= last; i++) {
+		struct vc_data *vc = vc_cons[i].d;
+
+		if (vc && vc->vc_mode == KD_GRAPHICS) {
+			retval = 1;
+			break;
+		}
+	}
+
+	return retval;
+}
+
 /* unlocked version of unbind_con_driver() */
 int do_unbind_con_driver(const struct consw *csw, int first, int last, int deflt)
 {
@@ -3289,7 +3278,8 @@ static int vt_bind(struct con_driver *con)
 	const struct consw *defcsw = NULL, *csw = NULL;
 	int i, more = 1, first = -1, last = -1, deflt = 0;
 
- 	if (!con->con || !(con->flag & CON_DRIVER_FLAG_MODULE))
+ 	if (!con->con || !(con->flag & CON_DRIVER_FLAG_MODULE) ||
+	    con_is_graphics(con->con, con->first, con->last))
 		goto err;
 
 	csw = con->con;
@@ -3322,8 +3312,11 @@ static int vt_bind(struct con_driver *con)
 		if (first == 0 && last == MAX_NR_CONSOLES -1)
 			deflt = 1;
 
-		if (first != -1)
+		if (first != -1) {
+			console_lock();
 			do_bind_con_driver(csw, first, last, deflt);
+			console_unlock();
+		}
 
 		first = -1;
 		last = -1;
@@ -3340,7 +3333,8 @@ static int vt_unbind(struct con_driver *con)
 	int i, more = 1, first = -1, last = -1, deflt = 0;
 	int ret;
 
- 	if (!con->con || !(con->flag & CON_DRIVER_FLAG_MODULE))
+ 	if (!con->con || !(con->flag & CON_DRIVER_FLAG_MODULE) ||
+	    con_is_graphics(con->con, con->first, con->last))
 		goto err;
 
 	csw = con->con;
@@ -3362,7 +3356,9 @@ static int vt_unbind(struct con_driver *con)
 			deflt = 1;
 
 		if (first != -1) {
+			console_lock();
 			ret = do_unbind_con_driver(csw, first, last, deflt);
+			console_unlock();
 			if (ret != 0)
 				return ret;
 		}
@@ -3392,14 +3388,10 @@ static ssize_t store_bind(struct device *dev, struct device_attribute *attr,
 	struct con_driver *con = dev_get_drvdata(dev);
 	int bind = simple_strtoul(buf, NULL, 0);
 
-	console_lock();
-
 	if (bind)
 		vt_bind(con);
 	else
 		vt_unbind(con);
-
-	console_unlock();
 
 	return count;
 }
@@ -3424,26 +3416,42 @@ static ssize_t show_name(struct device *dev, struct device_attribute *attr,
 
 }
 
-static DEVICE_ATTR(bind, S_IRUGO|S_IWUSR, show_bind, store_bind);
-static DEVICE_ATTR(name, S_IRUGO, show_name, NULL);
-
-static struct attribute *con_dev_attrs[] = {
-	&dev_attr_bind.attr,
-	&dev_attr_name.attr,
-	NULL
+static struct device_attribute device_attrs[] = {
+	__ATTR(bind, S_IRUGO|S_IWUSR, show_bind, store_bind),
+	__ATTR(name, S_IRUGO, show_name, NULL),
 };
-
-ATTRIBUTE_GROUPS(con_dev);
 
 static int vtconsole_init_device(struct con_driver *con)
 {
+	int i;
+	int error = 0;
+
 	con->flag |= CON_DRIVER_FLAG_ATTR;
-	return 0;
+	dev_set_drvdata(con->dev, con);
+	for (i = 0; i < ARRAY_SIZE(device_attrs); i++) {
+		error = device_create_file(con->dev, &device_attrs[i]);
+		if (error)
+			break;
+	}
+
+	if (error) {
+		while (--i >= 0)
+			device_remove_file(con->dev, &device_attrs[i]);
+		con->flag &= ~CON_DRIVER_FLAG_ATTR;
+	}
+
+	return error;
 }
 
 static void vtconsole_deinit_device(struct con_driver *con)
 {
-	con->flag &= ~CON_DRIVER_FLAG_ATTR;
+	int i;
+
+	if (con->flag & CON_DRIVER_FLAG_ATTR) {
+		for (i = 0; i < ARRAY_SIZE(device_attrs); i++)
+			device_remove_file(con->dev, &device_attrs[i]);
+		con->flag &= ~CON_DRIVER_FLAG_ATTR;
+	}
 }
 
 /**
@@ -3562,7 +3570,7 @@ static int do_register_con_driver(const struct consw *csw, int first, int last)
 	struct module *owner = csw->owner;
 	struct con_driver *con_driver;
 	const char *desc;
-	int i, retval;
+	int i, retval = 0;
 
 	WARN_CONSOLE_UNLOCKED();
 
@@ -3573,25 +3581,24 @@ static int do_register_con_driver(const struct consw *csw, int first, int last)
 		con_driver = &registered_con_driver[i];
 
 		/* already registered */
-		if (con_driver->con == csw) {
+		if (con_driver->con == csw)
 			retval = -EBUSY;
-			goto err;
-		}
 	}
 
-	desc = csw->con_startup();
-	if (!desc) {
-		retval = -ENODEV;
+	if (retval)
 		goto err;
-	}
+
+	desc = csw->con_startup();
+
+	if (!desc)
+		goto err;
 
 	retval = -EINVAL;
 
 	for (i = 0; i < MAX_NR_CON_DRIVER; i++) {
 		con_driver = &registered_con_driver[i];
 
-		if (con_driver->con == NULL &&
-		    !(con_driver->flag & CON_DRIVER_FLAG_ZOMBIE)) {
+		if (con_driver->con == NULL) {
 			con_driver->con = csw;
 			con_driver->desc = desc;
 			con_driver->node = i;
@@ -3607,11 +3614,11 @@ static int do_register_con_driver(const struct consw *csw, int first, int last)
 	if (retval)
 		goto err;
 
-	con_driver->dev =
-		device_create_with_groups(vtconsole_class, NULL,
-					  MKDEV(0, con_driver->node),
-					  con_driver, con_dev_groups,
-					  "vtcon%i", con_driver->node);
+	con_driver->dev = device_create(vtconsole_class, NULL,
+						MKDEV(0, con_driver->node),
+						NULL, "vtcon%i",
+						con_driver->node);
+
 	if (IS_ERR(con_driver->dev)) {
 		printk(KERN_WARNING "Unable to create device for %s; "
 		       "errno = %ld\n", con_driver->desc,
@@ -3652,21 +3659,18 @@ int do_unregister_con_driver(const struct consw *csw)
 	for (i = 0; i < MAX_NR_CON_DRIVER; i++) {
 		struct con_driver *con_driver = &registered_con_driver[i];
 
-		if (con_driver->con == csw) {
-			/*
-			 * Defer the removal of the sysfs entries since that
-			 * will acquire the kernfs s_active lock and we can't
-			 * acquire this lock while holding the console lock:
-			 * the unbind sysfs entry imposes already the opposite
-			 * order. Reset con already here to prevent any later
-			 * lookup to succeed and mark this slot as zombie, so
-			 * it won't get reused until we complete the removal
-			 * in the deferred work.
-			 */
+		if (con_driver->con == csw &&
+		    con_driver->flag & CON_DRIVER_FLAG_INIT) {
+			vtconsole_deinit_device(con_driver);
+			device_destroy(vtconsole_class,
+				       MKDEV(0, con_driver->node));
 			con_driver->con = NULL;
-			con_driver->flag = CON_DRIVER_FLAG_ZOMBIE;
-			schedule_work(&con_driver_unregister_work);
-
+			con_driver->desc = NULL;
+			con_driver->dev = NULL;
+			con_driver->node = 0;
+			con_driver->flag = 0;
+			con_driver->first = 0;
+			con_driver->last = 0;
 			return 0;
 		}
 	}
@@ -3674,39 +3678,6 @@ int do_unregister_con_driver(const struct consw *csw)
 	return -ENODEV;
 }
 EXPORT_SYMBOL_GPL(do_unregister_con_driver);
-
-static void con_driver_unregister_callback(struct work_struct *ignored)
-{
-	int i;
-
-	console_lock();
-
-	for (i = 0; i < MAX_NR_CON_DRIVER; i++) {
-		struct con_driver *con_driver = &registered_con_driver[i];
-
-		if (!(con_driver->flag & CON_DRIVER_FLAG_ZOMBIE))
-			continue;
-
-		console_unlock();
-
-		vtconsole_deinit_device(con_driver);
-		device_destroy(vtconsole_class, MKDEV(0, con_driver->node));
-
-		console_lock();
-
-		if (WARN_ON_ONCE(con_driver->con))
-			con_driver->con = NULL;
-		con_driver->desc = NULL;
-		con_driver->dev = NULL;
-		con_driver->node = 0;
-		WARN_ON_ONCE(con_driver->flag != CON_DRIVER_FLAG_ZOMBIE);
-		con_driver->flag = 0;
-		con_driver->first = 0;
-		con_driver->last = 0;
-	}
-
-	console_unlock();
-}
 
 /*
  *	If we support more console drivers, this function is used
@@ -3762,11 +3733,10 @@ static int __init vtconsole_class_init(void)
 		struct con_driver *con = &registered_con_driver[i];
 
 		if (con->con && !con->dev) {
-			con->dev =
-				device_create_with_groups(vtconsole_class, NULL,
-							  MKDEV(0, con->node),
-							  con, con_dev_groups,
-							  "vtcon%i", con->node);
+			con->dev = device_create(vtconsole_class, NULL,
+							 MKDEV(0, con->node),
+							 NULL, "vtcon%i",
+							 con->node);
 
 			if (IS_ERR(con->dev)) {
 				printk(KERN_WARNING "Unable to create "
@@ -3879,8 +3849,8 @@ void do_unblank_screen(int leaving_gfx)
 		return;
 	if (!vc_cons_allocated(fg_console)) {
 		/* impossible */
-		pr_warn("unblank_screen: tty %d not allocated ??\n",
-			fg_console + 1);
+		pr_warning("unblank_screen: tty %d not allocated ??\n",
+			   fg_console+1);
 		return;
 	}
 	vc = vc_cons[fg_console].d;
@@ -3923,6 +3893,10 @@ void unblank_screen(void)
  */
 static void blank_screen_t(unsigned long dummy)
 {
+	if (unlikely(!keventd_up())) {
+		mod_timer(&console_timer, jiffies + (blankinterval * HZ));
+		return;
+	}
 	blank_timer_expired = 1;
 	schedule_work(&console_work);
 }
@@ -3963,7 +3937,7 @@ static void set_palette(struct vc_data *vc)
 {
 	WARN_CONSOLE_UNLOCKED();
 
-	if (vc->vc_mode != KD_GRAPHICS && vc->vc_sw->con_set_palette)
+	if (vc->vc_mode != KD_GRAPHICS)
 		vc->vc_sw->con_set_palette(vc, color_table);
 }
 
@@ -4244,7 +4218,6 @@ unsigned short *screen_pos(struct vc_data *vc, int w_offset, int viewed)
 {
 	return screenpos(vc, 2 * w_offset, viewed);
 }
-EXPORT_SYMBOL_GPL(screen_pos);
 
 void getconsxy(struct vc_data *vc, unsigned char *p)
 {
@@ -4279,46 +4252,6 @@ void vcs_scr_updated(struct vc_data *vc)
 {
 	notify_update(vc);
 }
-
-void vc_scrolldelta_helper(struct vc_data *c, int lines,
-		unsigned int rolled_over, void *base, unsigned int size)
-{
-	unsigned long ubase = (unsigned long)base;
-	ptrdiff_t scr_end = (void *)c->vc_scr_end - base;
-	ptrdiff_t vorigin = (void *)c->vc_visible_origin - base;
-	ptrdiff_t origin = (void *)c->vc_origin - base;
-	int margin = c->vc_size_row * 4;
-	int from, wrap, from_off, avail;
-
-	/* Turn scrollback off */
-	if (!lines) {
-		c->vc_visible_origin = c->vc_origin;
-		return;
-	}
-
-	/* Do we have already enough to allow jumping from 0 to the end? */
-	if (rolled_over > scr_end + margin) {
-		from = scr_end;
-		wrap = rolled_over + c->vc_size_row;
-	} else {
-		from = 0;
-		wrap = size;
-	}
-
-	from_off = (vorigin - from + wrap) % wrap + lines * c->vc_size_row;
-	avail = (origin - from + wrap) % wrap;
-
-	/* Only a little piece would be left? Show all incl. the piece! */
-	if (avail < 2 * margin)
-		margin = 0;
-	if (from_off < margin)
-		from_off = 0;
-	if (from_off > avail - margin)
-		from_off = avail;
-
-	c->vc_visible_origin = ubase + (from + from_off) % wrap;
-}
-EXPORT_SYMBOL_GPL(vc_scrolldelta_helper);
 
 /*
  *	Visible symbols for modules

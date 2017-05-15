@@ -28,6 +28,7 @@ static char *serial_version = "$Revision: 1.25 $";
 #include <linux/bitops.h>
 #include <linux/seq_file.h>
 #include <linux/delay.h>
+#include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/io.h>
 
@@ -53,6 +54,10 @@ static char *serial_version = "$Revision: 1.25 $";
 #if defined(CONFIG_ETRAX_SERIAL_RX_TIMEOUT_TICKS) && \
            (CONFIG_ETRAX_SERIAL_RX_TIMEOUT_TICKS == 0)
 #error "RX_TIMEOUT_TICKS == 0 not allowed, use 1"
+#endif
+
+#if defined(CONFIG_ETRAX_RS485_ON_PA) && defined(CONFIG_ETRAX_RS485_ON_PORT_G)
+#error "Disable either CONFIG_ETRAX_RS485_ON_PA or CONFIG_ETRAX_RS485_ON_PORT_G"
 #endif
 
 /*
@@ -450,6 +455,30 @@ static struct e100_serial rs_table[] = {
 static struct fast_timer fast_timers[NR_PORTS];
 #endif
 
+#ifdef CONFIG_ETRAX_SERIAL_PROC_ENTRY
+#define PROCSTAT(x) x
+struct ser_statistics_type {
+	int overrun_cnt;
+	int early_errors_cnt;
+	int ser_ints_ok_cnt;
+	int errors_cnt;
+	unsigned long int processing_flip;
+	unsigned long processing_flip_still_room;
+	unsigned long int timeout_flush_cnt;
+	int rx_dma_ints;
+	int tx_dma_ints;
+	int rx_tot;
+	int tx_tot;
+};
+
+static struct ser_statistics_type ser_stat[NR_PORTS];
+
+#else
+
+#define PROCSTAT(x)
+
+#endif /* CONFIG_ETRAX_SERIAL_PROC_ENTRY */
+
 /* RS-485 */
 #if defined(CONFIG_ETRAX_RS485)
 #ifdef CONFIG_ETRAX_FAST_TIMER
@@ -457,6 +486,9 @@ static struct fast_timer fast_timers_rs485[NR_PORTS];
 #endif
 #if defined(CONFIG_ETRAX_RS485_ON_PA)
 static int rs485_pa_bit = CONFIG_ETRAX_RS485_ON_PA_BIT;
+#endif
+#if defined(CONFIG_ETRAX_RS485_ON_PORT_G)
+static int rs485_port_g_bit = CONFIG_ETRAX_RS485_ON_PORT_G_BIT;
 #endif
 #endif
 
@@ -707,10 +739,10 @@ static unsigned char dummy_ser[NR_PORTS] = {0xFF, 0xFF, 0xFF,0xFF};
     defined(CONFIG_ETRAX_SER1_DTR_RI_DSR_CD_MIXED) || \
     defined(CONFIG_ETRAX_SER2_DTR_RI_DSR_CD_MIXED) || \
     defined(CONFIG_ETRAX_SER3_DTR_RI_DSR_CD_MIXED)
-#define ETRAX_SERX_DTR_RI_DSR_CD_MIXED
+#define CONFIG_ETRAX_SERX_DTR_RI_DSR_CD_MIXED
 #endif
 
-#ifdef ETRAX_SERX_DTR_RI_DSR_CD_MIXED
+#ifdef CONFIG_ETRAX_SERX_DTR_RI_DSR_CD_MIXED
 /* The pins can be mixed on PA and PB */
 #define CONTROL_PINS_PORT_NOT_USED(line) \
   &dummy_ser[line], &dummy_ser[line], \
@@ -803,7 +835,7 @@ static const struct control_pins e100_modem_pins[NR_PORTS] =
 #endif
 	}
 };
-#else  /* ETRAX_SERX_DTR_RI_DSR_CD_MIXED */
+#else  /* CONFIG_ETRAX_SERX_DTR_RI_DSR_CD_MIXED */
 
 /* All pins are on either PA or PB for each serial port */
 #define CONTROL_PINS_PORT_NOT_USED(line) \
@@ -885,7 +917,7 @@ static const struct control_pins e100_modem_pins[NR_PORTS] =
 #endif
 	}
 };
-#endif /* !ETRAX_SERX_DTR_RI_DSR_CD_MIXED */
+#endif /* !CONFIG_ETRAX_SERX_DTR_RI_DSR_CD_MIXED */
 
 #define E100_RTS_MASK 0x20
 #define E100_CTS_MASK 0x40
@@ -1335,6 +1367,16 @@ e100_enable_rs485(struct tty_struct *tty, struct serial_rs485 *r)
 #if defined(CONFIG_ETRAX_RS485_ON_PA)
 	*R_PORT_PA_DATA = port_pa_data_shadow |= (1 << rs485_pa_bit);
 #endif
+#if defined(CONFIG_ETRAX_RS485_ON_PORT_G)
+	REG_SHADOW_SET(R_PORT_G_DATA,  port_g_data_shadow,
+		       rs485_port_g_bit, 1);
+#endif
+#if defined(CONFIG_ETRAX_RS485_LTC1387)
+	REG_SHADOW_SET(R_PORT_G_DATA, port_g_data_shadow,
+		       CONFIG_ETRAX_RS485_LTC1387_DXEN_PORT_G_BIT, 1);
+	REG_SHADOW_SET(R_PORT_G_DATA, port_g_data_shadow,
+		       CONFIG_ETRAX_RS485_LTC1387_RXEN_PORT_G_BIT, 1);
+#endif
 
 	info->rs485 = *r;
 
@@ -1412,8 +1454,9 @@ rs_stop(struct tty_struct *tty)
 		xoff = IO_FIELD(R_SERIAL0_XOFF, xoff_char,
 				STOP_CHAR(info->port.tty));
 		xoff |= IO_STATE(R_SERIAL0_XOFF, tx_stop, stop);
-		if (I_IXON(tty))
+		if (tty->termios.c_iflag & IXON ) {
 			xoff |= IO_STATE(R_SERIAL0_XOFF, auto_xoff, enable);
+		}
 
 		*((unsigned long *)&info->ioport[REG_XOFF]) = xoff;
 		local_irq_restore(flags);
@@ -1434,8 +1477,9 @@ rs_start(struct tty_struct *tty)
 					 info->xmit.tail,SERIAL_XMIT_SIZE)));
 		xoff = IO_FIELD(R_SERIAL0_XOFF, xoff_char, STOP_CHAR(tty));
 		xoff |= IO_STATE(R_SERIAL0_XOFF, tx_stop, enable);
-		if (I_IXON(tty))
+		if (tty->termios.c_iflag & IXON ) {
 			xoff |= IO_STATE(R_SERIAL0_XOFF, auto_xoff, enable);
+		}
 
 		*((unsigned long *)&info->ioport[REG_XOFF]) = xoff;
 		if (!info->uses_dma_out &&
@@ -1632,8 +1676,7 @@ alloc_recv_buffer(unsigned int size)
 {
 	struct etrax_recv_buffer *buffer;
 
-	buffer = kmalloc(sizeof *buffer + size, GFP_ATOMIC);
-	if (!buffer)
+	if (!(buffer = kmalloc(sizeof *buffer + size, GFP_ATOMIC)))
 		return NULL;
 
 	buffer->next = NULL;
@@ -1669,8 +1712,7 @@ add_char_and_flag(struct e100_serial *info, unsigned char data, unsigned char fl
 {
 	struct etrax_recv_buffer *buffer;
 	if (info->uses_dma_in) {
-		buffer = alloc_recv_buffer(4);
-		if (!buffer)
+		if (!(buffer = alloc_recv_buffer(4)))
 			return 0;
 
 		buffer->length = 1;
@@ -1708,8 +1750,7 @@ static unsigned int handle_descr_data(struct e100_serial *info,
 
 	append_recv_buffer(info, buffer);
 
-	buffer = alloc_recv_buffer(SERIAL_DESCR_BUF_SIZE);
-	if (!buffer)
+	if (!(buffer = alloc_recv_buffer(SERIAL_DESCR_BUF_SIZE)))
 		panic("%s: Failed to allocate memory for receive buffer!\n", __func__);
 
 	descr->buf = virt_to_phys(buffer->buffer);
@@ -1800,6 +1841,7 @@ static void receive_chars_dma(struct e100_serial *info)
 		 */
 		unsigned char data = info->ioport[REG_DATA];
 
+		PROCSTAT(ser_stat[info->line].errors_cnt++);
 		DEBUG_LOG(info->line, "#dERR: s d 0x%04X\n",
 			  ((rstat & SER_ERROR_MASK) << 8) | data);
 
@@ -1825,8 +1867,7 @@ static int start_recv_dma(struct e100_serial *info)
 
 	/* Set up the receiving descriptors */
 	for (i = 0; i < SERIAL_RECV_DESCRIPTORS; i++) {
-		buffer = alloc_recv_buffer(SERIAL_DESCR_BUF_SIZE);
-		if (!buffer)
+		if (!(buffer = alloc_recv_buffer(SERIAL_DESCR_BUF_SIZE)))
 			panic("%s: Failed to allocate memory for receive buffer!\n", __func__);
 
 		descr[i].ctrl = d_int;
@@ -1902,6 +1943,7 @@ tr_interrupt(int irq, void *dev_id)
 			/* Read jiffies_usec first,
 			 * we want this time to be as late as possible
 			 */
+ 			PROCSTAT(ser_stat[info->line].tx_dma_ints++);
 			info->last_tx_active_usec = GET_JIFFIES_USEC();
 			info->last_tx_active = jiffies;
 			transmit_chars_dma(info);
@@ -1980,6 +2022,7 @@ static int force_eop_if_needed(struct e100_serial *info)
 	 */
 	if (!info->forced_eop) {
 		info->forced_eop = 1;
+		PROCSTAT(ser_stat[info->line].timeout_flush_cnt++);
 		TIMERD(DEBUG_LOG(info->line, "timeout EOP %i\n", info->line));
 		FORCE_EOP(info);
 	}
@@ -2331,6 +2374,7 @@ static void handle_ser_rx_interrupt(struct e100_serial *info)
 			DEBUG_LOG(info->line, "#iERR s d %04X\n",
 			          ((rstat & SER_ERROR_MASK) << 8) | data);
 		}
+		PROCSTAT(ser_stat[info->line].early_errors_cnt++);
 	} else { /* It was a valid byte, now let the DMA do the rest */
 		unsigned long curr_time_u = GET_JIFFIES_USEC();
 		unsigned long curr_time = jiffies;
@@ -2363,6 +2407,7 @@ static void handle_ser_rx_interrupt(struct e100_serial *info)
 		DINTR2(DEBUG_LOG(info->line, "ser_rx OK %d\n", info->line));
 		info->break_detected_cnt = 0;
 
+		PROCSTAT(ser_stat[info->line].ser_ints_ok_cnt++);
 	}
 	/* Restarting the DMA never hurts */
 	*info->icmdadr = IO_STATE(R_DMA_CH6_CMD, cmd, restart);
@@ -2598,7 +2643,7 @@ startup(struct e100_serial * info)
 
 	/* if it was already initialized, skip this */
 
-	if (tty_port_initialized(&info->port)) {
+	if (info->port.flags & ASYNC_INITIALIZED) {
 		local_irq_restore(flags);
 		free_page(xmit_page);
 		return 0;
@@ -2702,7 +2747,7 @@ startup(struct e100_serial * info)
 	e100_rts(info, 1);
 	e100_dtr(info, 1);
 
-	tty_port_set_initialized(&info->port, 1);
+	info->port.flags |= ASYNC_INITIALIZED;
 
 	local_irq_restore(flags);
 	return 0;
@@ -2744,7 +2789,7 @@ shutdown(struct e100_serial * info)
 		info->tr_running = 0;
 	}
 
-	if (!tty_port_initialized(&info->port))
+	if (!(info->port.flags & ASYNC_INITIALIZED))
 		return;
 
 #ifdef SERIAL_DEBUG_OPEN
@@ -2775,7 +2820,7 @@ shutdown(struct e100_serial * info)
 	if (info->port.tty)
 		set_bit(TTY_IO_ERROR, &info->port.tty->flags);
 
-	tty_port_set_initialized(&info->port, 0);
+	info->port.flags &= ~ASYNC_INITIALIZED;
 	local_irq_restore(flags);
 }
 
@@ -2822,6 +2867,19 @@ change_speed(struct e100_serial *info)
 			*R_SERIAL_PRESCALE = divisor;
 			info->baud = SERIAL_PRESCALE_BASE/divisor;
 		}
+#ifdef CONFIG_ETRAX_EXTERN_PB6CLK_ENABLED
+		else if ((info->baud_base==CONFIG_ETRAX_EXTERN_PB6CLK_FREQ/8 &&
+			  info->custom_divisor == 1) ||
+			 (info->baud_base==CONFIG_ETRAX_EXTERN_PB6CLK_FREQ &&
+			  info->custom_divisor == 8)) {
+				/* ext_clk selected */
+				alt_source =
+					IO_STATE(R_ALT_SER_BAUDRATE, ser0_rec, extern) |
+					IO_STATE(R_ALT_SER_BAUDRATE, ser0_tr, extern);
+				DBAUD(printk("using external baudrate: %lu\n", CONFIG_ETRAX_EXTERN_PB6CLK_FREQ/8));
+				info->baud = CONFIG_ETRAX_EXTERN_PB6CLK_FREQ/8;
+			}
+#endif
 		else
 		{
 			/* Bad baudbase, we don't support using timer0
@@ -2965,7 +3023,7 @@ static int rs_raw_write(struct tty_struct *tty,
 
 	local_save_flags(flags);
 	DFLOW(DEBUG_LOG(info->line, "write count %i ", count));
-	DFLOW(DEBUG_LOG(info->line, "ldisc\n"));
+	DFLOW(DEBUG_LOG(info->line, "ldisc %i\n", tty->ldisc.chars_in_buffer(tty)));
 
 
 	/* The local_irq_disable/restore_flags pairs below are needed
@@ -3158,12 +3216,15 @@ rs_throttle(struct tty_struct * tty)
 {
 	struct e100_serial *info = (struct e100_serial *)tty->driver_data;
 #ifdef SERIAL_DEBUG_THROTTLE
-	printk("throttle %s ....\n", tty_name(tty));
+	char	buf[64];
+
+	printk("throttle %s: %lu....\n", tty_name(tty, buf),
+	       (unsigned long)tty->ldisc.chars_in_buffer(tty));
 #endif
-	DFLOW(DEBUG_LOG(info->line,"rs_throttle\n"));
+	DFLOW(DEBUG_LOG(info->line,"rs_throttle %lu\n", tty->ldisc.chars_in_buffer(tty)));
 
 	/* Do RTS before XOFF since XOFF might take some time */
-	if (C_CRTSCTS(tty)) {
+	if (tty->termios.c_cflag & CRTSCTS) {
 		/* Turn off RTS line */
 		e100_rts(info, 0);
 	}
@@ -3177,12 +3238,15 @@ rs_unthrottle(struct tty_struct * tty)
 {
 	struct e100_serial *info = (struct e100_serial *)tty->driver_data;
 #ifdef SERIAL_DEBUG_THROTTLE
-	printk("unthrottle %s ....\n", tty_name(tty));
+	char	buf[64];
+
+	printk("unthrottle %s: %lu....\n", tty_name(tty, buf),
+	       (unsigned long)tty->ldisc.chars_in_buffer(tty));
 #endif
-	DFLOW(DEBUG_LOG(info->line,"rs_unthrottle ldisc\n"));
+	DFLOW(DEBUG_LOG(info->line,"rs_unthrottle ldisc %d\n", tty->ldisc.chars_in_buffer(tty)));
 	DFLOW(DEBUG_LOG(info->line,"rs_unthrottle flip.count: %i\n", tty->flip.count));
 	/* Do RTS before XOFF since XOFF might take some time */
-	if (C_CRTSCTS(tty)) {
+	if (tty->termios.c_cflag & CRTSCTS) {
 		/* Assert RTS line  */
 		e100_rts(info, 1);
 	}
@@ -3213,6 +3277,8 @@ get_serial_info(struct e100_serial * info,
 	 * should set them to something else than 0.
 	 */
 
+	if (!retinfo)
+		return -EFAULT;
 	memset(&tmp, 0, sizeof(tmp));
 	tmp.type = info->type;
 	tmp.line = info->line;
@@ -3270,9 +3336,9 @@ set_serial_info(struct e100_serial *info,
 	info->port.low_latency = (info->port.flags & ASYNC_LOW_LATENCY) ? 1 : 0;
 
  check_and_exit:
-	if (tty_port_initialized(&info->port))
+	if (info->port.flags & ASYNC_INITIALIZED) {
 		change_speed(info);
-	else
+	} else
 		retval = startup(info);
 	return retval;
 }
@@ -3442,7 +3508,7 @@ rs_ioctl(struct tty_struct *tty,
 	if ((cmd != TIOCGSERIAL) && (cmd != TIOCSSERIAL) &&
 	    (cmd != TIOCSERCONFIG) && (cmd != TIOCSERGWILD)  &&
 	    (cmd != TIOCSERSWILD) && (cmd != TIOCSERGSTRUCT)) {
-		if (tty_io_error(tty))
+		if (tty->flags & (1 << TTY_IO_ERROR))
 			return -EIO;
 	}
 
@@ -3548,7 +3614,8 @@ rs_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 	change_speed(info);
 
 	/* Handle turning off CRTSCTS */
-	if ((old_termios->c_cflag & CRTSCTS) && !C_CRTSCTS(tty))
+	if ((old_termios->c_cflag & CRTSCTS) &&
+	    !(tty->termios.c_cflag & CRTSCTS))
 		rs_start(tty);
 
 }
@@ -3607,6 +3674,13 @@ rs_close(struct tty_struct *tty, struct file * filp)
 		local_irq_restore(flags);
 		return;
 	}
+	info->port.flags |= ASYNC_CLOSING;
+	/*
+	 * Save the termios structure, since this port may have
+	 * separate termios for callout and dialin.
+	 */
+	if (info->port.flags & ASYNC_NORMAL_ACTIVE)
+		info->normal_termios = tty->termios;
 	/*
 	 * Now we wait for the transmit buffer to clear; and we notify
 	 * the line discipline to only process XON/XOFF characters.
@@ -3625,7 +3699,7 @@ rs_close(struct tty_struct *tty, struct file * filp)
 	e100_disable_rx(info);
 	e100_disable_rx_irq(info);
 
-	if (tty_port_initialized(&info->port)) {
+	if (info->port.flags & ASYNC_INITIALIZED) {
 		/*
 		 * Before we drop DTR, make sure the UART transmitter
 		 * has completely drained; this is especially
@@ -3645,8 +3719,9 @@ rs_close(struct tty_struct *tty, struct file * filp)
 			schedule_timeout_interruptible(info->port.close_delay);
 		wake_up_interruptible(&info->port.open_wait);
 	}
+	info->port.flags &= ~(ASYNC_NORMAL_ACTIVE|ASYNC_CLOSING);
+	wake_up_interruptible(&info->port.close_wait);
 	local_irq_restore(flags);
-	tty_port_set_active(&info->port, 0);
 
 	/* port closed */
 
@@ -3655,6 +3730,16 @@ rs_close(struct tty_struct *tty, struct file * filp)
 		info->rs485.flags &= ~(SER_RS485_ENABLED);
 #if defined(CONFIG_ETRAX_RS485_ON_PA)
 		*R_PORT_PA_DATA = port_pa_data_shadow &= ~(1 << rs485_pa_bit);
+#endif
+#if defined(CONFIG_ETRAX_RS485_ON_PORT_G)
+		REG_SHADOW_SET(R_PORT_G_DATA, port_g_data_shadow,
+			       rs485_port_g_bit, 0);
+#endif
+#if defined(CONFIG_ETRAX_RS485_LTC1387)
+		REG_SHADOW_SET(R_PORT_G_DATA, port_g_data_shadow,
+			       CONFIG_ETRAX_RS485_LTC1387_DXEN_PORT_G_BIT, 0);
+		REG_SHADOW_SET(R_PORT_G_DATA, port_g_data_shadow,
+			       CONFIG_ETRAX_RS485_LTC1387_RXEN_PORT_G_BIT, 0);
 #endif
 	}
 #endif
@@ -3729,7 +3814,7 @@ rs_hangup(struct tty_struct *tty)
 	shutdown(info);
 	info->event = 0;
 	info->port.count = 0;
-	tty_port_set_active(&info->port, 0);
+	info->port.flags &= ~ASYNC_NORMAL_ACTIVE;
 	info->port.tty = NULL;
 	wake_up_interruptible(&info->port.open_wait);
 }
@@ -3746,19 +3831,39 @@ block_til_ready(struct tty_struct *tty, struct file * filp,
 	DECLARE_WAITQUEUE(wait, current);
 	unsigned long	flags;
 	int		retval;
-	int		do_clocal = 0;
+	int		do_clocal = 0, extra_count = 0;
+
+	/*
+	 * If the device is in the middle of being closed, then block
+	 * until it's done, and then try again.
+	 */
+	if (tty_hung_up_p(filp) ||
+	    (info->port.flags & ASYNC_CLOSING)) {
+		wait_event_interruptible_tty(tty, info->port.close_wait,
+			!(info->port.flags & ASYNC_CLOSING));
+#ifdef SERIAL_DO_RESTART
+		if (info->port.flags & ASYNC_HUP_NOTIFY)
+			return -EAGAIN;
+		else
+			return -ERESTARTSYS;
+#else
+		return -EAGAIN;
+#endif
+	}
 
 	/*
 	 * If non-blocking mode is set, or the port is not enabled,
 	 * then make the check up front and then exit.
 	 */
-	if ((filp->f_flags & O_NONBLOCK) || tty_io_error(tty)) {
-		tty_port_set_active(&info->port, 1);
+	if ((filp->f_flags & O_NONBLOCK) ||
+	    (tty->flags & (1 << TTY_IO_ERROR))) {
+		info->port.flags |= ASYNC_NORMAL_ACTIVE;
 		return 0;
 	}
 
-	if (C_CLOCAL(tty))
-		do_clocal = 1;
+	if (tty->termios.c_cflag & CLOCAL) {
+			do_clocal = 1;
+	}
 
 	/*
 	 * Block waiting for the carrier detect and the line to become
@@ -3774,7 +3879,10 @@ block_til_ready(struct tty_struct *tty, struct file * filp,
 	       info->line, info->port.count);
 #endif
 	local_irq_save(flags);
-	info->port.count--;
+	if (!tty_hung_up_p(filp)) {
+		extra_count++;
+		info->port.count--;
+	}
 	local_irq_restore(flags);
 	info->port.blocked_open++;
 	while (1) {
@@ -3784,7 +3892,8 @@ block_til_ready(struct tty_struct *tty, struct file * filp,
 		e100_dtr(info, 1);
 		local_irq_restore(flags);
 		set_current_state(TASK_INTERRUPTIBLE);
-		if (tty_hung_up_p(filp) || !tty_port_initialized(&info->port)) {
+		if (tty_hung_up_p(filp) ||
+		    !(info->port.flags & ASYNC_INITIALIZED)) {
 #ifdef SERIAL_DO_RESTART
 			if (info->port.flags & ASYNC_HUP_NOTIFY)
 				retval = -EAGAIN;
@@ -3795,7 +3904,7 @@ block_til_ready(struct tty_struct *tty, struct file * filp,
 #endif
 			break;
 		}
-		if (do_clocal)
+		if (!(info->port.flags & ASYNC_CLOSING) && do_clocal)
 			/* && (do_clocal || DCD_IS_ASSERTED) */
 			break;
 		if (signal_pending(current)) {
@@ -3812,7 +3921,7 @@ block_til_ready(struct tty_struct *tty, struct file * filp,
 	}
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(&info->port.open_wait, &wait);
-	if (!tty_hung_up_p(filp))
+	if (extra_count)
 		info->port.count++;
 	info->port.blocked_open--;
 #ifdef SERIAL_DEBUG_OPEN
@@ -3821,7 +3930,7 @@ block_til_ready(struct tty_struct *tty, struct file * filp,
 #endif
 	if (retval)
 		return retval;
-	tty_port_set_active(&info->port, 1);
+	info->port.flags |= ASYNC_NORMAL_ACTIVE;
 	return 0;
 }
 
@@ -3863,6 +3972,21 @@ rs_open(struct tty_struct *tty, struct file * filp)
 	info->port.tty = tty;
 
 	info->port.low_latency = !!(info->port.flags & ASYNC_LOW_LATENCY);
+
+	/*
+	 * If the port is in the middle of closing, bail out now
+	 */
+	if (tty_hung_up_p(filp) ||
+	    (info->port.flags & ASYNC_CLOSING)) {
+		wait_event_interruptible_tty(tty, info->port.close_wait,
+			!(info->port.flags & ASYNC_CLOSING));
+#ifdef SERIAL_DO_RESTART
+		return ((info->port.flags & ASYNC_HUP_NOTIFY) ?
+			-EAGAIN : -ERESTARTSYS);
+#else
+		return -EAGAIN;
+#endif
+	}
 
 	/*
 	 * If DMA is enabled try to allocate the irq's.
@@ -3955,6 +4079,11 @@ rs_open(struct tty_struct *tty, struct file * filp)
 			deinit_port(info);
 
 		return retval;
+	}
+
+	if ((info->port.count == 1) && (info->port.flags & ASYNC_SPLIT_TERMIOS)) {
+		tty->termios = info->normal_termios;
+		change_speed(info);
 	}
 
 #ifdef SERIAL_DEBUG_OPEN
@@ -4095,7 +4224,7 @@ static void show_serial_version(void)
 	       &serial_version[11]); /* "$Revision: x.yy" */
 }
 
-/* rs_init inits the driver at boot (using the initcall chain) */
+/* rs_init inits the driver at boot (using the module_init chain) */
 
 static const struct tty_operations rs_ops = {
 	.open = rs_open,
@@ -4150,6 +4279,15 @@ static int __init rs_init(void)
 		return -EBUSY;
 	}
 #endif
+#if defined(CONFIG_ETRAX_RS485_ON_PORT_G)
+	if (cris_io_interface_allocate_pins(if_serial_0, 'g', rs485_pa_bit,
+			rs485_port_g_bit)) {
+		printk(KERN_ERR "ETRAX100LX serial: Could not allocate "
+			"RS485 pin\n");
+		put_tty_driver(driver);
+		return -EBUSY;
+	}
+#endif
 #endif
 
 	/* Initialize the tty_driver structure */
@@ -4194,6 +4332,7 @@ static int __init rs_init(void)
 		info->custom_divisor = 0;
 		info->x_char = 0;
 		info->event = 0;
+		info->normal_termios = driver->init_termios;
 		info->xmit.buf = NULL;
 		info->xmit.tail = info->xmit.head = 0;
 		info->first_recv_buffer = info->last_recv_buffer = NULL;
@@ -4244,4 +4383,5 @@ static int __init rs_init(void)
 }
 
 /* this makes sure that rs_init is called during kernel boot */
-device_initcall(rs_init);
+
+module_init(rs_init);

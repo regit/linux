@@ -34,7 +34,9 @@ int btrfs_decompress(int type, unsigned char *data_in, struct page *dest_page,
 		     unsigned long start_byte, size_t srclen, size_t destlen);
 int btrfs_decompress_buf2page(char *buf, unsigned long buf_start,
 			      unsigned long total_out, u64 disk_start,
-			      struct bio *bio);
+			      struct bio_vec *bvec, int vcnt,
+			      unsigned long *pg_index,
+			      unsigned long *pg_offset);
 
 int btrfs_submit_compressed_write(struct inode *inode, u64 start,
 				  unsigned long len, u64 disk_start,
@@ -43,14 +45,6 @@ int btrfs_submit_compressed_write(struct inode *inode, u64 start,
 				  unsigned long nr_pages);
 int btrfs_submit_compressed_read(struct inode *inode, struct bio *bio,
 				 int mirror_num, unsigned long bio_flags);
-
-enum btrfs_compression_type {
-	BTRFS_COMPRESS_NONE  = 0,
-	BTRFS_COMPRESS_ZLIB  = 1,
-	BTRFS_COMPRESS_LZO   = 2,
-	BTRFS_COMPRESS_TYPES = 2,
-	BTRFS_COMPRESS_LAST  = 3,
-};
 
 struct btrfs_compress_op {
 	struct list_head *(*alloc_workspace)(void);
@@ -67,10 +61,11 @@ struct btrfs_compress_op {
 			      unsigned long *total_out,
 			      unsigned long max_out);
 
-	int (*decompress_bio)(struct list_head *workspace,
+	int (*decompress_biovec)(struct list_head *workspace,
 				 struct page **pages_in,
 				 u64 disk_start,
-				 struct bio *orig_bio,
+				 struct bio_vec *bvec,
+				 int vcnt,
 				 size_t srclen);
 
 	int (*decompress)(struct list_head *workspace,
@@ -80,7 +75,7 @@ struct btrfs_compress_op {
 			  size_t srclen, size_t destlen);
 };
 
-extern const struct btrfs_compress_op btrfs_zlib_compress;
-extern const struct btrfs_compress_op btrfs_lzo_compress;
+extern struct btrfs_compress_op btrfs_zlib_compress;
+extern struct btrfs_compress_op btrfs_lzo_compress;
 
 #endif

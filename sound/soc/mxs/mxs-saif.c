@@ -381,17 +381,7 @@ static int mxs_saif_startup(struct snd_pcm_substream *substream,
 	__raw_writel(BM_SAIF_CTRL_CLKGATE,
 		saif->base + SAIF_CTRL + MXS_CLR_ADDR);
 
-	clk_prepare(saif->clk);
-
 	return 0;
-}
-
-static void mxs_saif_shutdown(struct snd_pcm_substream *substream,
-			      struct snd_soc_dai *cpu_dai)
-{
-	struct mxs_saif *saif = snd_soc_dai_get_drvdata(cpu_dai);
-
-	clk_unprepare(saif->clk);
 }
 
 /*
@@ -418,7 +408,7 @@ static int mxs_saif_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	stat = __raw_readl(saif->base + SAIF_STAT);
-	if (!saif->mclk_in_use && (stat & BM_SAIF_STAT_BUSY)) {
+	if (stat & BM_SAIF_STAT_BUSY) {
 		dev_err(cpu_dai->dev, "error: busy\n");
 		return -EBUSY;
 	}
@@ -434,6 +424,8 @@ static int mxs_saif_hw_params(struct snd_pcm_substream *substream,
 		return ret;
 	}
 
+	/* prepare clk in hw_param, enable in trigger */
+	clk_prepare(saif->clk);
 	if (saif != master_saif) {
 		/*
 		* Set an initial clock rate for the saif internal logic to work
@@ -619,7 +611,6 @@ static int mxs_saif_trigger(struct snd_pcm_substream *substream, int cmd,
 
 static const struct snd_soc_dai_ops mxs_saif_dai_ops = {
 	.startup = mxs_saif_startup,
-	.shutdown = mxs_saif_shutdown,
 	.trigger = mxs_saif_trigger,
 	.prepare = mxs_saif_prepare,
 	.hw_params = mxs_saif_hw_params,
@@ -719,7 +710,7 @@ static int mxs_saif_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct resource *iores;
 	struct mxs_saif *saif;
-	int irq, ret = 0;
+	int ret = 0;
 	struct device_node *master;
 
 	if (!np)
@@ -735,11 +726,6 @@ static int mxs_saif_probe(struct platform_device *pdev)
 	else
 		saif->id = ret;
 
-	if (saif->id >= ARRAY_SIZE(mxs_saif)) {
-		dev_err(&pdev->dev, "get wrong saif id\n");
-		return -EINVAL;
-	}
-
 	/*
 	 * If there is no "fsl,saif-master" phandle, it's a saif
 	 * master.  Otherwise, it's a slave and its phandle points
@@ -754,11 +740,11 @@ static int mxs_saif_probe(struct platform_device *pdev)
 			return ret;
 		else
 			saif->master_id = ret;
+	}
 
-		if (saif->master_id >= ARRAY_SIZE(mxs_saif)) {
-			dev_err(&pdev->dev, "get wrong master id\n");
-			return -EINVAL;
-		}
+	if (saif->master_id >= ARRAY_SIZE(mxs_saif)) {
+		dev_err(&pdev->dev, "get wrong master id\n");
+		return -EINVAL;
 	}
 
 	mxs_saif[saif->id] = saif;
@@ -777,17 +763,17 @@ static int mxs_saif_probe(struct platform_device *pdev)
 	if (IS_ERR(saif->base))
 		return PTR_ERR(saif->base);
 
-	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		ret = irq;
+	saif->irq = platform_get_irq(pdev, 0);
+	if (saif->irq < 0) {
+		ret = saif->irq;
 		dev_err(&pdev->dev, "failed to get irq resource: %d\n",
 			ret);
 		return ret;
 	}
 
 	saif->dev = &pdev->dev;
-	ret = devm_request_irq(&pdev->dev, irq, mxs_saif_irq, 0,
-			       dev_name(&pdev->dev), saif);
+	ret = devm_request_irq(&pdev->dev, saif->irq, mxs_saif_irq, 0,
+			       "mxs-saif", saif);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request irq\n");
 		return ret;
@@ -829,6 +815,7 @@ static struct platform_driver mxs_saif_driver = {
 
 	.driver = {
 		.name = "mxs-saif",
+		.owner = THIS_MODULE,
 		.of_match_table = mxs_saif_dt_ids,
 	},
 };

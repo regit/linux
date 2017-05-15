@@ -1,7 +1,7 @@
 /*
    3w-sas.h -- LSI 3ware SAS/SATA-RAID Controller device driver for Linux.
 
-   Written By: Adam Radford <aradford@gmail.com>
+   Written By: Adam Radford <linuxraid@lsi.com>
 
    Copyright (C) 2009 LSI Corporation.
 
@@ -39,7 +39,10 @@
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
    Bugs/Comments/Suggestions should be mailed to:
-   aradford@gmail.com
+   linuxraid@lsi.com
+
+   For more information, goto:
+   http://www.lsi.com
 */
 
 #ifndef _3W_SAS_H
@@ -99,6 +102,10 @@ static char *twl_aen_severity_table[] =
 #define TW_CURRENT_DRIVER_SRL 40
 #define TW_CURRENT_DRIVER_BUILD 0
 #define TW_CURRENT_DRIVER_BRANCH 0
+
+/* Phase defines */
+#define TW_PHASE_INITIAL 0
+#define TW_PHASE_SGLIST  2
 
 /* Misc defines */
 #define TW_SECTOR_SIZE                        512

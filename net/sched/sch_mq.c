@@ -57,13 +57,13 @@ static int mq_init(struct Qdisc *sch, struct nlattr *opt)
 
 	for (ntx = 0; ntx < dev->num_tx_queues; ntx++) {
 		dev_queue = netdev_get_tx_queue(dev, ntx);
-		qdisc = qdisc_create_dflt(dev_queue, get_default_qdisc_ops(dev, ntx),
+		qdisc = qdisc_create_dflt(dev_queue, default_qdisc_ops,
 					  TC_H_MAKE(TC_H_MAJ(sch->handle),
 						    TC_H_MIN(ntx + 1)));
 		if (qdisc == NULL)
 			goto err;
 		priv->qdiscs[ntx] = qdisc;
-		qdisc->flags |= TCQ_F_ONETXQUEUE | TCQ_F_NOPARENT;
+		qdisc->flags |= TCQ_F_ONETXQUEUE;
 	}
 
 	sch->flags |= TCQ_F_MQROOT;
@@ -88,7 +88,7 @@ static void mq_attach(struct Qdisc *sch)
 			qdisc_destroy(old);
 #ifdef CONFIG_NET_SCHED
 		if (ntx < dev->real_num_tx_queues)
-			qdisc_hash_add(qdisc);
+			qdisc_list_add(qdisc);
 #endif
 
 	}
@@ -112,6 +112,7 @@ static int mq_dump(struct Qdisc *sch, struct sk_buff *skb)
 		sch->q.qlen		+= qdisc->q.qlen;
 		sch->bstats.bytes	+= qdisc->bstats.bytes;
 		sch->bstats.packets	+= qdisc->bstats.packets;
+		sch->qstats.qlen	+= qdisc->qstats.qlen;
 		sch->qstats.backlog	+= qdisc->qstats.backlog;
 		sch->qstats.drops	+= qdisc->qstats.drops;
 		sch->qstats.requeues	+= qdisc->qstats.requeues;
@@ -156,7 +157,7 @@ static int mq_graft(struct Qdisc *sch, unsigned long cl, struct Qdisc *new,
 
 	*old = dev_graft_qdisc(dev_queue, new);
 	if (new)
-		new->flags |= TCQ_F_ONETXQUEUE | TCQ_F_NOPARENT;
+		new->flags |= TCQ_F_ONETXQUEUE;
 	if (dev->flags & IFF_UP)
 		dev_activate(dev);
 	return 0;
@@ -199,8 +200,9 @@ static int mq_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	struct netdev_queue *dev_queue = mq_queue_get(sch, cl);
 
 	sch = dev_queue->qdisc_sleeping;
-	if (gnet_stats_copy_basic(&sch->running, d, NULL, &sch->bstats) < 0 ||
-	    gnet_stats_copy_queue(d, NULL, &sch->qstats, sch->q.qlen) < 0)
+	sch->qstats.qlen = sch->q.qlen;
+	if (gnet_stats_copy_basic(d, &sch->bstats) < 0 ||
+	    gnet_stats_copy_queue(d, &sch->qstats) < 0)
 		return -1;
 	return 0;
 }

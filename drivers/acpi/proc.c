@@ -4,7 +4,7 @@
 #include <linux/suspend.h>
 #include <linux/bcd.h>
 #include <linux/acpi.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "sleep.h"
 #include "internal.h"
@@ -144,9 +144,11 @@ static const struct file_operations acpi_system_wakeup_device_fops = {
 	.release = single_release,
 };
 
-void __init acpi_sleep_proc_init(void)
+int __init acpi_sleep_proc_init(void)
 {
 	/* 'wakeup device' [R/W] */
 	proc_create("wakeup", S_IFREG | S_IRUGO | S_IWUSR,
 		    acpi_root_dir, &acpi_system_wakeup_device_fops);
+
+	return 0;
 }

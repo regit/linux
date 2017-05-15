@@ -33,7 +33,7 @@
 #include <linux/transport_class.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/idr.h>
+
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_transport.h>
@@ -42,7 +42,7 @@
 #include "scsi_logging.h"
 
 
-static DEFINE_IDA(host_index_ida);
+static atomic_t scsi_host_next_hn = ATOMIC_INIT(0);	/* host_no for next new host */
 
 
 static void scsi_host_cls_release(struct device *dev)
@@ -204,40 +204,18 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 	struct scsi_host_template *sht = shost->hostt;
 	int error = -EINVAL;
 
-	shost_printk(KERN_INFO, shost, "%s\n",
+	printk(KERN_INFO "scsi%d : %s\n", shost->host_no,
 			sht->info ? sht->info(shost) : sht->name);
 
 	if (!shost->can_queue) {
-		shost_printk(KERN_ERR, shost,
-			     "can_queue = 0 no longer supported\n");
+		printk(KERN_ERR "%s: can_queue = 0 no longer supported\n",
+				sht->name);
 		goto fail;
 	}
 
-	if (shost_use_blk_mq(shost)) {
-		error = scsi_mq_setup_tags(shost);
-		if (error)
-			goto fail;
-	} else {
-		shost->bqt = blk_init_tags(shost->can_queue,
-				shost->hostt->tag_alloc_policy);
-		if (!shost->bqt) {
-			error = -ENOMEM;
-			goto fail;
-		}
-	}
-
-	/*
-	 * Note that we allocate the freelist even for the MQ case for now,
-	 * as we need a command set aside for scsi_reset_provider.  Having
-	 * the full host freelist and one command available for that is a
-	 * little heavy-handed, but avoids introducing a special allocator
-	 * just for this.  Eventually the structure of scsi_reset_provider
-	 * will need a major overhaul.
-	 */
 	error = scsi_setup_command_freelist(shost);
 	if (error)
-		goto out_destroy_tags;
-
+		goto fail;
 
 	if (!shost->shost_gendev.parent)
 		shost->shost_gendev.parent = dev ? dev : &platform_bus;
@@ -246,19 +224,13 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 
 	shost->dma_dev = dma_dev;
 
-	/*
-	 * Increase usage count temporarily here so that calling
-	 * scsi_autopm_put_host() will trigger runtime idle if there is
-	 * nothing else preventing suspending the device.
-	 */
-	pm_runtime_get_noresume(&shost->shost_gendev);
+	error = device_add(&shost->shost_gendev);
+	if (error)
+		goto out;
+
 	pm_runtime_set_active(&shost->shost_gendev);
 	pm_runtime_enable(&shost->shost_gendev);
 	device_enable_async_suspend(&shost->shost_gendev);
-
-	error = device_add(&shost->shost_gendev);
-	if (error)
-		goto out_destroy_freelist;
 
 	scsi_host_set_state(shost, SHOST_RUNNING);
 	get_device(shost->shost_gendev.parent);
@@ -296,7 +268,6 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 		goto out_destroy_host;
 
 	scsi_proc_host_add(shost);
-	scsi_autopm_put_host(shost);
 	return error;
 
  out_destroy_host:
@@ -308,15 +279,8 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 	device_del(&shost->shost_dev);
  out_del_gendev:
 	device_del(&shost->shost_gendev);
- out_destroy_freelist:
-	device_disable_async_suspend(&shost->shost_gendev);
-	pm_runtime_disable(&shost->shost_gendev);
-	pm_runtime_set_suspended(&shost->shost_gendev);
-	pm_runtime_put_noidle(&shost->shost_gendev);
+ out:
 	scsi_destroy_command_freelist(shost);
- out_destroy_tags:
-	if (shost_use_blk_mq(shost))
-		scsi_mq_destroy_tags(shost);
  fail:
 	return error;
 }
@@ -344,29 +308,11 @@ static void scsi_host_dev_release(struct device *dev)
 		kfree(queuedata);
 	}
 
-	if (shost->shost_state == SHOST_CREATED) {
-		/*
-		 * Free the shost_dev device name here if scsi_host_alloc()
-		 * and scsi_host_put() have been called but neither
-		 * scsi_host_add() nor scsi_host_remove() has been called.
-		 * This avoids that the memory allocated for the shost_dev
-		 * name is leaked.
-		 */
-		kfree(dev_name(&shost->shost_dev));
-	}
-
 	scsi_destroy_command_freelist(shost);
-	if (shost_use_blk_mq(shost)) {
-		if (shost->tag_set.tags)
-			scsi_mq_destroy_tags(shost);
-	} else {
-		if (shost->bqt)
-			blk_free_tags(shost->bqt);
-	}
+	if (shost->bqt)
+		blk_free_tags(shost->bqt);
 
 	kfree(shost->shost_data);
-
-	ida_simple_remove(&host_index_ida, shost->host_no);
 
 	if (parent)
 		put_device(parent);
@@ -401,7 +347,6 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 {
 	struct Scsi_Host *shost;
 	gfp_t gfp_mask = GFP_KERNEL;
-	int index;
 
 	if (sht->unchecked_isa_dma && privsize)
 		gfp_mask |= __GFP_DMA;
@@ -420,11 +365,11 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	init_waitqueue_head(&shost->host_wait);
 	mutex_init(&shost->scan_mutex);
 
-	index = ida_simple_get(&host_index_ida, 0, 0, GFP_KERNEL);
-	if (index < 0)
-		goto fail_kfree;
-	shost->host_no = index;
-
+	/*
+	 * subtract one because we increment first then return, but we need to
+	 * know what the next host number was before increment
+	 */
+	shost->host_no = atomic_inc_return(&scsi_host_next_hn) - 1;
 	shost->dma_channel = 0xff;
 
 	/* These three are default values which can be overridden */
@@ -450,6 +395,7 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	shost->cmd_per_lun = sht->cmd_per_lun;
 	shost->unchecked_isa_dma = sht->unchecked_isa_dma;
 	shost->use_clustering = sht->use_clustering;
+	shost->ordered_tag = sht->ordered_tag;
 	shost->no_write_same = sht->no_write_same;
 
 	if (shost_eh_deadline == -1 || !sht->eh_host_reset_handler)
@@ -490,8 +436,6 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	else
 		shost->dma_boundary = 0xffffffff;
 
-	shost->use_blk_mq = scsi_use_blk_mq;
-
 	device_initialize(&shost->shost_gendev);
 	dev_set_name(&shost->shost_gendev, "host%d", shost->host_no);
 	shost->shost_gendev.bus = &scsi_bus_type;
@@ -506,18 +450,17 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	shost->ehandler = kthread_run(scsi_error_handler, shost,
 			"scsi_eh_%d", shost->host_no);
 	if (IS_ERR(shost->ehandler)) {
-		shost_printk(KERN_WARNING, shost,
-			"error handler thread failed to spawn, error = %ld\n",
-			PTR_ERR(shost->ehandler));
-		goto fail_index_remove;
+		printk(KERN_WARNING "scsi%d: error handler thread failed to spawn, error = %ld\n",
+			shost->host_no, PTR_ERR(shost->ehandler));
+		goto fail_kfree;
 	}
 
 	shost->tmf_work_q = alloc_workqueue("scsi_tmf_%d",
 					    WQ_UNBOUND | WQ_MEM_RECLAIM,
 					   1, shost->host_no);
 	if (!shost->tmf_work_q) {
-		shost_printk(KERN_WARNING, shost,
-			     "failed to create tmf workq\n");
+		printk(KERN_WARNING "scsi%d: failed to create tmf workq\n",
+		       shost->host_no);
 		goto fail_kthread;
 	}
 	scsi_proc_hostdir_add(shost->hostt);
@@ -525,8 +468,6 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 
  fail_kthread:
 	kthread_stop(shost->ehandler);
- fail_index_remove:
-	ida_simple_remove(&host_index_ida, shost->host_no);
  fail_kfree:
 	kfree(shost);
 	return NULL;
@@ -622,7 +563,6 @@ int scsi_init_hosts(void)
 void scsi_exit_hosts(void)
 {
 	class_unregister(&shost_class);
-	ida_destroy(&host_index_ida);
 }
 
 int scsi_is_host_device(const struct device *dev)
@@ -644,7 +584,7 @@ EXPORT_SYMBOL(scsi_is_host_device);
 int scsi_queue_work(struct Scsi_Host *shost, struct work_struct *work)
 {
 	if (unlikely(!shost->work_q)) {
-		shost_printk(KERN_ERR, shost,
+		printk(KERN_ERR
 			"ERROR: Scsi host '%s' attempted to queue scsi-work, "
 			"when no workqueue created.\n", shost->hostt->name);
 		dump_stack();
@@ -663,7 +603,7 @@ EXPORT_SYMBOL_GPL(scsi_queue_work);
 void scsi_flush_work(struct Scsi_Host *shost)
 {
 	if (!shost->work_q) {
-		shost_printk(KERN_ERR, shost,
+		printk(KERN_ERR
 			"ERROR: Scsi host '%s' attempted to flush scsi-work, "
 			"when no workqueue created.\n", shost->hostt->name);
 		dump_stack();

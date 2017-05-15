@@ -24,7 +24,6 @@
 
 #include "drmP.h"
 #include "radeon.h"
-#include "radeon_asic.h"
 #include "r600d.h"
 #include "r600_dpm.h"
 #include "atom.h"
@@ -156,20 +155,19 @@ u32 r600_dpm_get_vblank_time(struct radeon_device *rdev)
 	struct drm_device *dev = rdev->ddev;
 	struct drm_crtc *crtc;
 	struct radeon_crtc *radeon_crtc;
-	u32 vblank_in_pixels;
+	u32 line_time_us, vblank_lines;
 	u32 vblank_time_us = 0xffffffff; /* if the displays are off, vblank time is max */
 
 	if (rdev->num_crtc && rdev->mode_info.mode_config_initialized) {
 		list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
 			radeon_crtc = to_radeon_crtc(crtc);
 			if (crtc->enabled && radeon_crtc->enabled && radeon_crtc->hw_mode.clock) {
-				vblank_in_pixels =
-					radeon_crtc->hw_mode.crtc_htotal *
-					(radeon_crtc->hw_mode.crtc_vblank_end -
-					 radeon_crtc->hw_mode.crtc_vdisplay +
-					 (radeon_crtc->v_border * 2));
-
-				vblank_time_us = vblank_in_pixels * 1000 / radeon_crtc->hw_mode.clock;
+				line_time_us = (radeon_crtc->hw_mode.crtc_htotal * 1000) /
+					radeon_crtc->hw_mode.clock;
+				vblank_lines = radeon_crtc->hw_mode.crtc_vblank_end -
+					radeon_crtc->hw_mode.crtc_vdisplay +
+					(radeon_crtc->v_border * 2);
+				vblank_time_us = vblank_lines * line_time_us;
 				break;
 			}
 		}
@@ -189,7 +187,7 @@ u32 r600_dpm_get_vrefresh(struct radeon_device *rdev)
 		list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
 			radeon_crtc = to_radeon_crtc(crtc);
 			if (crtc->enabled && radeon_crtc->enabled && radeon_crtc->hw_mode.clock) {
-				vrefresh = drm_mode_vrefresh(&radeon_crtc->hw_mode);
+				vrefresh = radeon_crtc->hw_mode.vrefresh;
 				break;
 			}
 		}
@@ -812,7 +810,6 @@ union power_info {
 union fan_info {
 	struct _ATOM_PPLIB_FANTABLE fan;
 	struct _ATOM_PPLIB_FANTABLE2 fan2;
-	struct _ATOM_PPLIB_FANTABLE3 fan3;
 };
 
 static int r600_parse_clk_voltage_dep_table(struct radeon_clock_voltage_dependency_table *radeon_table,
@@ -845,7 +842,7 @@ int r600_get_platform_caps(struct radeon_device *rdev)
 	struct radeon_mode_info *mode_info = &rdev->mode_info;
 	union power_info *power_info;
 	int index = GetIndexIntoMasterTable(DATA, PowerPlayInfo);
-	u16 data_offset;
+        u16 data_offset;
 	u8 frev, crev;
 
 	if (!atom_parse_data_header(mode_info->atom_context, index, NULL,
@@ -875,7 +872,7 @@ int r600_parse_extended_power_table(struct radeon_device *rdev)
 	union fan_info *fan_info;
 	ATOM_PPLIB_Clock_Voltage_Dependency_Table *dep_table;
 	int index = GetIndexIntoMasterTable(DATA, PowerPlayInfo);
-	u16 data_offset;
+        u16 data_offset;
 	u8 frev, crev;
 	int ret, i;
 
@@ -902,14 +899,6 @@ int r600_parse_extended_power_table(struct radeon_device *rdev)
 			else
 				rdev->pm.dpm.fan.t_max = 10900;
 			rdev->pm.dpm.fan.cycle_delay = 100000;
-			if (fan_info->fan.ucFanTableFormat >= 3) {
-				rdev->pm.dpm.fan.control_mode = fan_info->fan3.ucFanControlMode;
-				rdev->pm.dpm.fan.default_max_fan_pwm =
-					le16_to_cpu(fan_info->fan3.usFanPWMMax);
-				rdev->pm.dpm.fan.default_fan_output_sensitivity = 4836;
-				rdev->pm.dpm.fan.fan_output_sensitivity =
-					le16_to_cpu(fan_info->fan3.usFanOutputSensitivity);
-			}
 			rdev->pm.dpm.fan.ucode_fan_control = true;
 		}
 	}
@@ -1071,7 +1060,7 @@ int r600_parse_extended_power_table(struct radeon_device *rdev)
 			ext_hdr->usVCETableOffset) {
 			VCEClockInfoArray *array = (VCEClockInfoArray *)
 				(mode_info->atom_context->bios + data_offset +
-				 le16_to_cpu(ext_hdr->usVCETableOffset) + 1);
+                                 le16_to_cpu(ext_hdr->usVCETableOffset) + 1);
 			ATOM_PPLIB_VCE_Clock_Voltage_Limit_Table *limits =
 				(ATOM_PPLIB_VCE_Clock_Voltage_Limit_Table *)
 				(mode_info->atom_context->bios + data_offset +
@@ -1266,7 +1255,7 @@ int r600_parse_extended_power_table(struct radeon_device *rdev)
 					(mode_info->atom_context->bios + data_offset +
 					 le16_to_cpu(ext_hdr->usPowerTuneTableOffset));
 				rdev->pm.dpm.dyn_state.cac_tdp_table->maximum_power_delivery_limit =
-					le16_to_cpu(ppt->usMaximumPowerDeliveryLimit);
+					ppt->usMaximumPowerDeliveryLimit;
 				pt = &ppt->power_tune_table;
 			} else {
 				ATOM_PPLIB_POWERTUNE_Table *ppt = (ATOM_PPLIB_POWERTUNE_Table *)

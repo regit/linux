@@ -22,8 +22,6 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include "em28xx.h"
-
 #include <linux/init.h>
 #include <linux/jiffies.h>
 #include <linux/list.h>
@@ -33,6 +31,8 @@
 #include <linux/vmalloc.h>
 #include <sound/ac97_codec.h>
 #include <media/v4l2-common.h>
+
+#include "em28xx.h"
 
 #define DRIVER_AUTHOR "Ludovico Cavedon <cavedon@sssup.it>, " \
 		      "Markus Rechberger <mrechberger@gmail.com>, " \
@@ -48,42 +48,37 @@ MODULE_VERSION(EM28XX_VERSION);
 
 static unsigned int core_debug;
 module_param(core_debug, int, 0644);
-MODULE_PARM_DESC(core_debug, "enable debug messages [core and isoc]");
+MODULE_PARM_DESC(core_debug, "enable debug messages [core]");
 
-#define em28xx_coredbg(fmt, arg...) do {				\
-	if (core_debug)							\
-		dev_printk(KERN_DEBUG, &dev->intf->dev,			\
-			   "core: %s: " fmt, __func__, ## arg);		\
-} while (0)
+#define em28xx_coredbg(fmt, arg...) do {\
+	if (core_debug) \
+		printk(KERN_INFO "%s %s :"fmt, \
+			 dev->name, __func__ , ##arg); } while (0)
 
 static unsigned int reg_debug;
 module_param(reg_debug, int, 0644);
 MODULE_PARM_DESC(reg_debug, "enable debug messages [URB reg]");
 
+#define em28xx_regdbg(fmt, arg...) do {\
+	if (reg_debug) \
+		printk(KERN_INFO "%s %s :"fmt, \
+			 dev->name, __func__ , ##arg); } while (0)
 
-#define em28xx_regdbg(fmt, arg...) do {				\
-	if (reg_debug)							\
-		dev_printk(KERN_DEBUG, &dev->intf->dev,			\
-			   "reg: %s: " fmt, __func__, ## arg);		\
-} while (0)
-
-/* FIXME: don't abuse core_debug */
-#define em28xx_isocdbg(fmt, arg...) do {				\
-	if (core_debug)							\
-		dev_printk(KERN_DEBUG, &dev->intf->dev,			\
-			   "core: %s: " fmt, __func__, ## arg);		\
-} while (0)
+/* FIXME */
+#define em28xx_isocdbg(fmt, arg...) do {\
+	if (core_debug) \
+		printk(KERN_INFO "%s %s :"fmt, \
+			 dev->name, __func__ , ##arg); } while (0)
 
 /*
  * em28xx_read_reg_req()
  * reads data from the usb device specifying bRequest
  */
 int em28xx_read_reg_req_len(struct em28xx *dev, u8 req, u16 reg,
-			    char *buf, int len)
+				   char *buf, int len)
 {
 	int ret;
-	struct usb_device *udev = interface_to_usbdev(dev->intf);
-	int pipe = usb_rcvctrlpipe(udev, 0);
+	int pipe = usb_rcvctrlpipe(dev->udev, 0);
 
 	if (dev->disconnected)
 		return -ENODEV;
@@ -91,22 +86,23 @@ int em28xx_read_reg_req_len(struct em28xx *dev, u8 req, u16 reg,
 	if (len > URB_MAX_CTRL_SIZE)
 		return -EINVAL;
 
-	em28xx_regdbg("(pipe 0x%08x): IN:  %02x %02x %02x %02x %02x %02x %02x %02x ",
-		     pipe, USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-		     req, 0, 0,
-		     reg & 0xff, reg >> 8,
-		     len & 0xff, len >> 8);
+	if (reg_debug) {
+		printk(KERN_DEBUG "(pipe 0x%08x): "
+			"IN:  %02x %02x %02x %02x %02x %02x %02x %02x ",
+			pipe,
+			USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+			req, 0, 0,
+			reg & 0xff, reg >> 8,
+			len & 0xff, len >> 8);
+	}
 
 	mutex_lock(&dev->ctrl_urb_lock);
-	ret = usb_control_msg(udev, pipe, req,
+	ret = usb_control_msg(dev->udev, pipe, req,
 			      USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
 			      0x0000, reg, dev->urb_buf, len, HZ);
 	if (ret < 0) {
-		em28xx_regdbg("(pipe 0x%08x): IN:  %02x %02x %02x %02x %02x %02x %02x %02x  failed\n",
-			     pipe, USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-			     req, 0, 0,
-			     reg & 0xff, reg >> 8,
-			     len & 0xff, len >> 8);
+		if (reg_debug)
+			printk(" failed!\n");
 		mutex_unlock(&dev->ctrl_urb_lock);
 		return usb_translate_errors(ret);
 	}
@@ -116,11 +112,14 @@ int em28xx_read_reg_req_len(struct em28xx *dev, u8 req, u16 reg,
 
 	mutex_unlock(&dev->ctrl_urb_lock);
 
-	em28xx_regdbg("(pipe 0x%08x): IN:  %02x %02x %02x %02x %02x %02x %02x %02x  failed <<< %*ph\n",
-		     pipe, USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-		     req, 0, 0,
-		     reg & 0xff, reg >> 8,
-		     len & 0xff, len >> 8, len, buf);
+	if (reg_debug) {
+		int byte;
+
+		printk("<<<");
+		for (byte = 0; byte < len; byte++)
+			printk(" %02x", (unsigned char)buf[byte]);
+		printk("\n");
+	}
 
 	return ret;
 }
@@ -152,11 +151,10 @@ EXPORT_SYMBOL_GPL(em28xx_read_reg);
  * sends data to the usb device, specifying bRequest
  */
 int em28xx_write_regs_req(struct em28xx *dev, u8 req, u16 reg, char *buf,
-			  int len)
+				 int len)
 {
 	int ret;
-	struct usb_device *udev = interface_to_usbdev(dev->intf);
-	int pipe = usb_sndctrlpipe(udev, 0);
+	int pipe = usb_sndctrlpipe(dev->udev, 0);
 
 	if (dev->disconnected)
 		return -ENODEV;
@@ -164,16 +162,25 @@ int em28xx_write_regs_req(struct em28xx *dev, u8 req, u16 reg, char *buf,
 	if ((len < 1) || (len > URB_MAX_CTRL_SIZE))
 		return -EINVAL;
 
-	em28xx_regdbg("(pipe 0x%08x): OUT: %02x %02x %02x %02x %02x %02x %02x %02x >>> %*ph\n",
-		      pipe,
-		      USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-		      req, 0, 0,
-		      reg & 0xff, reg >> 8,
-		      len & 0xff, len >> 8, len, buf);
+	if (reg_debug) {
+		int byte;
+
+		printk(KERN_DEBUG "(pipe 0x%08x): "
+			"OUT: %02x %02x %02x %02x %02x %02x %02x %02x >>>",
+			pipe,
+			USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+			req, 0, 0,
+			reg & 0xff, reg >> 8,
+			len & 0xff, len >> 8);
+
+		for (byte = 0; byte < len; byte++)
+			printk(" %02x", (unsigned char)buf[byte]);
+		printk("\n");
+	}
 
 	mutex_lock(&dev->ctrl_urb_lock);
 	memcpy(dev->urb_buf, buf, len);
-	ret = usb_control_msg(udev, pipe, req,
+	ret = usb_control_msg(dev->udev, pipe, req,
 			      USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
 			      0x0000, reg, dev->urb_buf, len, HZ);
 	mutex_unlock(&dev->ctrl_urb_lock);
@@ -206,7 +213,7 @@ EXPORT_SYMBOL_GPL(em28xx_write_reg);
  * the actual value
  */
 int em28xx_write_reg_bits(struct em28xx *dev, u16 reg, u8 val,
-			  u8 bitmask)
+				 u8 bitmask)
 {
 	int oldval;
 	u8 newval;
@@ -215,7 +222,7 @@ int em28xx_write_reg_bits(struct em28xx *dev, u16 reg, u8 val,
 	if (oldval < 0)
 		return oldval;
 
-	newval = (((u8)oldval) & ~bitmask) | (val & bitmask);
+	newval = (((u8) oldval) & ~bitmask) | (val & bitmask);
 
 	return em28xx_write_regs(dev, reg, &newval, 1);
 }
@@ -260,8 +267,7 @@ static int em28xx_is_ac97_ready(struct em28xx *dev)
 		msleep(5);
 	}
 
-	dev_warn(&dev->intf->dev,
-		 "AC97 command still being executed: not handled properly!\n");
+	em28xx_warn("AC97 command still being executed: not handled properly!\n");
 	return -EBUSY;
 }
 
@@ -273,7 +279,7 @@ int em28xx_read_ac97(struct em28xx *dev, u8 reg)
 {
 	int ret;
 	u8 addr = (reg & 0x7f) | 0x80;
-	__le16 val;
+	u16 val;
 
 	ret = em28xx_is_ac97_ready(dev);
 	if (ret < 0)
@@ -308,7 +314,7 @@ int em28xx_write_ac97(struct em28xx *dev, u8 reg, u16 val)
 	if (ret < 0)
 		return ret;
 
-	ret = em28xx_write_regs(dev, EM28XX_R40_AC97LSB, (u8 *)&value, 2);
+	ret = em28xx_write_regs(dev, EM28XX_R40_AC97LSB, (u8 *) &value, 2);
 	if (ret < 0)
 		return ret;
 
@@ -354,9 +360,8 @@ static int set_ac97_input(struct em28xx *dev)
 			ret = em28xx_write_ac97(dev, inputs[i].reg, 0x8000);
 
 		if (ret < 0)
-			dev_warn(&dev->intf->dev,
-				 "couldn't setup AC97 register %d\n",
-				 inputs[i].reg);
+			em28xx_warn("couldn't setup AC97 register %d\n",
+				     inputs[i].reg);
 	}
 	return 0;
 }
@@ -428,7 +433,7 @@ int em28xx_audio_analog_set(struct em28xx *dev)
 	int ret, i;
 	u8 xclk;
 
-	if (dev->int_audio_type == EM28XX_INT_AUDIO_NONE)
+	if (!dev->audio_mode.has_audio)
 		return 0;
 
 	/* It is assumed that all devices use master volume for output.
@@ -439,9 +444,8 @@ int em28xx_audio_analog_set(struct em28xx *dev)
 		for (i = 0; i < ARRAY_SIZE(outputs); i++) {
 			ret = em28xx_write_ac97(dev, outputs[i].reg, 0x8000);
 			if (ret < 0)
-				dev_warn(&dev->intf->dev,
-					 "couldn't setup AC97 register %d\n",
-					 outputs[i].reg);
+				em28xx_warn("couldn't setup AC97 register %d\n",
+				     outputs[i].reg);
 		}
 	}
 
@@ -478,9 +482,8 @@ int em28xx_audio_analog_set(struct em28xx *dev)
 				ret = em28xx_write_ac97(dev, outputs[i].reg,
 							vol);
 			if (ret < 0)
-				dev_warn(&dev->intf->dev,
-					 "couldn't setup AC97 register %d\n",
-					 outputs[i].reg);
+				em28xx_warn("couldn't setup AC97 register %d\n",
+				     outputs[i].reg);
 		}
 
 		if (dev->ctl_aoutput & EM28XX_AOUT_PCM_IN) {
@@ -501,49 +504,38 @@ EXPORT_SYMBOL_GPL(em28xx_audio_analog_set);
 int em28xx_audio_setup(struct em28xx *dev)
 {
 	int vid1, vid2, feat, cfg;
-	u32 vid = 0;
-	u8 i2s_samplerates;
+	u32 vid;
 
-	if (dev->chip_id == CHIP_ID_EM2870 ||
-	    dev->chip_id == CHIP_ID_EM2874 ||
-	    dev->chip_id == CHIP_ID_EM28174 ||
-	    dev->chip_id == CHIP_ID_EM28178) {
-		/* Digital only device - don't load any alsa module */
-		dev->int_audio_type = EM28XX_INT_AUDIO_NONE;
-		dev->usb_audio_type = EM28XX_USB_AUDIO_NONE;
+	if (!dev->audio_mode.has_audio)
 		return 0;
-	}
 
 	/* See how this device is configured */
 	cfg = em28xx_read_reg(dev, EM28XX_R00_CHIPCFG);
-	dev_info(&dev->intf->dev, "Config register raw data: 0x%02x\n", cfg);
-	if (cfg < 0) { /* Register read error */
-		/* Be conservative */
-		dev->int_audio_type = EM28XX_INT_AUDIO_AC97;
+	em28xx_info("Config register raw data: 0x%02x\n", cfg);
+	if (cfg < 0) {
+		/* Register read error?  */
+		cfg = EM28XX_CHIPCFG_AC97; /* Be conservative */
 	} else if ((cfg & EM28XX_CHIPCFG_AUDIOMASK) == 0x00) {
 		/* The device doesn't have vendor audio at all */
-		dev->int_audio_type = EM28XX_INT_AUDIO_NONE;
-		dev->usb_audio_type = EM28XX_USB_AUDIO_NONE;
+		dev->has_alsa_audio = false;
+		dev->audio_mode.has_audio = false;
 		return 0;
 	} else if ((cfg & EM28XX_CHIPCFG_AUDIOMASK) != EM28XX_CHIPCFG_AC97) {
-		dev->int_audio_type = EM28XX_INT_AUDIO_I2S;
 		if (dev->chip_id < CHIP_ID_EM2860 &&
-		    (cfg & EM28XX_CHIPCFG_AUDIOMASK) ==
+	            (cfg & EM28XX_CHIPCFG_AUDIOMASK) ==
 		    EM2820_CHIPCFG_I2S_1_SAMPRATE)
-			i2s_samplerates = 1;
+			dev->audio_mode.i2s_samplerates = 1;
 		else if (dev->chip_id >= CHIP_ID_EM2860 &&
 			 (cfg & EM28XX_CHIPCFG_AUDIOMASK) ==
 			 EM2860_CHIPCFG_I2S_5_SAMPRATES)
-			i2s_samplerates = 5;
+			dev->audio_mode.i2s_samplerates = 5;
 		else
-			i2s_samplerates = 3;
-		dev_info(&dev->intf->dev, "I2S Audio (%d sample rate(s))\n",
-			i2s_samplerates);
+			dev->audio_mode.i2s_samplerates = 3;
+		em28xx_info("I2S Audio (%d sample rate(s))\n",
+					       dev->audio_mode.i2s_samplerates);
 		/* Skip the code that does AC97 vendor detection */
 		dev->audio_mode.ac97 = EM28XX_NO_AC97;
 		goto init_audio;
-	} else {
-		dev->int_audio_type = EM28XX_INT_AUDIO_AC97;
 	}
 
 	dev->audio_mode.ac97 = EM28XX_AC97_OTHER;
@@ -555,12 +547,10 @@ int em28xx_audio_setup(struct em28xx *dev)
 		 * Note: (some) em2800 devices without eeprom reports 0x91 on
 		 *	 CHIPCFG register, even not having an AC97 chip
 		 */
-		dev_warn(&dev->intf->dev,
-			 "AC97 chip type couldn't be determined\n");
+		em28xx_warn("AC97 chip type couldn't be determined\n");
 		dev->audio_mode.ac97 = EM28XX_NO_AC97;
-		if (dev->usb_audio_type == EM28XX_USB_AUDIO_VENDOR)
-			dev->usb_audio_type = EM28XX_USB_AUDIO_NONE;
-		dev->int_audio_type = EM28XX_INT_AUDIO_NONE;
+		dev->has_alsa_audio = false;
+		dev->audio_mode.has_audio = false;
 		goto init_audio;
 	}
 
@@ -569,13 +559,16 @@ int em28xx_audio_setup(struct em28xx *dev)
 		goto init_audio;
 
 	vid = vid1 << 16 | vid2;
-	dev_warn(&dev->intf->dev, "AC97 vendor ID = 0x%08x\n", vid);
+
+	dev->audio_mode.ac97_vendor_id = vid;
+	em28xx_warn("AC97 vendor ID = 0x%08x\n", vid);
 
 	feat = em28xx_read_ac97(dev, AC97_RESET);
 	if (feat < 0)
 		goto init_audio;
 
-	dev_warn(&dev->intf->dev, "AC97 features = 0x%04x\n", feat);
+	dev->audio_mode.ac97_feat = feat;
+	em28xx_warn("AC97 features = 0x%04x\n", feat);
 
 	/* Try to identify what audio processor we have */
 	if (((vid == 0xffffffff) || (vid == 0x83847650)) && (feat == 0x6a90))
@@ -587,20 +580,17 @@ init_audio:
 	/* Reports detected AC97 processor */
 	switch (dev->audio_mode.ac97) {
 	case EM28XX_NO_AC97:
-		dev_info(&dev->intf->dev, "No AC97 audio processor\n");
+		em28xx_info("No AC97 audio processor\n");
 		break;
 	case EM28XX_AC97_EM202:
-		dev_info(&dev->intf->dev,
-			 "Empia 202 AC97 audio processor detected\n");
+		em28xx_info("Empia 202 AC97 audio processor detected\n");
 		break;
 	case EM28XX_AC97_SIGMATEL:
-		dev_info(&dev->intf->dev,
-			 "Sigmatel audio processor detected (stac 97%02x)\n",
-			 vid & 0xff);
+		em28xx_info("Sigmatel audio processor detected(stac 97%02x)\n",
+			    dev->audio_mode.ac97_vendor_id & 0xff);
 		break;
 	case EM28XX_AC97_OTHER:
-		dev_warn(&dev->intf->dev,
-			 "Unknown AC97 audio processor detected!\n");
+		em28xx_warn("Unknown AC97 audio processor detected!\n");
 		break;
 	default:
 		break;
@@ -615,9 +605,8 @@ const struct em28xx_led *em28xx_find_led(struct em28xx *dev,
 {
 	if (dev->board.leds) {
 		u8 k = 0;
-
 		while (dev->board.leds[k].role >= 0 &&
-		       dev->board.leds[k].role < EM28XX_NUM_LED_ROLES) {
+			       dev->board.leds[k].role < EM28XX_NUM_LED_ROLES) {
 			if (dev->board.leds[k].role == role)
 				return &dev->board.leds[k];
 			k++;
@@ -660,12 +649,10 @@ int em28xx_capture_start(struct em28xx *dev, int start)
 
 			if (dev->mode == EM28XX_ANALOG_MODE)
 				rc = em28xx_write_reg(dev,
-						      EM28XX_R12_VINENABLE,
-						      0x67);
+						    EM28XX_R12_VINENABLE, 0x67);
 			else
 				rc = em28xx_write_reg(dev,
-						      EM28XX_R12_VINENABLE,
-						      0x37);
+						    EM28XX_R12_VINENABLE, 0x37);
 			if (rc < 0)
 				return rc;
 
@@ -799,7 +786,6 @@ void em28xx_uninit_usb_xfer(struct em28xx *dev, enum em28xx_mode mode)
 {
 	struct urb *urb;
 	struct em28xx_usb_bufs *usb_bufs;
-	struct usb_device *udev = interface_to_usbdev(dev->intf);
 	int i;
 
 	em28xx_isocdbg("em28xx: called em28xx_uninit_usb_xfer in mode %d\n",
@@ -819,10 +805,10 @@ void em28xx_uninit_usb_xfer(struct em28xx *dev, enum em28xx_mode mode)
 				usb_unlink_urb(urb);
 
 			if (usb_bufs->transfer_buffer[i]) {
-				usb_free_coherent(udev,
-						  urb->transfer_buffer_length,
-						  usb_bufs->transfer_buffer[i],
-						  urb->transfer_dma);
+				usb_free_coherent(dev->udev,
+					urb->transfer_buffer_length,
+					usb_bufs->transfer_buffer[i],
+					urb->transfer_dma);
 			}
 			usb_free_urb(urb);
 			usb_bufs->urb[i] = NULL;
@@ -873,10 +859,9 @@ int em28xx_alloc_urbs(struct em28xx *dev, enum em28xx_mode mode, int xfer_bulk,
 		      int num_bufs, int max_pkt_size, int packet_multiplier)
 {
 	struct em28xx_usb_bufs *usb_bufs;
-	struct urb *urb;
-	struct usb_device *udev = interface_to_usbdev(dev->intf);
 	int i;
 	int sb_size, pipe;
+	struct urb *urb;
 	int j, k;
 
 	em28xx_isocdbg("em28xx: called em28xx_alloc_isoc in mode %d\n", mode);
@@ -886,23 +871,21 @@ int em28xx_alloc_urbs(struct em28xx *dev, enum em28xx_mode mode, int xfer_bulk,
 	if (mode == EM28XX_DIGITAL_MODE) {
 		if ((xfer_bulk && !dev->dvb_ep_bulk) ||
 		    (!xfer_bulk && !dev->dvb_ep_isoc)) {
-			dev_err(&dev->intf->dev,
-				"no endpoint for DVB mode and transfer type %d\n",
-				xfer_bulk > 0);
+			em28xx_errdev("no endpoint for DVB mode and transfer type %d\n",
+				      xfer_bulk > 0);
 			return -EINVAL;
 		}
 		usb_bufs = &dev->usb_ctl.digital_bufs;
 	} else if (mode == EM28XX_ANALOG_MODE) {
 		if ((xfer_bulk && !dev->analog_ep_bulk) ||
 		    (!xfer_bulk && !dev->analog_ep_isoc)) {
-			dev_err(&dev->intf->dev,
-				"no endpoint for analog mode and transfer type %d\n",
-				xfer_bulk > 0);
+			em28xx_errdev("no endpoint for analog mode and transfer type %d\n",
+				       xfer_bulk > 0);
 			return -EINVAL;
 		}
 		usb_bufs = &dev->usb_ctl.analog_bufs;
 	} else {
-		dev_err(&dev->intf->dev, "invalid mode selected\n");
+		em28xx_errdev("invalid mode selected\n");
 		return -EINVAL;
 	}
 
@@ -912,12 +895,15 @@ int em28xx_alloc_urbs(struct em28xx *dev, enum em28xx_mode mode, int xfer_bulk,
 	usb_bufs->num_bufs = num_bufs;
 
 	usb_bufs->urb = kzalloc(sizeof(void *)*num_bufs,  GFP_KERNEL);
-	if (!usb_bufs->urb)
+	if (!usb_bufs->urb) {
+		em28xx_errdev("cannot alloc memory for usb buffers\n");
 		return -ENOMEM;
+	}
 
 	usb_bufs->transfer_buffer = kzalloc(sizeof(void *)*num_bufs,
 					     GFP_KERNEL);
 	if (!usb_bufs->transfer_buffer) {
+		em28xx_errdev("cannot allocate memory for usb transfer\n");
 		kfree(usb_bufs->urb);
 		return -ENOMEM;
 	}
@@ -936,38 +922,39 @@ int em28xx_alloc_urbs(struct em28xx *dev, enum em28xx_mode mode, int xfer_bulk,
 	for (i = 0; i < usb_bufs->num_bufs; i++) {
 		urb = usb_alloc_urb(usb_bufs->num_packets, GFP_KERNEL);
 		if (!urb) {
+			em28xx_err("cannot alloc usb_ctl.urb %i\n", i);
 			em28xx_uninit_usb_xfer(dev, mode);
 			return -ENOMEM;
 		}
 		usb_bufs->urb[i] = urb;
 
-		usb_bufs->transfer_buffer[i] = usb_alloc_coherent(udev,
+		usb_bufs->transfer_buffer[i] = usb_alloc_coherent(dev->udev,
 			sb_size, GFP_KERNEL, &urb->transfer_dma);
 		if (!usb_bufs->transfer_buffer[i]) {
-			dev_err(&dev->intf->dev,
-				"unable to allocate %i bytes for transfer buffer %i%s\n",
-			       sb_size, i,
-			       in_interrupt() ? " while in int" : "");
+			em28xx_err("unable to allocate %i bytes for transfer"
+					" buffer %i%s\n",
+					sb_size, i,
+					in_interrupt() ? " while in int" : "");
 			em28xx_uninit_usb_xfer(dev, mode);
 			return -ENOMEM;
 		}
 		memset(usb_bufs->transfer_buffer[i], 0, sb_size);
 
 		if (xfer_bulk) { /* bulk */
-			pipe = usb_rcvbulkpipe(udev,
+			pipe = usb_rcvbulkpipe(dev->udev,
 					       mode == EM28XX_ANALOG_MODE ?
 					       dev->analog_ep_bulk :
 					       dev->dvb_ep_bulk);
-			usb_fill_bulk_urb(urb, udev, pipe,
+			usb_fill_bulk_urb(urb, dev->udev, pipe,
 					  usb_bufs->transfer_buffer[i], sb_size,
 					  em28xx_irq_callback, dev);
 			urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
 		} else { /* isoc */
-			pipe = usb_rcvisocpipe(udev,
+			pipe = usb_rcvisocpipe(dev->udev,
 					       mode == EM28XX_ANALOG_MODE ?
 					       dev->analog_ep_isoc :
 					       dev->dvb_ep_isoc);
-			usb_fill_int_urb(urb, udev, pipe,
+			usb_fill_int_urb(urb, dev->udev, pipe,
 					 usb_bufs->transfer_buffer[i], sb_size,
 					 em28xx_irq_callback, dev, 1);
 			urb->transfer_flags = URB_ISO_ASAP |
@@ -992,14 +979,13 @@ EXPORT_SYMBOL_GPL(em28xx_alloc_urbs);
  * Allocate URBs and start IRQ
  */
 int em28xx_init_usb_xfer(struct em28xx *dev, enum em28xx_mode mode,
-			 int xfer_bulk, int num_bufs, int max_pkt_size,
+		    int xfer_bulk, int num_bufs, int max_pkt_size,
 		    int packet_multiplier,
-		    int (*urb_data_copy)(struct em28xx *dev, struct urb *urb))
+		    int (*urb_data_copy) (struct em28xx *dev, struct urb *urb))
 {
 	struct em28xx_dmaqueue *dma_q = &dev->vidq;
 	struct em28xx_dmaqueue *vbi_dma_q = &dev->vbiq;
 	struct em28xx_usb_bufs *usb_bufs;
-	struct usb_device *udev = interface_to_usbdev(dev->intf);
 	int i;
 	int rc;
 	int alloc;
@@ -1026,11 +1012,10 @@ int em28xx_init_usb_xfer(struct em28xx *dev, enum em28xx_mode mode,
 	}
 
 	if (xfer_bulk) {
-		rc = usb_clear_halt(udev, usb_bufs->urb[0]->pipe);
+		rc = usb_clear_halt(dev->udev, usb_bufs->urb[0]->pipe);
 		if (rc < 0) {
-			dev_err(&dev->intf->dev,
-				"failed to clear USB bulk endpoint stall/halt condition (error=%i)\n",
-			       rc);
+			em28xx_err("failed to clear USB bulk endpoint stall/halt condition (error=%i)\n",
+				   rc);
 			em28xx_uninit_usb_xfer(dev, mode);
 			return rc;
 		}
@@ -1045,8 +1030,8 @@ int em28xx_init_usb_xfer(struct em28xx *dev, enum em28xx_mode mode,
 	for (i = 0; i < usb_bufs->num_bufs; i++) {
 		rc = usb_submit_urb(usb_bufs->urb[i], GFP_ATOMIC);
 		if (rc) {
-			dev_err(&dev->intf->dev,
-				"submit of urb %i failed (error=%i)\n", i, rc);
+			em28xx_err("submit of urb %i failed (error=%i)\n", i,
+				   rc);
 			em28xx_uninit_usb_xfer(dev, mode);
 			return rc;
 		}
@@ -1079,7 +1064,7 @@ int em28xx_register_extension(struct em28xx_ops *ops)
 		ops->init(dev);
 	}
 	mutex_unlock(&em28xx_devlist_mutex);
-	pr_info("em28xx: Registered (%s) extension\n", ops->name);
+	printk(KERN_INFO "em28xx: Registered (%s) extension\n", ops->name);
 	return 0;
 }
 EXPORT_SYMBOL(em28xx_register_extension);
@@ -1094,7 +1079,7 @@ void em28xx_unregister_extension(struct em28xx_ops *ops)
 	}
 	list_del(&ops->next);
 	mutex_unlock(&em28xx_devlist_mutex);
-	pr_info("em28xx: Removed (%s) extension\n", ops->name);
+	printk(KERN_INFO "Em28xx: Removed (%s) extension\n", ops->name);
 }
 EXPORT_SYMBOL(em28xx_unregister_extension);
 
@@ -1128,7 +1113,7 @@ int em28xx_suspend_extension(struct em28xx *dev)
 {
 	const struct em28xx_ops *ops = NULL;
 
-	dev_info(&dev->intf->dev, "Suspending extensions\n");
+	em28xx_info("Suspending extensions");
 	mutex_lock(&em28xx_devlist_mutex);
 	list_for_each_entry(ops, &em28xx_extension_devlist, next) {
 		if (ops->suspend)
@@ -1142,7 +1127,7 @@ int em28xx_resume_extension(struct em28xx *dev)
 {
 	const struct em28xx_ops *ops = NULL;
 
-	dev_info(&dev->intf->dev, "Resuming extensions\n");
+	em28xx_info("Resuming extensions");
 	mutex_lock(&em28xx_devlist_mutex);
 	list_for_each_entry(ops, &em28xx_extension_devlist, next) {
 		if (ops->resume)

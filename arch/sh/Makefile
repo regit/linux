@@ -31,10 +31,8 @@ isa-y					:= $(isa-y)-up
 endif
 
 cflags-$(CONFIG_CPU_SH2)		:= $(call cc-option,-m2,)
-cflags-$(CONFIG_CPU_J2)			+= $(call cc-option,-mj2,)
 cflags-$(CONFIG_CPU_SH2A)		+= $(call cc-option,-m2a,) \
-					   $(call cc-option,-m2a-nofpu,) \
-					   $(call cc-option,-m4-nofpu,)
+					   $(call cc-option,-m2a-nofpu,)
 cflags-$(CONFIG_CPU_SH3)		:= $(call cc-option,-m3,)
 cflags-$(CONFIG_CPU_SH4)		:= $(call cc-option,-m4,) \
 	$(call cc-option,-mno-implicit-fp,-m4-nofpu)
@@ -130,8 +128,6 @@ head-y	:= arch/sh/kernel/head_$(BITS).o
 
 core-y				+= arch/sh/kernel/ arch/sh/mm/ arch/sh/boards/
 core-$(CONFIG_SH_FPU_EMU)	+= arch/sh/math-emu/
-
-core-$(CONFIG_USE_BUILTIN_DTB)	+= arch/sh/boot/dts/
 
 # Mach groups
 machdir-$(CONFIG_SOLUTION_ENGINE)		+= mach-se

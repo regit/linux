@@ -21,36 +21,33 @@
 #include <linux/mman.h>
 #include <linux/personality.h>
 #include <linux/sys.h>
+#include <linux/user.h>
 #include <linux/init.h>
 #include <linux/completion.h>
 #include <linux/kallsyms.h>
 #include <linux/random.h>
-#include <linux/prctl.h>
 
 #include <asm/asm.h>
 #include <asm/bootinfo.h>
 #include <asm/cpu.h>
-#include <asm/dsemul.h>
 #include <asm/dsp.h>
 #include <asm/fpu.h>
 #include <asm/msa.h>
 #include <asm/pgtable.h>
 #include <asm/mipsregs.h>
 #include <asm/processor.h>
-#include <asm/reg.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/elf.h>
 #include <asm/isadep.h>
 #include <asm/inst.h>
 #include <asm/stacktrace.h>
-#include <asm/irq_regs.h>
 
 #ifdef CONFIG_HOTPLUG_CPU
 void arch_cpu_idle_dead(void)
 {
 	/* What the heck is this check doing ? */
-	if (!cpumask_test_cpu(smp_processor_id(), &cpu_callin_map))
+	if (!cpu_isset(smp_processor_id(), cpu_callin_map))
 		play_dead();
 }
 #endif
@@ -66,54 +63,25 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_FR|KU_MASK);
 	status |= KU_USER;
 	regs->cp0_status = status;
-	lose_fpu(0);
-	clear_thread_flag(TIF_MSA_CTX_LIVE);
 	clear_used_math();
-	atomic_set(&current->thread.bd_emu_frame, BD_EMUFRAME_NONE);
+	clear_fpu_owner();
 	init_dsp();
+	clear_thread_flag(TIF_MSA_CTX_LIVE);
+	disable_msa();
 	regs->cp0_epc = pc;
 	regs->regs[29] = sp;
 }
 
-void exit_thread(struct task_struct *tsk)
+void exit_thread(void)
 {
-	/*
-	 * User threads may have allocated a delay slot emulation frame.
-	 * If so, clean up that allocation.
-	 */
-	if (!(current->flags & PF_KTHREAD))
-		dsemul_thread_cleanup(tsk);
 }
 
-int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
+void flush_thread(void)
 {
-	/*
-	 * Save any process state which is live in hardware registers to the
-	 * parent context prior to duplication. This prevents the new child
-	 * state becoming stale if the parent is preempted before copy_thread()
-	 * gets a chance to save the parent's live hardware registers to the
-	 * child context.
-	 */
-	preempt_disable();
-
-	if (is_msa_enabled())
-		save_msa(current);
-	else if (is_fpu_owner())
-		_save_fp(current);
-
-	save_dsp(current);
-
-	preempt_enable();
-
-	*dst = *src;
-	return 0;
 }
 
-/*
- * Copy architecture-specific thread state
- */
 int copy_thread(unsigned long clone_flags, unsigned long usp,
-	unsigned long kthread_arg, struct task_struct *p)
+	unsigned long arg, struct task_struct *p)
 {
 	struct thread_info *ti = task_thread_info(p);
 	struct pt_regs *childregs, *regs = current_pt_regs();
@@ -122,18 +90,29 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 
 	childksp = (unsigned long)task_stack_page(p) + THREAD_SIZE - 32;
 
+	preempt_disable();
+
+	if (is_msa_enabled())
+		save_msa(p);
+	else if (is_fpu_owner())
+		save_fp(p);
+
+	if (cpu_has_dsp)
+		save_dsp(p);
+
+	preempt_enable();
+
 	/* set up new TSS. */
 	childregs = (struct pt_regs *) childksp - 1;
 	/*  Put the stack after the struct pt_regs.  */
 	childksp = (unsigned long) childregs;
 	p->thread.cp0_status = read_c0_status() & ~(ST0_CU2|ST0_CU1);
 	if (unlikely(p->flags & PF_KTHREAD)) {
-		/* kernel thread */
 		unsigned long status = p->thread.cp0_status;
 		memset(childregs, 0, sizeof(struct pt_regs));
 		ti->addr_limit = KERNEL_DS;
 		p->thread.reg16 = usp; /* fn */
-		p->thread.reg17 = kthread_arg;
+		p->thread.reg17 = arg;
 		p->thread.reg29 = childksp;
 		p->thread.reg31 = (unsigned long) ret_from_kernel_thread;
 #if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
@@ -145,8 +124,6 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 		childregs->cp0_status = status;
 		return 0;
 	}
-
-	/* user thread */
 	*childregs = *regs;
 	childregs->regs[7] = 0; /* Clear error flag */
 	childregs->regs[2] = 0; /* Child gets zero as return value */
@@ -164,19 +141,70 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 	childregs->cp0_status &= ~(ST0_CU2|ST0_CU1);
 
 	clear_tsk_thread_flag(p, TIF_USEDFPU);
-	clear_tsk_thread_flag(p, TIF_USEDMSA);
-	clear_tsk_thread_flag(p, TIF_MSA_CTX_LIVE);
 
 #ifdef CONFIG_MIPS_MT_FPAFF
 	clear_tsk_thread_flag(p, TIF_FPUBOUND);
 #endif /* CONFIG_MIPS_MT_FPAFF */
 
-	atomic_set(&p->thread.bd_emu_frame, BD_EMUFRAME_NONE);
-
 	if (clone_flags & CLONE_SETTLS)
 		ti->tp_value = regs->regs[7];
 
 	return 0;
+}
+
+/* Fill in the fpu structure for a core dump.. */
+int dump_fpu(struct pt_regs *regs, elf_fpregset_t *r)
+{
+	int i;
+
+	for (i = 0; i < NUM_FPU_REGS; i++)
+		memcpy(&r[i], &current->thread.fpu.fpr[i], sizeof(*r));
+
+	memcpy(&r[NUM_FPU_REGS], &current->thread.fpu.fcr31,
+	       sizeof(current->thread.fpu.fcr31));
+
+	return 1;
+}
+
+void elf_dump_regs(elf_greg_t *gp, struct pt_regs *regs)
+{
+	int i;
+
+	for (i = 0; i < EF_R0; i++)
+		gp[i] = 0;
+	gp[EF_R0] = 0;
+	for (i = 1; i <= 31; i++)
+		gp[EF_R0 + i] = regs->regs[i];
+	gp[EF_R26] = 0;
+	gp[EF_R27] = 0;
+	gp[EF_LO] = regs->lo;
+	gp[EF_HI] = regs->hi;
+	gp[EF_CP0_EPC] = regs->cp0_epc;
+	gp[EF_CP0_BADVADDR] = regs->cp0_badvaddr;
+	gp[EF_CP0_STATUS] = regs->cp0_status;
+	gp[EF_CP0_CAUSE] = regs->cp0_cause;
+#ifdef EF_UNUSED0
+	gp[EF_UNUSED0] = 0;
+#endif
+}
+
+int dump_task_regs(struct task_struct *tsk, elf_gregset_t *regs)
+{
+	elf_dump_regs(*regs, task_pt_regs(tsk));
+	return 1;
+}
+
+int dump_task_fpu(struct task_struct *t, elf_fpregset_t *fpr)
+{
+	int i;
+
+	for (i = 0; i < NUM_FPU_REGS; i++)
+		memcpy(&fpr[i], &t->thread.fpu.fpr[i], sizeof(*fpr));
+
+	memcpy(&fpr[NUM_FPU_REGS], &t->thread.fpu.fcr31,
+	       sizeof(t->thread.fpu.fcr31));
+
+	return 1;
 }
 
 #ifdef CONFIG_CC_STACKPROTECTOR
@@ -211,21 +239,21 @@ static inline int is_ra_save_ins(union mips_instruction *ip)
 	 */
 	if (mm_insn_16bit(ip->halfword[0])) {
 		mmi.word = (ip->halfword[0] << 16);
-		return (mmi.mm16_r5_format.opcode == mm_swsp16_op &&
-			mmi.mm16_r5_format.rt == 31) ||
-		       (mmi.mm16_m_format.opcode == mm_pool16c_op &&
-			mmi.mm16_m_format.func == mm_swm16_op);
+		return ((mmi.mm16_r5_format.opcode == mm_swsp16_op &&
+			 mmi.mm16_r5_format.rt == 31) ||
+			(mmi.mm16_m_format.opcode == mm_pool16c_op &&
+			 mmi.mm16_m_format.func == mm_swm16_op));
 	}
 	else {
 		mmi.halfword[0] = ip->halfword[1];
 		mmi.halfword[1] = ip->halfword[0];
-		return (mmi.mm_m_format.opcode == mm_pool32b_op &&
-			mmi.mm_m_format.rd > 9 &&
-			mmi.mm_m_format.base == 29 &&
-			mmi.mm_m_format.func == mm_swm32_func) ||
-		       (mmi.i_format.opcode == mm_sw32_op &&
-			mmi.i_format.rs == 29 &&
-			mmi.i_format.rt == 31);
+		return ((mmi.mm_m_format.opcode == mm_pool32b_op &&
+			 mmi.mm_m_format.rd > 9 &&
+			 mmi.mm_m_format.base == 29 &&
+			 mmi.mm_m_format.func == mm_swm32_func) ||
+			(mmi.i_format.opcode == mm_sw32_op &&
+			 mmi.i_format.rs == 29 &&
+			 mmi.i_format.rt == 31));
 	}
 #else
 	/* sw / sd $ra, offset($sp) */
@@ -257,7 +285,7 @@ static inline int is_jump_ins(union mips_instruction *ip)
 	if (ip->r_format.opcode != mm_pool32a_op ||
 			ip->r_format.func != mm_pool32axf_op)
 		return 0;
-	return ((ip->u_format.uimmediate >> 6) & mm_jalr_op) == mm_jalr_op;
+	return (((ip->u_format.uimmediate >> 6) & mm_jalr_op) == mm_jalr_op);
 #else
 	if (ip->j_format.opcode == j_op)
 		return 1;
@@ -284,13 +312,13 @@ static inline int is_sp_move_ins(union mips_instruction *ip)
 		union mips_instruction mmi;
 
 		mmi.word = (ip->halfword[0] << 16);
-		return (mmi.mm16_r3_format.opcode == mm_pool16d_op &&
-			mmi.mm16_r3_format.simmediate && mm_addiusp_func) ||
-		       (mmi.mm16_r5_format.opcode == mm_pool16d_op &&
-			mmi.mm16_r5_format.rt == 29);
+		return ((mmi.mm16_r3_format.opcode == mm_pool16d_op &&
+			 mmi.mm16_r3_format.simmediate && mm_addiusp_func) ||
+			(mmi.mm16_r5_format.opcode == mm_pool16d_op &&
+			 mmi.mm16_r5_format.rt == 29));
 	}
-	return ip->mm_i_format.opcode == mm_addiu32_op &&
-	       ip->mm_i_format.rt == 29 && ip->mm_i_format.rs == 29;
+	return (ip->mm_i_format.opcode == mm_addiu32_op &&
+		 ip->mm_i_format.rt == 29 && ip->mm_i_format.rs == 29);
 #else
 	/* addiu/daddiu sp,sp,-imm */
 	if (ip->i_format.rs != 29 || ip->i_format.rt != 29)
@@ -359,7 +387,7 @@ static int get_frame_info(struct mips_frame_info *info)
 		return 0;
 	if (info->pc_offset < 0) /* leaf */
 		return 1;
-	/* prologue seems bogus... */
+	/* prologue seems boggus... */
 err:
 	return -1;
 }
@@ -461,7 +489,7 @@ unsigned long notrace unwind_stack_by_address(unsigned long stack_page,
 		    *sp + sizeof(*regs) <= stack_page + THREAD_SIZE - 32) {
 			regs = (struct pt_regs *)*sp;
 			pc = regs->cp0_epc;
-			if (!user_mode(regs) && __kernel_text_address(pc)) {
+			if (__kernel_text_address(pc)) {
 				*sp = regs->regs[29];
 				*ra = regs->regs[31];
 				return pc;
@@ -555,121 +583,4 @@ unsigned long arch_align_stack(unsigned long sp)
 		sp -= get_random_int() & ~PAGE_MASK;
 
 	return sp & ALMASK;
-}
-
-static void arch_dump_stack(void *info)
-{
-	struct pt_regs *regs;
-
-	regs = get_irq_regs();
-
-	if (regs)
-		show_regs(regs);
-
-	dump_stack();
-}
-
-void arch_trigger_cpumask_backtrace(const cpumask_t *mask, bool exclude_self)
-{
-	long this_cpu = get_cpu();
-
-	if (cpumask_test_cpu(this_cpu, mask) && !exclude_self)
-		dump_stack();
-
-	smp_call_function_many(mask, arch_dump_stack, NULL, 1);
-
-	put_cpu();
-}
-
-int mips_get_process_fp_mode(struct task_struct *task)
-{
-	int value = 0;
-
-	if (!test_tsk_thread_flag(task, TIF_32BIT_FPREGS))
-		value |= PR_FP_MODE_FR;
-	if (test_tsk_thread_flag(task, TIF_HYBRID_FPREGS))
-		value |= PR_FP_MODE_FRE;
-
-	return value;
-}
-
-static void prepare_for_fp_mode_switch(void *info)
-{
-	struct mm_struct *mm = info;
-
-	if (current->mm == mm)
-		lose_fpu(1);
-}
-
-int mips_set_process_fp_mode(struct task_struct *task, unsigned int value)
-{
-	const unsigned int known_bits = PR_FP_MODE_FR | PR_FP_MODE_FRE;
-	struct task_struct *t;
-	int max_users;
-
-	/* Check the value is valid */
-	if (value & ~known_bits)
-		return -EOPNOTSUPP;
-
-	/* Avoid inadvertently triggering emulation */
-	if ((value & PR_FP_MODE_FR) && raw_cpu_has_fpu &&
-	    !(raw_current_cpu_data.fpu_id & MIPS_FPIR_F64))
-		return -EOPNOTSUPP;
-	if ((value & PR_FP_MODE_FRE) && raw_cpu_has_fpu && !cpu_has_fre)
-		return -EOPNOTSUPP;
-
-	/* FR = 0 not supported in MIPS R6 */
-	if (!(value & PR_FP_MODE_FR) && raw_cpu_has_fpu && cpu_has_mips_r6)
-		return -EOPNOTSUPP;
-
-	/* Proceed with the mode switch */
-	preempt_disable();
-
-	/* Save FP & vector context, then disable FPU & MSA */
-	if (task->signal == current->signal)
-		lose_fpu(1);
-
-	/* Prevent any threads from obtaining live FP context */
-	atomic_set(&task->mm->context.fp_mode_switching, 1);
-	smp_mb__after_atomic();
-
-	/*
-	 * If there are multiple online CPUs then force any which are running
-	 * threads in this process to lose their FPU context, which they can't
-	 * regain until fp_mode_switching is cleared later.
-	 */
-	if (num_online_cpus() > 1) {
-		/* No need to send an IPI for the local CPU */
-		max_users = (task->mm == current->mm) ? 1 : 0;
-
-		if (atomic_read(&current->mm->mm_users) > max_users)
-			smp_call_function(prepare_for_fp_mode_switch,
-					  (void *)current->mm, 1);
-	}
-
-	/*
-	 * There are now no threads of the process with live FP context, so it
-	 * is safe to proceed with the FP mode switch.
-	 */
-	for_each_thread(task, t) {
-		/* Update desired FP register width */
-		if (value & PR_FP_MODE_FR) {
-			clear_tsk_thread_flag(t, TIF_32BIT_FPREGS);
-		} else {
-			set_tsk_thread_flag(t, TIF_32BIT_FPREGS);
-			clear_tsk_thread_flag(t, TIF_MSA_CTX_LIVE);
-		}
-
-		/* Update desired FP single layout */
-		if (value & PR_FP_MODE_FRE)
-			set_tsk_thread_flag(t, TIF_HYBRID_FPREGS);
-		else
-			clear_tsk_thread_flag(t, TIF_HYBRID_FPREGS);
-	}
-
-	/* Allow threads to use FP again */
-	atomic_set(&task->mm->context.fp_mode_switching, 0);
-	preempt_enable();
-
-	return 0;
 }

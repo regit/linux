@@ -347,7 +347,7 @@ int oaktrail_crtc_hdmi_mode_set(struct drm_crtc *crtc,
 
 	/* Flush the plane changes */
 	{
-		const struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
+		struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
 		crtc_funcs->mode_set_base(crtc, x, y, old_fb);
 	}
 
@@ -601,6 +601,7 @@ static void oaktrail_hdmi_destroy(struct drm_connector *connector)
 
 static const struct drm_encoder_helper_funcs oaktrail_hdmi_helper_funcs = {
 	.dpms = oaktrail_hdmi_dpms,
+	.mode_fixup = gma_encoder_mode_fixup,
 	.prepare = gma_encoder_prepare,
 	.mode_set = oaktrail_hdmi_mode_set,
 	.commit = gma_encoder_commit,
@@ -653,7 +654,7 @@ void oaktrail_hdmi_init(struct drm_device *dev,
 
 	drm_encoder_init(dev, encoder,
 			 &oaktrail_hdmi_enc_funcs,
-			 DRM_MODE_ENCODER_TMDS, NULL);
+			 DRM_MODE_ENCODER_TMDS);
 
 	gma_connector_attach_encoder(gma_connector, gma_encoder);
 
@@ -664,7 +665,7 @@ void oaktrail_hdmi_init(struct drm_device *dev,
 	connector->display_info.subpixel_order = SubPixelHorizontalRGB;
 	connector->interlace_allowed = false;
 	connector->doublescan_allowed = false;
-	drm_connector_register(connector);
+	drm_sysfs_connector_add(connector);
 	dev_info(dev->dev, "HDMI initialised.\n");
 
 	return;
@@ -673,7 +674,7 @@ failed_connector:
 	kfree(gma_encoder);
 }
 
-static const struct pci_device_id hdmi_ids[] = {
+static DEFINE_PCI_DEVICE_TABLE(hdmi_ids) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x080d) },
 	{ 0 }
 };

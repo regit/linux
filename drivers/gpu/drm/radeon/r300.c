@@ -50,31 +50,6 @@
  */
 
 /*
- * Indirect registers accessor
- */
-uint32_t rv370_pcie_rreg(struct radeon_device *rdev, uint32_t reg)
-{
-	unsigned long flags;
-	uint32_t r;
-
-	spin_lock_irqsave(&rdev->pcie_idx_lock, flags);
-	WREG32(RADEON_PCIE_INDEX, ((reg) & rdev->pcie_reg_mask));
-	r = RREG32(RADEON_PCIE_DATA);
-	spin_unlock_irqrestore(&rdev->pcie_idx_lock, flags);
-	return r;
-}
-
-void rv370_pcie_wreg(struct radeon_device *rdev, uint32_t reg, uint32_t v)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&rdev->pcie_idx_lock, flags);
-	WREG32(RADEON_PCIE_INDEX, ((reg) & rdev->pcie_reg_mask));
-	WREG32(RADEON_PCIE_DATA, (v));
-	spin_unlock_irqrestore(&rdev->pcie_idx_lock, flags);
-}
-
-/*
  * rv370,rv380 PCIE GART
  */
 static int rv370_debugfs_pcie_gart_info_init(struct radeon_device *rdev);
@@ -94,32 +69,21 @@ void rv370_pcie_gart_tlb_flush(struct radeon_device *rdev)
 	mb();
 }
 
-#define R300_PTE_UNSNOOPED (1 << 0)
 #define R300_PTE_WRITEABLE (1 << 2)
 #define R300_PTE_READABLE  (1 << 3)
 
-uint64_t rv370_pcie_gart_get_page_entry(uint64_t addr, uint32_t flags)
-{
-	addr = (lower_32_bits(addr) >> 8) |
-		((upper_32_bits(addr) & 0xff) << 24);
-	if (flags & RADEON_GART_PAGE_READ)
-		addr |= R300_PTE_READABLE;
-	if (flags & RADEON_GART_PAGE_WRITE)
-		addr |= R300_PTE_WRITEABLE;
-	if (!(flags & RADEON_GART_PAGE_SNOOP))
-		addr |= R300_PTE_UNSNOOPED;
-	return addr;
-}
-
 void rv370_pcie_gart_set_page(struct radeon_device *rdev, unsigned i,
-			      uint64_t entry)
+			      uint64_t addr)
 {
 	void __iomem *ptr = rdev->gart.ptr;
 
+	addr = (lower_32_bits(addr) >> 8) |
+	       ((upper_32_bits(addr) & 0xff) << 24) |
+	       R300_PTE_WRITEABLE | R300_PTE_READABLE;
 	/* on x86 we want this to be CPU endian, on powerpc
 	 * on powerpc without HW swappers, it'll get swapped on way
 	 * into VRAM - so no need for cpu_to_le32 on VRAM tables */
-	writel(entry, ((void __iomem *)ptr) + (i * 4));
+	writel(addr, ((void __iomem *)ptr) + (i * 4));
 }
 
 int rv370_pcie_gart_init(struct radeon_device *rdev)
@@ -139,7 +103,6 @@ int rv370_pcie_gart_init(struct radeon_device *rdev)
 		DRM_ERROR("Failed to register debugfs file for PCIE gart !\n");
 	rdev->gart.table_size = rdev->gart.num_gpu_pages * 4;
 	rdev->asic->gart.tlb_flush = &rv370_pcie_gart_tlb_flush;
-	rdev->asic->gart.get_page_entry = &rv370_pcie_gart_get_page_entry;
 	rdev->asic->gart.set_page = &rv370_pcie_gart_set_page;
 	return radeon_gart_table_vram_alloc(rdev);
 }
@@ -157,6 +120,7 @@ int rv370_pcie_gart_enable(struct radeon_device *rdev)
 	r = radeon_gart_table_vram_pin(rdev);
 	if (r)
 		return r;
+	radeon_gart_restore(rdev);
 	/* discard memory request outside of configured range */
 	tmp = RADEON_PCIE_TX_GART_UNMAPPED_ACCESS_DISCARD;
 	WREG32_PCIE(RADEON_PCIE_TX_GART_CNTL, tmp);
@@ -326,7 +290,7 @@ void r300_ring_start(struct radeon_device *rdev, struct radeon_ring *ring)
 	radeon_ring_write(ring,
 			  R300_GEOMETRY_ROUND_NEAREST |
 			  R300_COLOR_ROUND_NEAREST);
-	radeon_ring_unlock_commit(rdev, ring, false);
+	radeon_ring_unlock_commit(rdev, ring);
 }
 
 static void r300_errata(struct radeon_device *rdev)
@@ -410,7 +374,7 @@ static void r300_gpu_init(struct radeon_device *rdev)
 		 rdev->num_gb_pipes, rdev->num_z_pipes);
 }
 
-int r300_asic_reset(struct radeon_device *rdev, bool hard)
+int r300_asic_reset(struct radeon_device *rdev)
 {
 	struct r100_mc_save save;
 	u32 status, tmp;
@@ -629,7 +593,7 @@ static int r300_packet0_check(struct radeon_cs_parser *p,
 		struct radeon_cs_packet *pkt,
 		unsigned idx, unsigned reg)
 {
-	struct radeon_bo_list *reloc;
+	struct radeon_cs_reloc *reloc;
 	struct r100_cs_track *track;
 	volatile uint32_t *ib;
 	uint32_t tmp, tile_flags = 0;
@@ -1173,7 +1137,7 @@ fail:
 static int r300_packet3_check(struct radeon_cs_parser *p,
 			      struct radeon_cs_packet *pkt)
 {
-	struct radeon_bo_list *reloc;
+	struct radeon_cs_reloc *reloc;
 	struct r100_cs_track *track;
 	volatile uint32_t *ib;
 	unsigned idx;
@@ -1314,7 +1278,7 @@ int r300_cs_parse(struct radeon_cs_parser *p)
 		if (r) {
 			return r;
 		}
-	} while (p->idx < p->chunk_ib->length_dw);
+	} while (p->idx < p->chunks[p->chunk_ib_idx].length_dw);
 	return 0;
 }
 

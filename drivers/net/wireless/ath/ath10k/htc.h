@@ -22,6 +22,7 @@
 #include <linux/list.h>
 #include <linux/bug.h>
 #include <linux/skbuff.h>
+#include <linux/semaphore.h>
 #include <linux/timer.h>
 
 struct ath10k;
@@ -213,6 +214,7 @@ struct ath10k_htc_frame {
 	struct ath10k_htc_record trailer[0];
 } __packed __aligned(4);
 
+
 /*******************/
 /* Host-side stuff */
 /*******************/
@@ -296,10 +298,10 @@ struct ath10k_htc_svc_conn_resp {
 #define ATH10K_NUM_CONTROL_TX_BUFFERS 2
 #define ATH10K_HTC_MAX_LEN 4096
 #define ATH10K_HTC_MAX_CTRL_MSG_LEN 256
-#define ATH10K_HTC_WAIT_TIMEOUT_HZ (1 * HZ)
+#define ATH10K_HTC_WAIT_TIMEOUT_HZ (1*HZ)
 #define ATH10K_HTC_CONTROL_BUFFER_SIZE (ATH10K_HTC_MAX_CTRL_MSG_LEN + \
 					sizeof(struct ath10k_htc_hdr))
-#define ATH10K_HTC_CONN_SVC_TIMEOUT_HZ (1 * HZ)
+#define ATH10K_HTC_CONN_SVC_TIMEOUT_HZ (1*HZ)
 
 struct ath10k_htc_ep {
 	struct ath10k_htc *htc;
@@ -311,6 +313,8 @@ struct ath10k_htc_ep {
 	int max_ep_message_len;
 	u8 ul_pipe_id;
 	u8 dl_pipe_id;
+	int ul_is_polled; /* call HIF to get tx completions */
+	int dl_is_polled; /* call HIF to fetch rx (not implemented) */
 
 	u8 seq_no; /* for debugging */
 	int tx_credits;
@@ -328,7 +332,7 @@ struct ath10k_htc {
 	struct ath10k *ar;
 	struct ath10k_htc_ep endpoint[ATH10K_HTC_EP_COUNT];
 
-	/* protects endpoints */
+	/* protects endpoint and stopped fields */
 	spinlock_t tx_lock;
 
 	struct ath10k_htc_ops htc_ops;
@@ -341,6 +345,8 @@ struct ath10k_htc {
 	int total_transmit_credits;
 	struct ath10k_htc_svc_tx_credits service_tx_alloc[ATH10K_HTC_EP_COUNT];
 	int target_credit_size;
+
+	bool stopped;
 };
 
 int ath10k_htc_init(struct ath10k *ar);
@@ -351,8 +357,7 @@ int ath10k_htc_connect_service(struct ath10k_htc *htc,
 			       struct ath10k_htc_svc_conn_resp *conn_resp);
 int ath10k_htc_send(struct ath10k_htc *htc, enum ath10k_htc_ep_id eid,
 		    struct sk_buff *packet);
-struct sk_buff *ath10k_htc_alloc_skb(struct ath10k *ar, int size);
-void ath10k_htc_tx_completion_handler(struct ath10k *ar, struct sk_buff *skb);
-void ath10k_htc_rx_completion_handler(struct ath10k *ar, struct sk_buff *skb);
+void ath10k_htc_stop(struct ath10k_htc *htc);
+struct sk_buff *ath10k_htc_alloc_skb(int size);
 
 #endif

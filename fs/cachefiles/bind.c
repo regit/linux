@@ -20,7 +20,6 @@
 #include <linux/mount.h>
 #include <linux/statfs.h>
 #include <linux/ctype.h>
-#include <linux/xattr.h>
 #include "internal.h"
 
 static int cachefiles_daemon_add_cache(struct cachefiles_cache *caches);
@@ -51,18 +50,18 @@ int cachefiles_daemon_bind(struct cachefiles_cache *cache, char *args)
 	       cache->brun_percent  < 100);
 
 	if (*args) {
-		pr_err("'bind' command doesn't take an argument\n");
+		pr_err("'bind' command doesn't take an argument");
 		return -EINVAL;
 	}
 
 	if (!cache->rootdirname) {
-		pr_err("No cache directory specified\n");
+		pr_err("No cache directory specified");
 		return -EINVAL;
 	}
 
 	/* don't permit already bound caches to be re-bound */
 	if (test_bit(CACHEFILES_READY, &cache->flags)) {
-		pr_err("Cache already bound\n");
+		pr_err("Cache already bound");
 		return -EBUSY;
 	}
 
@@ -124,10 +123,11 @@ static int cachefiles_daemon_add_cache(struct cachefiles_cache *cache)
 
 	/* check parameters */
 	ret = -EOPNOTSUPP;
-	if (d_is_negative(root) ||
-	    !d_backing_inode(root)->i_op->lookup ||
-	    !d_backing_inode(root)->i_op->mkdir ||
-	    !(d_backing_inode(root)->i_opflags & IOP_XATTR) ||
+	if (!root->d_inode ||
+	    !root->d_inode->i_op->lookup ||
+	    !root->d_inode->i_op->mkdir ||
+	    !root->d_inode->i_op->setxattr ||
+	    !root->d_inode->i_op->getxattr ||
 	    !root->d_sb->s_op->statfs ||
 	    !root->d_sb->s_op->sync_fs)
 		goto error_unsupported;
@@ -248,7 +248,7 @@ error_open_root:
 	kmem_cache_free(cachefiles_object_jar, fsdef);
 error_root_object:
 	cachefiles_end_secure(cache, saved_cred);
-	pr_err("Failed to register: %d\n", ret);
+	pr_err("Failed to register: %d", ret);
 	return ret;
 }
 

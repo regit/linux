@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/cpufreq.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
@@ -38,7 +39,8 @@ static struct priv
  * - cpu clk
  * - ddr clk
  *
- * The frequencies are set at runtime before registering this table.
+ * The frequencies are set at runtime before registering this *
+ * table.
  */
 static struct cpufreq_frequency_table kirkwood_freq_table[] = {
 	{0, STATE_CPU_FREQ,	0}, /* CPU uses cpuclk */
@@ -48,7 +50,9 @@ static struct cpufreq_frequency_table kirkwood_freq_table[] = {
 
 static unsigned int kirkwood_cpufreq_get_cpu_frequency(unsigned int cpu)
 {
-	return clk_get_rate(priv.powersave_clk) / 1000;
+	if (__clk_is_enabled(priv.powersave_clk))
+		return kirkwood_freq_table[1].frequency;
+	return kirkwood_freq_table[0].frequency;
 }
 
 static int kirkwood_cpufreq_target(struct cpufreq_policy *policy,
@@ -66,10 +70,10 @@ static int kirkwood_cpufreq_target(struct cpufreq_policy *policy,
 
 	switch (state) {
 	case STATE_CPU_FREQ:
-		clk_set_parent(priv.powersave_clk, priv.cpu_clk);
+		clk_disable(priv.powersave_clk);
 		break;
 	case STATE_DDR_FREQ:
-		clk_set_parent(priv.powersave_clk, priv.ddr_clk);
+		clk_enable(priv.powersave_clk);
 		break;
 	}
 
@@ -123,7 +127,7 @@ static int kirkwood_cpufreq_probe(struct platform_device *pdev)
 
 	priv.cpu_clk = of_clk_get_by_name(np, "cpu_clk");
 	if (IS_ERR(priv.cpu_clk)) {
-		dev_err(priv.dev, "Unable to get cpuclk\n");
+		dev_err(priv.dev, "Unable to get cpuclk");
 		return PTR_ERR(priv.cpu_clk);
 	}
 
@@ -132,7 +136,7 @@ static int kirkwood_cpufreq_probe(struct platform_device *pdev)
 
 	priv.ddr_clk = of_clk_get_by_name(np, "ddrclk");
 	if (IS_ERR(priv.ddr_clk)) {
-		dev_err(priv.dev, "Unable to get ddrclk\n");
+		dev_err(priv.dev, "Unable to get ddrclk");
 		err = PTR_ERR(priv.ddr_clk);
 		goto out_cpu;
 	}
@@ -142,11 +146,11 @@ static int kirkwood_cpufreq_probe(struct platform_device *pdev)
 
 	priv.powersave_clk = of_clk_get_by_name(np, "powersave");
 	if (IS_ERR(priv.powersave_clk)) {
-		dev_err(priv.dev, "Unable to get powersave\n");
+		dev_err(priv.dev, "Unable to get powersave");
 		err = PTR_ERR(priv.powersave_clk);
 		goto out_ddr;
 	}
-	clk_prepare_enable(priv.powersave_clk);
+	clk_prepare(priv.powersave_clk);
 
 	of_node_put(np);
 	np = NULL;
@@ -155,7 +159,7 @@ static int kirkwood_cpufreq_probe(struct platform_device *pdev)
 	if (!err)
 		return 0;
 
-	dev_err(priv.dev, "Failed to register cpufreq driver\n");
+	dev_err(priv.dev, "Failed to register cpufreq driver");
 
 	clk_disable_unprepare(priv.powersave_clk);
 out_ddr:
@@ -183,6 +187,7 @@ static struct platform_driver kirkwood_cpufreq_platform_driver = {
 	.remove = kirkwood_cpufreq_remove,
 	.driver = {
 		.name = "kirkwood-cpufreq",
+		.owner = THIS_MODULE,
 	},
 };
 

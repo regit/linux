@@ -22,6 +22,7 @@
 #include <linux/errno.h>
 #include <linux/ptrace.h>
 #include <linux/smp.h>
+#include <linux/user.h>
 #include <linux/security.h>
 
 #include <asm/cpu.h>
@@ -31,8 +32,7 @@
 #include <asm/mipsmtregs.h>
 #include <asm/pgtable.h>
 #include <asm/page.h>
-#include <asm/reg.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/bootinfo.h>
 
 /*
@@ -69,8 +69,8 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		if (get_user(addrOthers, (u32 __user * __user *) (unsigned long) addr) != 0)
 			break;
 
-		copied = ptrace_access_vm(child, (u64)addrOthers, &tmp,
-				sizeof(tmp), FOLL_FORCE);
+		copied = access_process_vm(child, (u64)addrOthers, &tmp,
+				sizeof(tmp), 0);
 		if (copied != sizeof(tmp))
 			break;
 		ret = put_user(tmp, (u32 __user *) (unsigned long) data);
@@ -129,7 +129,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 			break;
 		case FPC_EIR:
 			/* implementation / version register */
-			tmp = boot_cpu_data.fpu_id;
+			tmp = current_cpu_data.fpu_id;
 			break;
 		case DSP_BASE ... DSP_BASE + 5: {
 			dspreg_t *dregs;
@@ -178,9 +178,8 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		if (get_user(addrOthers, (u32 __user * __user *) (unsigned long) addr) != 0)
 			break;
 		ret = 0;
-		if (ptrace_access_vm(child, (u64)addrOthers, &data,
-					sizeof(data),
-					FOLL_FORCE | FOLL_WRITE) == sizeof(data))
+		if (access_process_vm(child, (u64)addrOthers, &data,
+					sizeof(data), 1) == sizeof(data))
 			break;
 		ret = -EIO;
 		break;
@@ -257,13 +256,11 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		}
 
 	case PTRACE_GETREGS:
-		ret = ptrace_getregs(child,
-				(struct user_pt_regs __user *) (__u64) data);
+		ret = ptrace_getregs(child, (__s64 __user *) (__u64) data);
 		break;
 
 	case PTRACE_SETREGS:
-		ret = ptrace_setregs(child,
-				(struct user_pt_regs __user *) (__u64) data);
+		ret = ptrace_setregs(child, (__s64 __user *) (__u64) data);
 		break;
 
 	case PTRACE_GETFPREGS:

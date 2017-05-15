@@ -152,7 +152,8 @@ static void octeon_cf_set_piomode(struct ata_port *ap, struct ata_device *dev)
 		div = 8;
 	T = (int)((1000000000000LL * div) / octeon_get_io_clock_rate());
 
-	BUG_ON(ata_timing_compute(dev, dev->pio_mode, &timing, T, T));
+	if (ata_timing_compute(dev, dev->pio_mode, &timing, T, T))
+		BUG();
 
 	t1 = timing.setup;
 	if (t1)
@@ -1052,12 +1053,13 @@ static struct of_device_id octeon_cf_match[] = {
 	},
 	{},
 };
-MODULE_DEVICE_TABLE(of, octeon_cf_match);
+MODULE_DEVICE_TABLE(of, octeon_i2c_match);
 
 static struct platform_driver octeon_cf_driver = {
 	.probe		= octeon_cf_probe,
 	.driver		= {
 		.name	= DRV_NAME,
+		.owner	= THIS_MODULE,
 		.of_match_table = octeon_cf_match,
 		.shutdown = octeon_cf_shutdown
 	},

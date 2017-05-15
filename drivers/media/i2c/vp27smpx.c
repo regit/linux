@@ -25,7 +25,7 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/ioctl.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/i2c.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
@@ -194,6 +194,7 @@ MODULE_DEVICE_TABLE(i2c, vp27smpx_id);
 
 static struct i2c_driver vp27smpx_driver = {
 	.driver = {
+		.owner	= THIS_MODULE,
 		.name	= "vp27smpx",
 	},
 	.probe		= vp27smpx_probe,

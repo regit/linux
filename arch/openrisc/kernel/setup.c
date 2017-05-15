@@ -38,6 +38,7 @@
 #include <linux/of.h>
 #include <linux/memblock.h>
 #include <linux/device.h>
+#include <linux/of_platform.h>
 
 #include <asm/sections.h>
 #include <asm/segment.h>
@@ -50,16 +51,18 @@
 
 #include "vmlinux.h"
 
-static void __init setup_memory(void)
+static unsigned long __init setup_memory(void)
 {
+	unsigned long bootmap_size;
 	unsigned long ram_start_pfn;
+	unsigned long free_ram_start_pfn;
 	unsigned long ram_end_pfn;
 	phys_addr_t memory_start, memory_end;
 	struct memblock_region *region;
 
 	memory_end = memory_start = 0;
 
-	/* Find main memory where is the kernel, we assume its the only one */
+	/* Find main memory where is the kernel */
 	for_each_memblock(memory, region) {
 		memory_start = region->base;
 		memory_end = region->base + region->size;
@@ -72,11 +75,10 @@ static void __init setup_memory(void)
 	}
 
 	ram_start_pfn = PFN_UP(memory_start);
+	/* free_ram_start_pfn is first page after kernel */
+	free_ram_start_pfn = PFN_UP(__pa(_end));
 	ram_end_pfn = PFN_DOWN(memblock_end_of_DRAM());
 
-	/* setup bootmem globals (we use no_bootmem, but mm still depends on this) */
-	min_low_pfn = ram_start_pfn;
-	max_low_pfn = ram_end_pfn;
 	max_pfn = ram_end_pfn;
 
 	/*
@@ -84,13 +86,22 @@ static void __init setup_memory(void)
 	 *
 	 * This makes the memory from the end of the kernel to the end of
 	 * RAM usable.
+	 * init_bootmem sets the global values min_low_pfn, max_low_pfn.
 	 */
-	memblock_reserve(__pa(_stext), _end - _stext);
+	bootmap_size = init_bootmem(free_ram_start_pfn,
+				    ram_end_pfn - ram_start_pfn);
+	free_bootmem(PFN_PHYS(free_ram_start_pfn),
+		     (ram_end_pfn - free_ram_start_pfn) << PAGE_SHIFT);
+	reserve_bootmem(PFN_PHYS(free_ram_start_pfn), bootmap_size,
+			BOOTMEM_DEFAULT);
 
-	early_init_fdt_reserve_self();
-	early_init_fdt_scan_reserved_mem();
+	for_each_memblock(reserved, region) {
+		printk(KERN_INFO "Reserved - 0x%08x-0x%08x\n",
+		       (u32) region->base, (u32) region->size);
+		reserve_bootmem(region->base, region->size, BOOTMEM_DEFAULT);
+	}
 
-	memblock_dump_all();
+	return ram_end_pfn;
 }
 
 struct cpuinfo cpuinfo;
@@ -208,6 +219,15 @@ void __init or32_early_setup(void *fdt)
 	early_init_devtree(fdt);
 }
 
+static int __init openrisc_device_probe(void)
+{
+	of_platform_populate(NULL, NULL, NULL, NULL);
+
+	return 0;
+}
+
+device_initcall(openrisc_device_probe);
+
 static inline unsigned long extract_value_bits(unsigned long reg,
 					       short bit_nr, short width)
 {
@@ -262,6 +282,8 @@ void calibrate_delay(void)
 
 void __init setup_arch(char **cmdline_p)
 {
+	unsigned long max_low_pfn;
+
 	unflatten_and_copy_device_tree();
 
 	setup_cpuinfo();
@@ -282,8 +304,8 @@ void __init setup_arch(char **cmdline_p)
 	initrd_below_start_ok = 1;
 #endif
 
-	/* setup memblock allocator */
-	setup_memory();
+	/* setup bootmem allocator */
+	max_low_pfn = setup_memory();
 
 	/* paging_init() sets up the MMU and marks all pages as reserved */
 	paging_init();
@@ -295,7 +317,7 @@ void __init setup_arch(char **cmdline_p)
 
 	*cmdline_p = boot_command_line;
 
-	printk(KERN_INFO "OpenRISC Linux -- http://openrisc.io\n");
+	printk(KERN_INFO "OpenRISC Linux -- http://openrisc.net\n");
 }
 
 static int show_cpuinfo(struct seq_file *m, void *v)
@@ -307,32 +329,30 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	version = (vr & SPR_VR_VER) >> 24;
 	revision = vr & SPR_VR_REV;
 
-	seq_printf(m,
-		   "cpu\t\t: OpenRISC-%x\n"
-		   "revision\t: %d\n"
-		   "frequency\t: %ld\n"
-		   "dcache size\t: %d bytes\n"
-		   "dcache block size\t: %d bytes\n"
-		   "icache size\t: %d bytes\n"
-		   "icache block size\t: %d bytes\n"
-		   "immu\t\t: %d entries, %lu ways\n"
-		   "dmmu\t\t: %d entries, %lu ways\n"
-		   "bogomips\t: %lu.%02lu\n",
-		   version,
-		   revision,
-		   loops_per_jiffy * HZ,
-		   cpuinfo.dcache_size,
-		   cpuinfo.dcache_block_size,
-		   cpuinfo.icache_size,
-		   cpuinfo.icache_block_size,
-		   1 << ((mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTS) >> 2),
-		   1 + (mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTW),
-		   1 << ((mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTS) >> 2),
-		   1 + (mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTW),
-		   (loops_per_jiffy * HZ) / 500000,
-		   ((loops_per_jiffy * HZ) / 5000) % 100);
-
-	return 0;
+	return seq_printf(m,
+			  "cpu\t\t: OpenRISC-%x\n"
+			  "revision\t: %d\n"
+			  "frequency\t: %ld\n"
+			  "dcache size\t: %d bytes\n"
+			  "dcache block size\t: %d bytes\n"
+			  "icache size\t: %d bytes\n"
+			  "icache block size\t: %d bytes\n"
+			  "immu\t\t: %d entries, %lu ways\n"
+			  "dmmu\t\t: %d entries, %lu ways\n"
+			  "bogomips\t: %lu.%02lu\n",
+			  version,
+			  revision,
+			  loops_per_jiffy * HZ,
+			  cpuinfo.dcache_size,
+			  cpuinfo.dcache_block_size,
+			  cpuinfo.icache_size,
+			  cpuinfo.icache_block_size,
+			  1 << ((mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTS) >> 2),
+			  1 + (mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTW),
+			  1 << ((mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTS) >> 2),
+			  1 + (mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTW),
+			  (loops_per_jiffy * HZ) / 500000,
+			  ((loops_per_jiffy * HZ) / 5000) % 100);
 }
 
 static void *c_start(struct seq_file *m, loff_t * pos)

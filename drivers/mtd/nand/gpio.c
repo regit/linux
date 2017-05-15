@@ -8,9 +8,7 @@
  *
  * © 2004 Simtec Electronics
  *
- * Device driver for NAND flash that uses a memory mapped interface to
- * read/write the NAND commands and data, and GPIO pins for control signals
- * (the DT binding refers to this as "GPIO assisted NAND flash")
+ * Device driver for NAND connected via GPIO
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -35,14 +33,12 @@
 
 struct gpiomtd {
 	void __iomem		*io_sync;
+	struct mtd_info		mtd_info;
 	struct nand_chip	nand_chip;
 	struct gpio_nand_platdata plat;
 };
 
-static inline struct gpiomtd *gpio_nand_getpriv(struct mtd_info *mtd)
-{
-	return container_of(mtd_to_nand(mtd), struct gpiomtd, nand_chip);
-}
+#define gpio_nand_getpriv(x) container_of(x, struct gpiomtd, mtd_info)
 
 
 #ifdef CONFIG_ARM
@@ -197,7 +193,7 @@ static int gpio_nand_remove(struct platform_device *pdev)
 {
 	struct gpiomtd *gpiomtd = platform_get_drvdata(pdev);
 
-	nand_release(nand_to_mtd(&gpiomtd->nand_chip));
+	nand_release(&gpiomtd->mtd_info);
 
 	if (gpio_is_valid(gpiomtd->plat.gpio_nwp))
 		gpio_set_value(gpiomtd->plat.gpio_nwp, 0);
@@ -210,8 +206,8 @@ static int gpio_nand_probe(struct platform_device *pdev)
 {
 	struct gpiomtd *gpiomtd;
 	struct nand_chip *chip;
-	struct mtd_info *mtd;
 	struct resource *res;
+	struct mtd_part_parser_data ppdata = {};
 	int ret = 0;
 
 	if (!pdev->dev.of_node && !dev_get_platdata(&pdev->dev))
@@ -270,31 +266,33 @@ static int gpio_nand_probe(struct platform_device *pdev)
 		chip->dev_ready = gpio_nand_devready;
 	}
 
-	nand_set_flash_node(chip, pdev->dev.of_node);
 	chip->IO_ADDR_W		= chip->IO_ADDR_R;
 	chip->ecc.mode		= NAND_ECC_SOFT;
-	chip->ecc.algo		= NAND_ECC_HAMMING;
 	chip->options		= gpiomtd->plat.options;
 	chip->chip_delay	= gpiomtd->plat.chip_delay;
 	chip->cmd_ctrl		= gpio_nand_cmd_ctrl;
 
-	mtd			= nand_to_mtd(chip);
-	mtd->dev.parent		= &pdev->dev;
+	gpiomtd->mtd_info.priv	= chip;
+	gpiomtd->mtd_info.owner	= THIS_MODULE;
 
 	platform_set_drvdata(pdev, gpiomtd);
 
 	if (gpio_is_valid(gpiomtd->plat.gpio_nwp))
 		gpio_direction_output(gpiomtd->plat.gpio_nwp, 1);
 
-	ret = nand_scan(mtd, 1);
-	if (ret)
+	if (nand_scan(&gpiomtd->mtd_info, 1)) {
+		ret = -ENXIO;
 		goto err_wp;
+	}
 
 	if (gpiomtd->plat.adjust_parts)
-		gpiomtd->plat.adjust_parts(&gpiomtd->plat, mtd->size);
+		gpiomtd->plat.adjust_parts(&gpiomtd->plat,
+					   gpiomtd->mtd_info.size);
 
-	ret = mtd_device_register(mtd, gpiomtd->plat.parts,
-				  gpiomtd->plat.num_parts);
+	ppdata.of_node = pdev->dev.of_node;
+	ret = mtd_device_parse_register(&gpiomtd->mtd_info, NULL, &ppdata,
+					gpiomtd->plat.parts,
+					gpiomtd->plat.num_parts);
 	if (!ret)
 		return 0;
 
@@ -310,6 +308,7 @@ static struct platform_driver gpio_nand_driver = {
 	.remove		= gpio_nand_remove,
 	.driver		= {
 		.name	= "gpio-nand",
+		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(gpio_nand_id_table),
 	},
 };

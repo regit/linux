@@ -82,7 +82,7 @@ static int debug = -1;	/* defaults above */
 module_param(debug, int, 0);
 MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
 
-static const struct pci_device_id skge_id_table[] = {
+static DEFINE_PCI_DEVICE_TABLE(skge_id_table) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_3COM, 0x1700) },	  /* 3Com 3C940 */
 	{ PCI_DEVICE(PCI_VENDOR_ID_3COM, 0x80EB) },	  /* 3Com 3C940B */
 #ifdef CONFIG_SKGE_GENESIS
@@ -1048,7 +1048,7 @@ static const char *skge_pause(enum pause_status status)
 static void skge_link_up(struct skge_port *skge)
 {
 	skge_write8(skge->hw, SK_REG(skge->port, LNK_LED_REG),
-		    LED_BLK_OFF|LED_SYNC_OFF|LED_REG_ON);
+		    LED_BLK_OFF|LED_SYNC_OFF|LED_ON);
 
 	netif_carrier_on(skge->netdev);
 	netif_wake_queue(skge->netdev);
@@ -1062,7 +1062,7 @@ static void skge_link_up(struct skge_port *skge)
 
 static void skge_link_down(struct skge_port *skge)
 {
-	skge_write8(skge->hw, SK_REG(skge->port, LNK_LED_REG), LED_REG_OFF);
+	skge_write8(skge->hw, SK_REG(skge->port, LNK_LED_REG), LED_OFF);
 	netif_carrier_off(skge->netdev);
 	netif_stop_queue(skge->netdev);
 
@@ -1107,7 +1107,7 @@ static u16 xm_phy_read(struct skge_hw *hw, int port, u16 reg)
 {
 	u16 v = 0;
 	if (__xm_phy_read(hw, port, reg, &v))
-		pr_warn("%s: phy read timed out\n", hw->dev[port]->name);
+		pr_warning("%s: phy read timed out\n", hw->dev[port]->name);
 	return v;
 }
 
@@ -1903,7 +1903,7 @@ static int gm_phy_write(struct skge_hw *hw, int port, u16 reg, u16 val)
 			return 0;
 	}
 
-	pr_warn("%s: phy write timeout\n", hw->dev[port]->name);
+	pr_warning("%s: phy write timeout\n", hw->dev[port]->name);
 	return -EIO;
 }
 
@@ -1931,7 +1931,7 @@ static u16 gm_phy_read(struct skge_hw *hw, int port, u16 reg)
 {
 	u16 v = 0;
 	if (__gm_phy_read(hw, port, reg, &v))
-		pr_warn("%s: phy read timeout\n", hw->dev[port]->name);
+		pr_warning("%s: phy read timeout\n", hw->dev[port]->name);
 	return v;
 }
 
@@ -2668,7 +2668,7 @@ static int skge_down(struct net_device *dev)
 	if (hw->ports == 1)
 		free_irq(hw->pdev->irq, hw);
 
-	skge_write8(skge->hw, SK_REG(skge->port, LNK_LED_REG), LED_REG_OFF);
+	skge_write8(skge->hw, SK_REG(skge->port, LNK_LED_REG), LED_OFF);
 	if (is_genesis(hw))
 		genesis_stop(skge);
 	else
@@ -2899,6 +2899,9 @@ static void skge_tx_timeout(struct net_device *dev)
 static int skge_change_mtu(struct net_device *dev, int new_mtu)
 {
 	int err;
+
+	if (new_mtu < ETH_ZLEN || new_mtu > ETH_JUMBO_MTU)
+		return -EINVAL;
 
 	if (!netif_running(dev)) {
 		dev->mtu = new_mtu;
@@ -3430,9 +3433,10 @@ static irqreturn_t skge_intr(int irq, void *dev_id)
 
 	if (status & IS_HW_ERR)
 		skge_error_irq(hw);
-out:
+
 	skge_write32(hw, B0_IMSK, hw->intr_mask);
 	skge_read32(hw, B0_IMSK);
+out:
 	spin_unlock(&hw->hw_lock);
 
 	return IRQ_RETVAL(handled);
@@ -3853,10 +3857,6 @@ static struct net_device *skge_devinit(struct skge_hw *hw, int port,
 	dev->ethtool_ops = &skge_ethtool_ops;
 	dev->watchdog_timeo = TX_WATCHDOG;
 	dev->irq = hw->pdev->irq;
-
-	/* MTU range: 60 - 9000 */
-	dev->min_mtu = ETH_ZLEN;
-	dev->max_mtu = ETH_JUMBO_MTU;
 
 	if (highmem)
 		dev->features |= NETIF_F_HIGHDMA;

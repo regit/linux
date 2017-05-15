@@ -18,6 +18,7 @@ config BLACKFIN
 	select HAVE_FTRACE_MCOUNT_RECORD
 	select HAVE_FUNCTION_GRAPH_TRACER
 	select HAVE_FUNCTION_TRACER
+	select HAVE_FUNCTION_TRACE_MCOUNT_TEST
 	select HAVE_IDE
 	select HAVE_KERNEL_GZIP if RAMKERNEL
 	select HAVE_KERNEL_BZIP2 if RAMKERNEL
@@ -26,7 +27,7 @@ config BLACKFIN
 	select HAVE_OPROFILE
 	select HAVE_PERF_EVENTS
 	select ARCH_HAVE_CUSTOM_GPIO_H
-	select GPIOLIB
+	select ARCH_REQUIRE_GPIOLIB
 	select HAVE_UID16
 	select HAVE_UNDERSCORE_SYMBOL_PREFIX
 	select VIRT_TO_BUS
@@ -40,7 +41,6 @@ config BLACKFIN
 	select HAVE_MOD_ARCH_SPECIFIC
 	select MODULES_USE_ELF_RELA
 	select HAVE_DEBUG_STACKOVERFLOW
-	select HAVE_NMI
 
 config GENERIC_CSUM
 	def_bool y
@@ -672,7 +672,7 @@ config TICKSOURCE_CORETMR
 	default y
 endmenu
 
-menu "Clock source"
+menu "Clock souce"
 	depends on GENERIC_CLOCKEVENTS
 config CYCLES_CLOCKSOURCE
 	bool "CYCLES"
@@ -1233,6 +1233,8 @@ config PCI
 source "drivers/pci/Kconfig"
 
 source "drivers/pcmcia/Kconfig"
+
+source "drivers/pci/hotplug/Kconfig"
 
 endmenu
 

@@ -90,6 +90,10 @@ static int msm_rng_read(struct hwrng *hwrng, void *data, size_t max, bool wait)
 	/* calculate max size bytes to transfer back to caller */
 	maxsize = min_t(size_t, MAX_HW_FIFO_SIZE, max);
 
+	/* no room for word data */
+	if (maxsize < WORD_SZ)
+		return 0;
+
 	ret = clk_prepare_enable(rng->clk);
 	if (ret)
 		return ret;
@@ -153,12 +157,20 @@ static int msm_rng_probe(struct platform_device *pdev)
 	rng->hwrng.cleanup = msm_rng_cleanup,
 	rng->hwrng.read = msm_rng_read,
 
-	ret = devm_hwrng_register(&pdev->dev, &rng->hwrng);
+	ret = hwrng_register(&rng->hwrng);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register hwrng\n");
 		return ret;
 	}
 
+	return 0;
+}
+
+static int msm_rng_remove(struct platform_device *pdev)
+{
+	struct msm_rng *rng = platform_get_drvdata(pdev);
+
+	hwrng_unregister(&rng->hwrng);
 	return 0;
 }
 
@@ -170,8 +182,10 @@ MODULE_DEVICE_TABLE(of, msm_rng_of_match);
 
 static struct platform_driver msm_rng_driver = {
 	.probe = msm_rng_probe,
+	.remove = msm_rng_remove,
 	.driver = {
 		.name = KBUILD_MODNAME,
+		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(msm_rng_of_match),
 	}
 };

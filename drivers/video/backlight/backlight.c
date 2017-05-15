@@ -164,30 +164,6 @@ static ssize_t brightness_show(struct device *dev,
 	return sprintf(buf, "%d\n", bd->props.brightness);
 }
 
-int backlight_device_set_brightness(struct backlight_device *bd,
-				    unsigned long brightness)
-{
-	int rc = -ENXIO;
-
-	mutex_lock(&bd->ops_lock);
-	if (bd->ops) {
-		if (brightness > bd->props.max_brightness)
-			rc = -EINVAL;
-		else {
-			pr_debug("set brightness to %lu\n", brightness);
-			bd->props.brightness = brightness;
-			backlight_update_status(bd);
-			rc = 0;
-		}
-	}
-	mutex_unlock(&bd->ops_lock);
-
-	backlight_generate_event(bd, BACKLIGHT_UPDATE_SYSFS);
-
-	return rc;
-}
-EXPORT_SYMBOL(backlight_device_set_brightness);
-
 static ssize_t brightness_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -199,9 +175,24 @@ static ssize_t brightness_store(struct device *dev,
 	if (rc)
 		return rc;
 
-	rc = backlight_device_set_brightness(bd, brightness);
+	rc = -ENXIO;
 
-	return rc ? rc : count;
+	mutex_lock(&bd->ops_lock);
+	if (bd->ops) {
+		if (brightness > bd->props.max_brightness)
+			rc = -EINVAL;
+		else {
+			pr_debug("set brightness to %lu\n", brightness);
+			bd->props.brightness = brightness;
+			backlight_update_status(bd);
+			rc = count;
+		}
+	}
+	mutex_unlock(&bd->ops_lock);
+
+	backlight_generate_event(bd, BACKLIGHT_UPDATE_SYSFS);
+
+	return rc;
 }
 static DEVICE_ATTR_RW(brightness);
 
@@ -232,8 +223,6 @@ static ssize_t actual_brightness_show(struct device *dev,
 	mutex_lock(&bd->ops_lock);
 	if (bd->ops && bd->ops->get_brightness)
 		rc = sprintf(buf, "%d\n", bd->ops->get_brightness(bd));
-	else
-		rc = sprintf(buf, "%d\n", bd->props.brightness);
 	mutex_unlock(&bd->ops_lock);
 
 	return rc;
@@ -389,7 +378,7 @@ struct backlight_device *backlight_device_register(const char *name,
 }
 EXPORT_SYMBOL(backlight_device_register);
 
-struct backlight_device *backlight_device_get_by_type(enum backlight_type type)
+bool backlight_device_registered(enum backlight_type type)
 {
 	bool found = false;
 	struct backlight_device *bd;
@@ -403,9 +392,9 @@ struct backlight_device *backlight_device_get_by_type(enum backlight_type type)
 	}
 	mutex_unlock(&backlight_dev_list_mutex);
 
-	return found ? bd : NULL;
+	return found;
 }
-EXPORT_SYMBOL(backlight_device_get_by_type);
+EXPORT_SYMBOL(backlight_device_registered);
 
 /**
  * backlight_device_unregister - unregisters a backlight device object.

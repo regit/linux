@@ -28,7 +28,6 @@
 #include <linux/syscore_ops.h>
 #include <linux/ctype.h>
 #include <linux/genhd.h>
-#include <linux/ktime.h>
 #include <trace/events/power.h>
 
 #include "power.h"
@@ -52,7 +51,6 @@ enum {
 #ifdef CONFIG_SUSPEND
 	HIBERNATION_SUSPEND,
 #endif
-	HIBERNATION_TEST_RESUME,
 	/* keep last */
 	__HIBERNATION_AFTER_LAST
 };
@@ -234,17 +232,20 @@ static void platform_recover(int platform_mode)
  * @nr_pages: Number of memory pages processed between @start and @stop.
  * @msg: Additional diagnostic message to print.
  */
-void swsusp_show_speed(ktime_t start, ktime_t stop,
-		      unsigned nr_pages, char *msg)
+void swsusp_show_speed(struct timeval *start, struct timeval *stop,
+			unsigned nr_pages, char *msg)
 {
-	ktime_t diff;
 	u64 elapsed_centisecs64;
 	unsigned int centisecs;
 	unsigned int k;
 	unsigned int kps;
 
-	diff = ktime_sub(stop, start);
-	elapsed_centisecs64 = ktime_divns(diff, 10*NSEC_PER_MSEC);
+	elapsed_centisecs64 = timeval_to_ns(stop) - timeval_to_ns(start);
+	/*
+	 * If "(s64)elapsed_centisecs64 < 0", it will print long elapsed time,
+	 * it is obvious enough for what went wrong.
+	 */
+	do_div(elapsed_centisecs64, NSEC_PER_SEC / 100);
 	centisecs = elapsed_centisecs64;
 	if (centisecs == 0)
 		centisecs = 1;	/* avoid div-by-zero */
@@ -300,16 +301,14 @@ static int create_image(int platform_mode)
 	save_processor_state();
 	trace_suspend_resume(TPS("machine_suspend"), PM_EVENT_HIBERNATE, true);
 	error = swsusp_arch_suspend();
-	/* Restore control flow magically appears here */
-	restore_processor_state();
 	trace_suspend_resume(TPS("machine_suspend"), PM_EVENT_HIBERNATE, false);
 	if (error)
 		printk(KERN_ERR "PM: Error %d creating hibernation image\n",
 			error);
-	if (!in_suspend) {
+	/* Restore control flow magically appears here */
+	restore_processor_state();
+	if (!in_suspend)
 		events_check_enabled = false;
-		clear_free_pages();
-	}
 
 	platform_leave(platform_mode);
 
@@ -342,7 +341,6 @@ int hibernation_snapshot(int platform_mode)
 	pm_message_t msg;
 	int error;
 
-	pm_suspend_clear_flags();
 	error = platform_begin(platform_mode);
 	if (error)
 		goto Close;
@@ -373,6 +371,7 @@ int hibernation_snapshot(int platform_mode)
 	}
 
 	suspend_console();
+	ftrace_stop();
 	pm_restrict_gfp_mask();
 
 	error = dpm_suspend(PMSG_FREEZE);
@@ -398,6 +397,7 @@ int hibernation_snapshot(int platform_mode)
 	if (error || !in_suspend)
 		pm_restore_gfp_mask();
 
+	ftrace_start();
 	resume_console();
 	dpm_complete(msg);
 
@@ -410,11 +410,6 @@ int hibernation_snapshot(int platform_mode)
  Cleanup:
 	swsusp_free();
 	goto Close;
-}
-
-int __weak hibernate_resume_nonboot_cpu_disable(void)
-{
-	return disable_nonboot_cpus();
 }
 
 /**
@@ -441,7 +436,7 @@ static int resume_target_kernel(bool platform_mode)
 	if (error)
 		goto Cleanup;
 
-	error = hibernate_resume_nonboot_cpu_disable();
+	error = disable_nonboot_cpus();
 	if (error)
 		goto Enable_cpus;
 
@@ -505,19 +500,15 @@ int hibernation_restore(int platform_mode)
 
 	pm_prepare_console();
 	suspend_console();
+	ftrace_stop();
 	pm_restrict_gfp_mask();
 	error = dpm_suspend_start(PMSG_QUIESCE);
 	if (!error) {
 		error = resume_target_kernel(platform_mode);
-		/*
-		 * The above should either succeed and jump to the new kernel,
-		 * or return with an error. Otherwise things are just
-		 * undefined, so let's be paranoid.
-		 */
-		BUG_ON(!error);
+		dpm_resume_end(PMSG_RECOVER);
 	}
-	dpm_resume_end(PMSG_RECOVER);
 	pm_restore_gfp_mask();
+	ftrace_start();
 	resume_console();
 	pm_restore_console();
 	return error;
@@ -544,6 +535,7 @@ int hibernation_platform_enter(void)
 
 	entering_platform_hibernation = true;
 	suspend_console();
+	ftrace_stop();
 	error = dpm_suspend_start(PMSG_HIBERNATE);
 	if (error) {
 		if (hibernation_ops->recover)
@@ -561,7 +553,7 @@ int hibernation_platform_enter(void)
 
 	error = disable_nonboot_cpus();
 	if (error)
-		goto Enable_cpus;
+		goto Platform_finish;
 
 	local_irq_disable();
 	syscore_suspend();
@@ -577,8 +569,6 @@ int hibernation_platform_enter(void)
  Power_up:
 	syscore_resume();
 	local_irq_enable();
-
- Enable_cpus:
 	enable_nonboot_cpus();
 
  Platform_finish:
@@ -589,6 +579,7 @@ int hibernation_platform_enter(void)
  Resume_devices:
 	entering_platform_hibernation = false;
 	dpm_resume_end(PMSG_RESTORE);
+	ftrace_start();
 	resume_console();
 
  Close:
@@ -650,39 +641,12 @@ static void power_down(void)
 		cpu_relax();
 }
 
-static int load_image_and_restore(void)
-{
-	int error;
-	unsigned int flags;
-
-	pr_debug("PM: Loading hibernation image.\n");
-
-	lock_device_hotplug();
-	error = create_basic_memory_bitmaps();
-	if (error)
-		goto Unlock;
-
-	error = swsusp_read(&flags);
-	swsusp_close(FMODE_READ);
-	if (!error)
-		hibernation_restore(flags & SF_PLATFORM_MODE);
-
-	printk(KERN_ERR "PM: Failed to load hibernation image, recovering.\n");
-	swsusp_free();
-	free_basic_memory_bitmaps();
- Unlock:
-	unlock_device_hotplug();
-
-	return error;
-}
-
 /**
  * hibernate - Carry out system hibernation, including saving the image.
  */
 int hibernate(void)
 {
-	int error, nr_calls = 0;
-	bool snapshot_test = false;
+	int error;
 
 	if (!hibernation_available()) {
 		pr_debug("PM: Hibernation not available.\n");
@@ -697,11 +661,9 @@ int hibernate(void)
 	}
 
 	pm_prepare_console();
-	error = __pm_notifier_call_chain(PM_HIBERNATION_PREPARE, -1, &nr_calls);
-	if (error) {
-		nr_calls--;
+	error = pm_notifier_call_chain(PM_HIBERNATION_PREPARE);
+	if (error)
 		goto Exit;
-	}
 
 	printk(KERN_INFO "PM: Syncing filesystems ... ");
 	sys_sync();
@@ -734,12 +696,8 @@ int hibernate(void)
 		pr_debug("PM: writing image.\n");
 		error = swsusp_write(flags);
 		swsusp_free();
-		if (!error) {
-			if (hibernation_mode == HIBERNATION_TEST_RESUME)
-				snapshot_test = true;
-			else
-				power_down();
-		}
+		if (!error)
+			power_down();
 		in_suspend = 0;
 		pm_restore_gfp_mask();
 	} else {
@@ -750,18 +708,12 @@ int hibernate(void)
 	free_basic_memory_bitmaps();
  Thaw:
 	unlock_device_hotplug();
-	if (snapshot_test) {
-		pr_debug("PM: Checking hibernation image\n");
-		error = swsusp_check();
-		if (!error)
-			error = load_image_and_restore();
-	}
 	thaw_processes();
 
 	/* Don't bother checking whether freezer_test_done is true */
 	freezer_test_done = false;
  Exit:
-	__pm_notifier_call_chain(PM_POST_HIBERNATION, nr_calls, NULL);
+	pm_notifier_call_chain(PM_POST_HIBERNATION);
 	pm_restore_console();
 	atomic_inc(&snapshot_device_available);
  Unlock:
@@ -781,13 +733,14 @@ int hibernate(void)
  * contents of memory is restored from the saved image.
  *
  * If this is successful, control reappears in the restored target kernel in
- * hibernation_snapshot() which returns to hibernate().  Otherwise, the routine
+ * hibernation_snaphot() which returns to hibernate().  Otherwise, the routine
  * attempts to recover gracefully and make the kernel return to the normal mode
  * of operation.
  */
 static int software_resume(void)
 {
-	int error, nr_calls = 0;
+	int error;
+	unsigned int flags;
 
 	/*
 	 * If the user said "noresume".. bail out early.
@@ -873,20 +826,35 @@ static int software_resume(void)
 	}
 
 	pm_prepare_console();
-	error = __pm_notifier_call_chain(PM_RESTORE_PREPARE, -1, &nr_calls);
-	if (error) {
-		nr_calls--;
+	error = pm_notifier_call_chain(PM_RESTORE_PREPARE);
+	if (error)
 		goto Close_Finish;
-	}
 
 	pr_debug("PM: Preparing processes for restore.\n");
 	error = freeze_processes();
 	if (error)
 		goto Close_Finish;
-	error = load_image_and_restore();
+
+	pr_debug("PM: Loading hibernation image.\n");
+
+	lock_device_hotplug();
+	error = create_basic_memory_bitmaps();
+	if (error)
+		goto Thaw;
+
+	error = swsusp_read(&flags);
+	swsusp_close(FMODE_READ);
+	if (!error)
+		hibernation_restore(flags & SF_PLATFORM_MODE);
+
+	printk(KERN_ERR "PM: Failed to load hibernation image, recovering.\n");
+	swsusp_free();
+	free_basic_memory_bitmaps();
+ Thaw:
+	unlock_device_hotplug();
 	thaw_processes();
  Finish:
-	__pm_notifier_call_chain(PM_POST_RESTORE, nr_calls, NULL);
+	pm_notifier_call_chain(PM_POST_RESTORE);
 	pm_restore_console();
 	atomic_inc(&snapshot_device_available);
 	/* For success case, the suspend path will release the lock */
@@ -909,7 +877,6 @@ static const char * const hibernation_modes[] = {
 #ifdef CONFIG_SUSPEND
 	[HIBERNATION_SUSPEND]	= "suspend",
 #endif
-	[HIBERNATION_TEST_RESUME]	= "test_resume",
 };
 
 /*
@@ -956,7 +923,6 @@ static ssize_t disk_show(struct kobject *kobj, struct kobj_attribute *attr,
 #ifdef CONFIG_SUSPEND
 		case HIBERNATION_SUSPEND:
 #endif
-		case HIBERNATION_TEST_RESUME:
 			break;
 		case HIBERNATION_PLATFORM:
 			if (hibernation_ops)
@@ -1003,7 +969,6 @@ static ssize_t disk_store(struct kobject *kobj, struct kobj_attribute *attr,
 #ifdef CONFIG_SUSPEND
 		case HIBERNATION_SUSPEND:
 #endif
-		case HIBERNATION_TEST_RESUME:
 			hibernation_mode = mode;
 			break;
 		case HIBERNATION_PLATFORM:
@@ -1149,16 +1114,13 @@ static int __init resume_offset_setup(char *str)
 
 static int __init hibernate_setup(char *str)
 {
-	if (!strncmp(str, "noresume", 8)) {
+	if (!strncmp(str, "noresume", 8))
 		noresume = 1;
-	} else if (!strncmp(str, "nocompress", 10)) {
+	else if (!strncmp(str, "nocompress", 10))
 		nocompress = 1;
-	} else if (!strncmp(str, "no", 2)) {
+	else if (!strncmp(str, "no", 2)) {
 		noresume = 1;
 		nohibernate = 1;
-	} else if (IS_ENABLED(CONFIG_DEBUG_RODATA)
-		   && !strncmp(str, "protect_image", 13)) {
-		enable_restore_image_protection();
 	}
 	return 1;
 }
@@ -1191,6 +1153,11 @@ static int __init nohibernate_setup(char *str)
 	return 1;
 }
 
+static int __init kaslr_nohibernate_setup(char *str)
+{
+	return nohibernate_setup(str);
+}
+
 __setup("noresume", noresume_setup);
 __setup("resume_offset=", resume_offset_setup);
 __setup("resume=", resume_setup);
@@ -1198,3 +1165,4 @@ __setup("hibernate=", hibernate_setup);
 __setup("resumewait", resumewait_setup);
 __setup("resumedelay=", resumedelay_setup);
 __setup("nohibernate", nohibernate_setup);
+__setup("kaslr", kaslr_nohibernate_setup);

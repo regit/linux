@@ -28,16 +28,6 @@
 
 #include "moxart_ether.h"
 
-static inline void moxart_desc_write(u32 data, u32 *desc)
-{
-	*desc = cpu_to_le32(data);
-}
-
-static inline u32 moxart_desc_read(u32 *desc)
-{
-	return le32_to_cpu(*desc);
-}
-
 static inline void moxart_emac_write(struct net_device *ndev,
 				     unsigned int reg, unsigned long value)
 {
@@ -122,7 +112,7 @@ static void moxart_mac_enable(struct net_device *ndev)
 static void moxart_mac_setup_desc_ring(struct net_device *ndev)
 {
 	struct moxart_mac_priv_t *priv = netdev_priv(ndev);
-	void *desc;
+	void __iomem *desc;
 	int i;
 
 	for (i = 0; i < TX_DESC_NUM; i++) {
@@ -131,7 +121,7 @@ static void moxart_mac_setup_desc_ring(struct net_device *ndev)
 
 		priv->tx_buf[i] = priv->tx_buf_base + priv->tx_buf_size * i;
 	}
-	moxart_desc_write(TX_DESC1_END, desc + TX_REG_OFFSET_DESC1);
+	writel(TX_DESC1_END, desc + TX_REG_OFFSET_DESC1);
 
 	priv->tx_head = 0;
 	priv->tx_tail = 0;
@@ -139,8 +129,8 @@ static void moxart_mac_setup_desc_ring(struct net_device *ndev)
 	for (i = 0; i < RX_DESC_NUM; i++) {
 		desc = priv->rx_desc_base + i * RX_REG_DESC_SIZE;
 		memset(desc, 0, RX_REG_DESC_SIZE);
-		moxart_desc_write(RX_DESC0_DMA_OWN, desc + RX_REG_OFFSET_DESC0);
-		moxart_desc_write(RX_BUF_SIZE & RX_DESC1_BUF_SIZE_MASK,
+		writel(RX_DESC0_DMA_OWN, desc + RX_REG_OFFSET_DESC0);
+		writel(RX_BUF_SIZE & RX_DESC1_BUF_SIZE_MASK,
 		       desc + RX_REG_OFFSET_DESC1);
 
 		priv->rx_buf[i] = priv->rx_buf_base + priv->rx_buf_size * i;
@@ -151,16 +141,16 @@ static void moxart_mac_setup_desc_ring(struct net_device *ndev)
 		if (dma_mapping_error(&ndev->dev, priv->rx_mapping[i]))
 			netdev_err(ndev, "DMA mapping error\n");
 
-		moxart_desc_write(priv->rx_mapping[i],
+		writel(priv->rx_mapping[i],
 		       desc + RX_REG_OFFSET_DESC2 + RX_DESC2_ADDRESS_PHYS);
-		moxart_desc_write((uintptr_t)priv->rx_buf[i],
+		writel(priv->rx_buf[i],
 		       desc + RX_REG_OFFSET_DESC2 + RX_DESC2_ADDRESS_VIRT);
 	}
-	moxart_desc_write(RX_DESC1_END, desc + RX_REG_OFFSET_DESC1);
+	writel(RX_DESC1_END, desc + RX_REG_OFFSET_DESC1);
 
 	priv->rx_head = 0;
 
-	/* reset the MAC controller TX/RX desciptor base address */
+	/* reset the MAC controler TX/RX desciptor base address */
 	writel(priv->tx_base, priv->base + REG_TXR_BASE_ADDRESS);
 	writel(priv->rx_base, priv->base + REG_RXR_BASE_ADDRESS);
 }
@@ -211,15 +201,14 @@ static int moxart_rx_poll(struct napi_struct *napi, int budget)
 						      napi);
 	struct net_device *ndev = priv->ndev;
 	struct sk_buff *skb;
-	void *desc;
+	void __iomem *desc;
 	unsigned int desc0, len;
 	int rx_head = priv->rx_head;
 	int rx = 0;
 
-	while (rx < budget) {
+	while (1) {
 		desc = priv->rx_desc_base + (RX_REG_DESC_SIZE * rx_head);
-		desc0 = moxart_desc_read(desc + RX_REG_OFFSET_DESC0);
-		rmb(); /* ensure desc0 is up to date */
+		desc0 = readl(desc + RX_REG_OFFSET_DESC0);
 
 		if (desc0 & RX_DESC0_DMA_OWN)
 			break;
@@ -229,7 +218,7 @@ static int moxart_rx_poll(struct napi_struct *napi, int budget)
 			net_dbg_ratelimited("packet error\n");
 			priv->stats.rx_dropped++;
 			priv->stats.rx_errors++;
-			goto rx_next;
+			continue;
 		}
 
 		len = desc0 & RX_DESC0_FRAME_LEN_MASK;
@@ -237,39 +226,36 @@ static int moxart_rx_poll(struct napi_struct *napi, int budget)
 		if (len > RX_BUF_SIZE)
 			len = RX_BUF_SIZE;
 
-		dma_sync_single_for_cpu(&ndev->dev,
-					priv->rx_mapping[rx_head],
-					priv->rx_buf_size, DMA_FROM_DEVICE);
-		skb = netdev_alloc_skb_ip_align(ndev, len);
-
+		skb = build_skb(priv->rx_buf[rx_head], priv->rx_buf_size);
 		if (unlikely(!skb)) {
-			net_dbg_ratelimited("netdev_alloc_skb_ip_align failed\n");
+			net_dbg_ratelimited("build_skb failed\n");
 			priv->stats.rx_dropped++;
 			priv->stats.rx_errors++;
-			goto rx_next;
 		}
 
-		memcpy(skb->data, priv->rx_buf[rx_head], len);
 		skb_put(skb, len);
 		skb->protocol = eth_type_trans(skb, ndev);
 		napi_gro_receive(&priv->napi, skb);
 		rx++;
 
+		ndev->last_rx = jiffies;
 		priv->stats.rx_packets++;
 		priv->stats.rx_bytes += len;
 		if (desc0 & RX_DESC0_MULTICAST)
 			priv->stats.multicast++;
 
-rx_next:
-		wmb(); /* prevent setting ownership back too early */
-		moxart_desc_write(RX_DESC0_DMA_OWN, desc + RX_REG_OFFSET_DESC0);
+		writel(RX_DESC0_DMA_OWN, desc + RX_REG_OFFSET_DESC0);
 
 		rx_head = RX_NEXT(rx_head);
 		priv->rx_head = rx_head;
+
+		if (rx >= budget)
+			break;
 	}
 
 	if (rx < budget) {
-		napi_complete(napi);
+		napi_gro_flush(napi, false);
+		__napi_complete(napi);
 	}
 
 	priv->reg_imr |= RPKT_FINISH_M;
@@ -322,7 +308,7 @@ static irqreturn_t moxart_mac_interrupt(int irq, void *dev_id)
 static int moxart_mac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct moxart_mac_priv_t *priv = netdev_priv(ndev);
-	void *desc;
+	void __iomem *desc;
 	unsigned int len;
 	unsigned int tx_head = priv->tx_head;
 	u32 txdes1;
@@ -331,12 +317,11 @@ static int moxart_mac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	desc = priv->tx_desc_base + (TX_REG_DESC_SIZE * tx_head);
 
 	spin_lock_irq(&priv->txlock);
-	if (moxart_desc_read(desc + TX_REG_OFFSET_DESC0) & TX_DESC0_DMA_OWN) {
+	if (readl(desc + TX_REG_OFFSET_DESC0) & TX_DESC0_DMA_OWN) {
 		net_dbg_ratelimited("no TX space for packet\n");
 		priv->stats.tx_dropped++;
 		goto out_unlock;
 	}
-	rmb(); /* ensure data is only read that had TX_DESC0_DMA_OWN cleared */
 
 	len = skb->len > TX_BUF_SIZE ? TX_BUF_SIZE : skb->len;
 
@@ -350,9 +335,9 @@ static int moxart_mac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	priv->tx_len[tx_head] = len;
 	priv->tx_skb[tx_head] = skb;
 
-	moxart_desc_write(priv->tx_mapping[tx_head],
+	writel(priv->tx_mapping[tx_head],
 	       desc + TX_REG_OFFSET_DESC2 + TX_DESC2_ADDRESS_PHYS);
-	moxart_desc_write((uintptr_t)skb->data,
+	writel(skb->data,
 	       desc + TX_REG_OFFSET_DESC2 + TX_DESC2_ADDRESS_VIRT);
 
 	if (skb->len < ETH_ZLEN) {
@@ -361,22 +346,19 @@ static int moxart_mac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		len = ETH_ZLEN;
 	}
 
-	dma_sync_single_for_device(&ndev->dev, priv->tx_mapping[tx_head],
-				   priv->tx_buf_size, DMA_TO_DEVICE);
-
-	txdes1 = TX_DESC1_LTS | TX_DESC1_FTS | (len & TX_DESC1_BUF_SIZE_MASK);
-	if (tx_head == TX_DESC_NUM_MASK)
-		txdes1 |= TX_DESC1_END;
-	moxart_desc_write(txdes1, desc + TX_REG_OFFSET_DESC1);
-	wmb(); /* flush descriptor before transferring ownership */
-	moxart_desc_write(TX_DESC0_DMA_OWN, desc + TX_REG_OFFSET_DESC0);
+	txdes1 = readl(desc + TX_REG_OFFSET_DESC1);
+	txdes1 |= TX_DESC1_LTS | TX_DESC1_FTS;
+	txdes1 &= ~(TX_DESC1_FIFO_COMPLETE | TX_DESC1_INTR_COMPLETE);
+	txdes1 |= (len & TX_DESC1_BUF_SIZE_MASK);
+	writel(txdes1, desc + TX_REG_OFFSET_DESC1);
+	writel(TX_DESC0_DMA_OWN, desc + TX_REG_OFFSET_DESC0);
 
 	/* start to send packet */
 	writel(0xffffffff, priv->base + REG_TX_POLL_DEMAND);
 
 	priv->tx_head = TX_NEXT(tx_head);
 
-	netif_trans_update(ndev);
+	ndev->trans_start = jiffies;
 	ret = NETDEV_TX_OK;
 out_unlock:
 	spin_unlock_irq(&priv->txlock);
@@ -444,6 +426,7 @@ static struct net_device_ops moxart_netdev_ops = {
 	.ndo_set_rx_mode	= moxart_mac_set_rx_mode,
 	.ndo_set_mac_address	= moxart_set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_change_mtu		= eth_change_mtu,
 };
 
 static int moxart_mac_probe(struct platform_device *pdev)
@@ -473,16 +456,17 @@ static int moxart_mac_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	ndev->base_addr = res->start;
 	priv->base = devm_ioremap_resource(p_dev, res);
-	if (IS_ERR(priv->base)) {
+	ret = IS_ERR(priv->base);
+	if (ret) {
 		dev_err(p_dev, "devm_ioremap_resource failed\n");
-		ret = PTR_ERR(priv->base);
 		goto init_fail;
 	}
 
 	spin_lock_init(&priv->txlock);
 
 	priv->tx_buf_size = TX_BUF_SIZE;
-	priv->rx_buf_size = RX_BUF_SIZE;
+	priv->rx_buf_size = RX_BUF_SIZE +
+			    SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
 	priv->tx_desc_base = dma_alloc_coherent(NULL, TX_REG_DESC_SIZE *
 						TX_DESC_NUM, &priv->tx_base,
@@ -523,6 +507,7 @@ static int moxart_mac_probe(struct platform_device *pdev)
 		goto init_fail;
 	}
 
+	ether_setup(ndev);
 	ndev->netdev_ops = &moxart_netdev_ops;
 	netif_napi_add(ndev, &priv->napi, moxart_rx_poll, RX_DESC_NUM);
 	ndev->priv_flags |= IFF_UNICAST_FLT;
@@ -565,13 +550,13 @@ static const struct of_device_id moxart_mac_match[] = {
 	{ .compatible = "moxa,moxart-mac" },
 	{ }
 };
-MODULE_DEVICE_TABLE(of, moxart_mac_match);
 
 static struct platform_driver moxart_mac_driver = {
 	.probe	= moxart_mac_probe,
 	.remove	= moxart_remove,
 	.driver	= {
 		.name		= "moxart-ethernet",
+		.owner		= THIS_MODULE,
 		.of_match_table	= moxart_mac_match,
 	},
 };

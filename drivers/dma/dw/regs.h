@@ -11,9 +11,9 @@
 
 #include <linux/interrupt.h>
 #include <linux/dmaengine.h>
+#include <linux/dw_dmac.h>
 
-#include "internal.h"
-
+#define DW_DMA_MAX_NR_CHANNELS	8
 #define DW_DMA_MAX_NR_REQUESTS	16
 
 /* flow controller */
@@ -115,6 +115,10 @@ struct dw_dma_regs {
 #define dma_writel_native writel
 #endif
 
+/* To access the registers in early stage of probe */
+#define dma_read_byaddr(addr, name) \
+	dma_readl_native((addr) + offsetof(struct dw_dma_regs, name))
+
 /* Bitfields in DW_PARAMS */
 #define DW_PARAMS_NR_CHAN	8		/* number of channels */
 #define DW_PARAMS_NR_MASTER	11		/* number of AHB masters */
@@ -128,22 +132,6 @@ struct dw_dma_regs {
 /* Bitfields in DWC_PARAMS */
 #define DWC_PARAMS_MBLK_EN	11		/* multi block transfer */
 
-/* bursts size */
-enum dw_dma_msize {
-	DW_DMA_MSIZE_1,
-	DW_DMA_MSIZE_4,
-	DW_DMA_MSIZE_8,
-	DW_DMA_MSIZE_16,
-	DW_DMA_MSIZE_32,
-	DW_DMA_MSIZE_64,
-	DW_DMA_MSIZE_128,
-	DW_DMA_MSIZE_256,
-};
-
-/* Bitfields in LLP */
-#define DWC_LLP_LMS(x)		((x) & 3)	/* list master select */
-#define DWC_LLP_LOC(x)		((x) & ~3)	/* next lli */
-
 /* Bitfields in CTL_LO */
 #define DWC_CTLL_INT_EN		(1 << 0)	/* irqs enabled? */
 #define DWC_CTLL_DST_WIDTH(n)	((n)<<1)	/* bytes per element */
@@ -151,7 +139,7 @@ enum dw_dma_msize {
 #define DWC_CTLL_DST_INC	(0<<7)		/* DAR update/not */
 #define DWC_CTLL_DST_DEC	(1<<7)
 #define DWC_CTLL_DST_FIX	(2<<7)
-#define DWC_CTLL_SRC_INC	(0<<9)		/* SAR update/not */
+#define DWC_CTLL_SRC_INC	(0<<7)		/* SAR update/not */
 #define DWC_CTLL_SRC_DEC	(1<<9)
 #define DWC_CTLL_SRC_FIX	(2<<9)
 #define DWC_CTLL_DST_MSIZE(n)	((n)<<11)	/* burst, #elements */
@@ -173,35 +161,20 @@ enum dw_dma_msize {
 #define DWC_CTLH_DONE		0x00001000
 #define DWC_CTLH_BLOCK_TS_MASK	0x00000fff
 
-/* Bitfields in CFG_LO */
+/* Bitfields in CFG_LO. Platform-configurable bits are in <linux/dw_dmac.h> */
 #define DWC_CFGL_CH_PRIOR_MASK	(0x7 << 5)	/* priority mask */
 #define DWC_CFGL_CH_PRIOR(x)	((x) << 5)	/* priority */
 #define DWC_CFGL_CH_SUSP	(1 << 8)	/* pause xfer */
 #define DWC_CFGL_FIFO_EMPTY	(1 << 9)	/* pause xfer */
 #define DWC_CFGL_HS_DST		(1 << 10)	/* handshake w/dst */
 #define DWC_CFGL_HS_SRC		(1 << 11)	/* handshake w/src */
-#define DWC_CFGL_LOCK_CH_XFER	(0 << 12)	/* scope of LOCK_CH */
-#define DWC_CFGL_LOCK_CH_BLOCK	(1 << 12)
-#define DWC_CFGL_LOCK_CH_XACT	(2 << 12)
-#define DWC_CFGL_LOCK_BUS_XFER	(0 << 14)	/* scope of LOCK_BUS */
-#define DWC_CFGL_LOCK_BUS_BLOCK	(1 << 14)
-#define DWC_CFGL_LOCK_BUS_XACT	(2 << 14)
-#define DWC_CFGL_LOCK_CH	(1 << 15)	/* channel lockout */
-#define DWC_CFGL_LOCK_BUS	(1 << 16)	/* busmaster lockout */
-#define DWC_CFGL_HS_DST_POL	(1 << 18)	/* dst handshake active low */
-#define DWC_CFGL_HS_SRC_POL	(1 << 19)	/* src handshake active low */
 #define DWC_CFGL_MAX_BURST(x)	((x) << 20)
 #define DWC_CFGL_RELOAD_SAR	(1 << 30)
 #define DWC_CFGL_RELOAD_DAR	(1 << 31)
 
-/* Bitfields in CFG_HI */
-#define DWC_CFGH_FCMODE		(1 << 0)
-#define DWC_CFGH_FIFO_MODE	(1 << 1)
-#define DWC_CFGH_PROTCTL(x)	((x) << 2)
+/* Bitfields in CFG_HI. Platform-configurable bits are in <linux/dw_dmac.h> */
 #define DWC_CFGH_DS_UPD_EN	(1 << 5)
 #define DWC_CFGH_SS_UPD_EN	(1 << 6)
-#define DWC_CFGH_SRC_PER(x)	((x) << 7)
-#define DWC_CFGH_DST_PER(x)	((x) << 11)
 
 /* Bitfields in SGR */
 #define DWC_SGR_SGI(x)		((x) << 0)
@@ -217,8 +190,6 @@ enum dw_dma_msize {
 enum dw_dmac_flags {
 	DW_DMA_IS_CYCLIC = 0,
 	DW_DMA_IS_SOFT_LLP = 1,
-	DW_DMA_IS_PAUSED = 2,
-	DW_DMA_IS_INITIALIZED = 3,
 };
 
 struct dw_dma_chan {
@@ -227,6 +198,8 @@ struct dw_dma_chan {
 	u8				mask;
 	u8				priority;
 	enum dma_transfer_direction	direction;
+	bool				paused;
+	bool				initialized;
 
 	/* software emulation of the LLP transfers */
 	struct list_head	*tx_node_active;
@@ -237,6 +210,8 @@ struct dw_dma_chan {
 	unsigned long		flags;
 	struct list_head	active_list;
 	struct list_head	queue;
+	struct list_head	free_list;
+	u32			residue;
 	struct dw_cyclic_desc	*cdesc;
 
 	unsigned int		descs_allocated;
@@ -246,9 +221,11 @@ struct dw_dma_chan {
 	bool			nollp;
 
 	/* custom slave configuration */
-	struct dw_dma_slave	dws;
+	unsigned int		request_line;
+	unsigned char		src_master;
+	unsigned char		dst_master;
 
-	/* configuration passed via .device_config */
+	/* configuration passed via DMA_SLAVE_CONFIG */
 	struct dma_slave_config dma_sconfig;
 };
 
@@ -273,14 +250,15 @@ struct dw_dma {
 	void __iomem		*regs;
 	struct dma_pool		*desc_pool;
 	struct tasklet_struct	tasklet;
+	struct clk		*clk;
 
 	/* channels */
 	struct dw_dma_chan	*chan;
 	u8			all_chan_mask;
-	u8			in_use;
 
-	/* platform data */
-	struct dw_dma_platform_data	*pdata;
+	/* hardware configuration */
+	unsigned char		nr_masters;
+	unsigned char		data_width[4];
 };
 
 static inline struct dw_dma_regs __iomem *__dw_regs(struct dw_dma *dw)
@@ -303,43 +281,25 @@ static inline struct dw_dma *to_dw_dma(struct dma_device *ddev)
 	return container_of(ddev, struct dw_dma, dma);
 }
 
-#ifdef CONFIG_DW_DMAC_BIG_ENDIAN_IO
-typedef __be32 __dw32;
-#else
-typedef __le32 __dw32;
-#endif
-
 /* LLI == Linked List Item; a.k.a. DMA block descriptor */
 struct dw_lli {
 	/* values that are not changed by hardware */
-	__dw32		sar;
-	__dw32		dar;
-	__dw32		llp;		/* chain to next lli */
-	__dw32		ctllo;
+	u32		sar;
+	u32		dar;
+	u32		llp;		/* chain to next lli */
+	u32		ctllo;
 	/* values that may get written back: */
-	__dw32		ctlhi;
+	u32		ctlhi;
 	/* sstat and dstat can snapshot peripheral register state.
 	 * silicon config may discard either or both...
 	 */
-	__dw32		sstat;
-	__dw32		dstat;
+	u32		sstat;
+	u32		dstat;
 };
 
 struct dw_desc {
 	/* FIRST values the hardware uses */
 	struct dw_lli			lli;
-
-#ifdef CONFIG_DW_DMAC_BIG_ENDIAN_IO
-#define lli_set(d, reg, v)		((d)->lli.reg |= cpu_to_be32(v))
-#define lli_clear(d, reg, v)		((d)->lli.reg &= ~cpu_to_be32(v))
-#define lli_read(d, reg)		be32_to_cpu((d)->lli.reg)
-#define lli_write(d, reg, v)		((d)->lli.reg = cpu_to_be32(v))
-#else
-#define lli_set(d, reg, v)		((d)->lli.reg |= cpu_to_le32(v))
-#define lli_clear(d, reg, v)		((d)->lli.reg &= ~cpu_to_le32(v))
-#define lli_read(d, reg)		le32_to_cpu((d)->lli.reg)
-#define lli_write(d, reg, v)		((d)->lli.reg = cpu_to_le32(v))
-#endif
 
 	/* THEN values for driver housekeeping */
 	struct list_head		desc_node;
@@ -347,7 +307,6 @@ struct dw_desc {
 	struct dma_async_tx_descriptor	txd;
 	size_t				len;
 	size_t				total_len;
-	u32				residue;
 };
 
 #define to_dw_desc(h)	list_entry(h, struct dw_desc, desc_node)

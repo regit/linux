@@ -15,7 +15,6 @@
  */
 
 #include <linux/err.h>
-#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include "../ion.h"
@@ -33,11 +32,12 @@ static int tegra_ion_probe(struct platform_device *pdev)
 
 	num_heaps = pdata->nr;
 
-	heaps = devm_kcalloc(&pdev->dev, pdata->nr,
-			     sizeof(struct ion_heap *), GFP_KERNEL);
+	heaps = devm_kzalloc(&pdev->dev,
+			     sizeof(struct ion_heap *) * pdata->nr,
+			     GFP_KERNEL);
 
 	idev = ion_device_create(NULL);
-	if (IS_ERR(idev))
+	if (IS_ERR_OR_NULL(idev))
 		return PTR_ERR(idev);
 
 	/* create the heaps as specified in the board file */
@@ -54,8 +54,10 @@ static int tegra_ion_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, idev);
 	return 0;
 err:
-	for (i = 0; i < num_heaps; ++i)
-		ion_heap_destroy(heaps[i]);
+	for (i = 0; i < num_heaps; i++) {
+		if (heaps[i])
+			ion_heap_destroy(heaps[i]);
+	}
 	return err;
 }
 

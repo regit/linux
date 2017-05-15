@@ -19,14 +19,14 @@
 #include <linux/mtd/partitions.h>
 #include <linux/clk.h>
 #include <linux/err.h>
-#include <linux/io.h>
+#include <asm/io.h>
 #include <asm/sizes.h>
 #include <linux/platform_data/mtd-orion_nand.h>
 
 static void orion_nand_cmd_ctrl(struct mtd_info *mtd, int cmd, unsigned int ctrl)
 {
-	struct nand_chip *nc = mtd_to_nand(mtd);
-	struct orion_nand_data *board = nand_get_controller_data(nc);
+	struct nand_chip *nc = mtd->priv;
+	struct orion_nand_data *board = nc->priv;
 	u32 offs;
 
 	if (cmd == NAND_CMD_NONE)
@@ -47,7 +47,7 @@ static void orion_nand_cmd_ctrl(struct mtd_info *mtd, int cmd, unsigned int ctrl
 
 static void orion_nand_read_buf(struct mtd_info *mtd, uint8_t *buf, int len)
 {
-	struct nand_chip *chip = mtd_to_nand(mtd);
+	struct nand_chip *chip = mtd->priv;
 	void __iomem *io_base = chip->IO_ADDR_R;
 	uint64_t *buf64;
 	int i = 0;
@@ -76,6 +76,7 @@ static void orion_nand_read_buf(struct mtd_info *mtd, uint8_t *buf, int len)
 static int __init orion_nand_probe(struct platform_device *pdev)
 {
 	struct mtd_info *mtd;
+	struct mtd_part_parser_data ppdata = {};
 	struct nand_chip *nc;
 	struct orion_nand_data *board;
 	struct resource *res;
@@ -84,24 +85,33 @@ static int __init orion_nand_probe(struct platform_device *pdev)
 	int ret = 0;
 	u32 val = 0;
 
-	nc = devm_kzalloc(&pdev->dev,
-			sizeof(struct nand_chip),
-			GFP_KERNEL);
-	if (!nc)
-		return -ENOMEM;
-	mtd = nand_to_mtd(nc);
+	nc = kzalloc(sizeof(struct nand_chip) + sizeof(struct mtd_info), GFP_KERNEL);
+	if (!nc) {
+		ret = -ENOMEM;
+		goto no_res;
+	}
+	mtd = (struct mtd_info *)(nc + 1);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	io_base = devm_ioremap_resource(&pdev->dev, res);
+	if (!res) {
+		ret = -ENODEV;
+		goto no_res;
+	}
 
-	if (IS_ERR(io_base))
-		return PTR_ERR(io_base);
+	io_base = ioremap(res->start, resource_size(res));
+	if (!io_base) {
+		dev_err(&pdev->dev, "ioremap failed\n");
+		ret = -EIO;
+		goto no_res;
+	}
 
 	if (pdev->dev.of_node) {
 		board = devm_kzalloc(&pdev->dev, sizeof(struct orion_nand_data),
 					GFP_KERNEL);
-		if (!board)
-			return -ENOMEM;
+		if (!board) {
+			ret = -ENOMEM;
+			goto no_res;
+		}
 		if (!of_property_read_u32(pdev->dev.of_node, "cle", &val))
 			board->cle = (u8)val;
 		else
@@ -122,15 +132,14 @@ static int __init orion_nand_probe(struct platform_device *pdev)
 		board = dev_get_platdata(&pdev->dev);
 	}
 
-	mtd->dev.parent = &pdev->dev;
+	mtd->priv = nc;
+	mtd->owner = THIS_MODULE;
 
-	nand_set_controller_data(nc, board);
-	nand_set_flash_node(nc, pdev->dev.of_node);
+	nc->priv = board;
 	nc->IO_ADDR_R = nc->IO_ADDR_W = io_base;
 	nc->cmd_ctrl = orion_nand_cmd_ctrl;
 	nc->read_buf = orion_nand_read_buf;
 	nc->ecc.mode = NAND_ECC_SOFT;
-	nc->ecc.algo = NAND_ECC_HAMMING;
 
 	if (board->chip_delay)
 		nc->chip_delay = board->chip_delay;
@@ -155,12 +164,15 @@ static int __init orion_nand_probe(struct platform_device *pdev)
 		clk_put(clk);
 	}
 
-	ret = nand_scan(mtd, 1);
-	if (ret)
+	if (nand_scan(mtd, 1)) {
+		ret = -ENXIO;
 		goto no_dev;
+	}
 
 	mtd->name = "orion_nand";
-	ret = mtd_device_register(mtd, board->parts, board->nr_parts);
+	ppdata.of_node = pdev->dev.of_node;
+	ret = mtd_device_parse_register(mtd, NULL, &ppdata,
+			board->parts, board->nr_parts);
 	if (ret) {
 		nand_release(mtd);
 		goto no_dev;
@@ -173,6 +185,9 @@ no_dev:
 		clk_disable_unprepare(clk);
 		clk_put(clk);
 	}
+	iounmap(io_base);
+no_res:
+	kfree(nc);
 
 	return ret;
 }
@@ -180,9 +195,14 @@ no_dev:
 static int orion_nand_remove(struct platform_device *pdev)
 {
 	struct mtd_info *mtd = platform_get_drvdata(pdev);
+	struct nand_chip *nc = mtd->priv;
 	struct clk *clk;
 
 	nand_release(mtd);
+
+	iounmap(nc->IO_ADDR_W);
+
+	kfree(nc);
 
 	clk = clk_get(&pdev->dev, NULL);
 	if (!IS_ERR(clk)) {
@@ -198,13 +218,13 @@ static const struct of_device_id orion_nand_of_match_table[] = {
 	{ .compatible = "marvell,orion-nand", },
 	{},
 };
-MODULE_DEVICE_TABLE(of, orion_nand_of_match_table);
 #endif
 
 static struct platform_driver orion_nand_driver = {
 	.remove		= orion_nand_remove,
 	.driver		= {
 		.name	= "orion_nand",
+		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(orion_nand_of_match_table),
 	},
 };

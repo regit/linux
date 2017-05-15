@@ -22,7 +22,6 @@
 #include <linux/regulator/consumer.h>
 
 #include "msm_drv.h"
-#include "msm_fence.h"
 #include "msm_ringbuffer.h"
 
 struct msm_gem_submit;
@@ -47,10 +46,10 @@ struct msm_gpu_funcs {
 	int (*hw_init)(struct msm_gpu *gpu);
 	int (*pm_suspend)(struct msm_gpu *gpu);
 	int (*pm_resume)(struct msm_gpu *gpu);
-	void (*submit)(struct msm_gpu *gpu, struct msm_gem_submit *submit,
+	int (*submit)(struct msm_gpu *gpu, struct msm_gem_submit *submit,
 			struct msm_file_private *ctx);
 	void (*flush)(struct msm_gpu *gpu);
-	bool (*idle)(struct msm_gpu *gpu);
+	void (*idle)(struct msm_gpu *gpu);
 	irqreturn_t (*irq)(struct msm_gpu *irq);
 	uint32_t (*last_fence)(struct msm_gpu *gpu);
 	void (*recover)(struct msm_gpu *gpu);
@@ -78,15 +77,13 @@ struct msm_gpu {
 	const struct msm_gpu_perfcntr *perfcntrs;
 	uint32_t num_perfcntrs;
 
-	/* ringbuffer: */
 	struct msm_ringbuffer *rb;
-	uint64_t rb_iova;
+	uint32_t rb_iova;
 
 	/* list of GEM active objects: */
 	struct list_head active_list;
 
-	/* fencing: */
-	struct msm_fence_context *fctx;
+	uint32_t submitted_fence;
 
 	/* is gpu powered/active? */
 	int active_cnt;
@@ -98,15 +95,15 @@ struct msm_gpu {
 	void __iomem *mmio;
 	int irq;
 
-	struct msm_gem_address_space *aspace;
+	struct msm_mmu *mmu;
 	int id;
 
 	/* Power Control: */
 	struct regulator *gpu_reg, *gpu_cx;
-	struct clk *ebi1_clk, *grp_clks[6];
+	struct clk *ebi1_clk, *grp_clks[5];
 	uint32_t fast_rate, slow_rate, bus_freq;
 
-#ifdef DOWNSTREAM_CONFIG_MSM_BUS_SCALING
+#ifdef CONFIG_MSM_BUS_SCALING
 	struct msm_bus_scale_pdata *bus_scale_table;
 	uint32_t bsc;
 #endif
@@ -122,13 +119,11 @@ struct msm_gpu {
 	struct timer_list hangcheck_timer;
 	uint32_t hangcheck_fence;
 	struct work_struct recover_work;
-
-	struct list_head submit_list;
 };
 
 static inline bool msm_gpu_active(struct msm_gpu *gpu)
 {
-	return gpu->fctx->last_fence > gpu->funcs->last_fence(gpu);
+	return gpu->submitted_fence > gpu->funcs->last_fence(gpu);
 }
 
 /* Perf-Counters:
@@ -154,45 +149,6 @@ static inline u32 gpu_read(struct msm_gpu *gpu, u32 reg)
 	return msm_readl(gpu->mmio + (reg << 2));
 }
 
-static inline void gpu_rmw(struct msm_gpu *gpu, u32 reg, u32 mask, u32 or)
-{
-	uint32_t val = gpu_read(gpu, reg);
-
-	val &= ~mask;
-	gpu_write(gpu, reg, val | or);
-}
-
-static inline u64 gpu_read64(struct msm_gpu *gpu, u32 lo, u32 hi)
-{
-	u64 val;
-
-	/*
-	 * Why not a readq here? Two reasons: 1) many of the LO registers are
-	 * not quad word aligned and 2) the GPU hardware designers have a bit
-	 * of a history of putting registers where they fit, especially in
-	 * spins. The longer a GPU family goes the higher the chance that
-	 * we'll get burned.  We could do a series of validity checks if we
-	 * wanted to, but really is a readq() that much better? Nah.
-	 */
-
-	/*
-	 * For some lo/hi registers (like perfcounters), the hi value is latched
-	 * when the lo is read, so make sure to read the lo first to trigger
-	 * that
-	 */
-	val = (u64) msm_readl(gpu->mmio + (lo << 2));
-	val |= ((u64) msm_readl(gpu->mmio + (hi << 2)) << 32);
-
-	return val;
-}
-
-static inline void gpu_write64(struct msm_gpu *gpu, u32 lo, u32 hi, u64 val)
-{
-	/* Why not a writeq here? Read the screed above */
-	msm_writel(lower_32_bits(val), gpu->mmio + (lo << 2));
-	msm_writel(upper_32_bits(val), gpu->mmio + (hi << 2));
-}
-
 int msm_gpu_pm_suspend(struct msm_gpu *gpu);
 int msm_gpu_pm_resume(struct msm_gpu *gpu);
 
@@ -202,7 +158,7 @@ int msm_gpu_perfcntr_sample(struct msm_gpu *gpu, uint32_t *activetime,
 		uint32_t *totaltime, uint32_t ncntrs, uint32_t *cntrs);
 
 void msm_gpu_retire(struct msm_gpu *gpu);
-void msm_gpu_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit,
+int msm_gpu_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit,
 		struct msm_file_private *ctx);
 
 int msm_gpu_init(struct drm_device *drm, struct platform_device *pdev,
@@ -210,8 +166,8 @@ int msm_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 		const char *name, const char *ioname, const char *irqname, int ringsz);
 void msm_gpu_cleanup(struct msm_gpu *gpu);
 
-struct msm_gpu *adreno_load_gpu(struct drm_device *dev);
-void __init adreno_register(void);
-void __exit adreno_unregister(void);
+struct msm_gpu *a3xx_gpu_init(struct drm_device *dev);
+void __init a3xx_register(void);
+void __exit a3xx_unregister(void);
 
 #endif /* __MSM_GPU_H__ */

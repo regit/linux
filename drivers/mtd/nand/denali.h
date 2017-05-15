@@ -17,9 +17,6 @@
  *
  */
 
-#ifndef __DENALI_H__
-#define __DENALI_H__
-
 #include <linux/mtd/nand.h>
 
 #define DEVICE_RESET				0x0
@@ -178,8 +175,6 @@
 
 #define REVISION				0x370
 #define     REVISION__VALUE				0xffff
-#define MAKE_COMPARABLE_REVISION(x)		swab16((x) & REVISION__VALUE)
-#define REVISION_5_1				0x00000501
 
 #define ONFI_DEVICE_FEATURES			0x380
 #define     ONFI_DEVICE_FEATURES__VALUE			0x003f
@@ -383,6 +378,14 @@
 #define CLK_X  5
 #define CLK_MULTI 4
 
+/* spectraswconfig.h */
+#define CMD_DMA 0
+
+#define SPECTRA_PARTITION_ID    0
+/**** Block Table and Reserved Block Parameters *****/
+#define SPECTRA_START_BLOCK     3
+#define NUM_FREE_BLOCKS_GATE    30
+
 /* KBV - Updated to LNW scratch register address */
 #define SCRATCH_REG_ADDR    CONFIG_MTD_NAND_DENALI_SCRATCH_REG_ADDR
 #define SCRATCH_REG_SIZE    64
@@ -397,6 +400,28 @@
 #define ONFI_BLOOM_TIME         1
 #define MODE5_WORKAROUND        0
 
+/* lld_nand.h */
+/*
+ * NAND Flash Controller Device Driver
+ * Copyright (c) 2009, Intel Corporation and its suppliers.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ */
+
+#ifndef _LLD_NAND_
+#define _LLD_NAND_
 
 #define MODE_00    0x00000000
 #define MODE_01    0x04000000
@@ -442,6 +467,7 @@ struct nand_buf {
 #define DT		3
 
 struct denali_nand_info {
+	struct mtd_info mtd;
 	struct nand_chip nand;
 	int flash_bank; /* currently selected chip */
 	int status;
@@ -459,9 +485,13 @@ struct denali_nand_info {
 	spinlock_t irq_lock;
 	uint32_t irq_status;
 	int irq_debug_array[32];
+	int idx;
 	int irq;
 
 	uint32_t devnum;	/* represent how many nands connected */
+	uint32_t fwblks; /* represent how many blocks FW used */
+	uint32_t totalblks;
+	uint32_t blksperchip;
 	uint32_t bbtskipbytes;
 	uint32_t max_banks;
 };
@@ -469,4 +499,4 @@ struct denali_nand_info {
 extern int denali_init(struct denali_nand_info *denali);
 extern void denali_remove(struct denali_nand_info *denali);
 
-#endif /* __DENALI_H__ */
+#endif /*_LLD_NAND_*/

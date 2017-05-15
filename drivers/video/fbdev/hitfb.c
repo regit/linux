@@ -22,7 +22,7 @@
 #include <linux/fb.h>
 
 #include <asm/machvec.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/hd64461.h>
@@ -464,6 +464,7 @@ static struct platform_driver hitfb_driver = {
 	.remove		= hitfb_remove,
 	.driver		= {
 		.name	= "hitfb",
+		.owner	= THIS_MODULE,
 		.pm	= &hitfb_dev_pm_ops,
 	},
 };

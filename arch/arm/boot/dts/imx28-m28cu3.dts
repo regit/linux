@@ -115,10 +115,10 @@
 				pinctrl-names = "default";
 				pinctrl-0 = <&lcdif_24bit_pins_a
 					     &lcdif_pins_m28>;
-				display = <&display0>;
+				display = <&display>;
 				status = "okay";
 
-				display0: display0 {
+				display: display0 {
 					bits-per-pixel = <32>;
 					bus-width = <24>;
 

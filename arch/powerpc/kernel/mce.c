@@ -37,7 +37,7 @@ static DEFINE_PER_CPU(int, mce_queue_count);
 static DEFINE_PER_CPU(struct machine_check_event[MAX_MC_EVT], mce_event_queue);
 
 static void machine_check_process_queued_event(struct irq_work *work);
-static struct irq_work mce_event_process_work = {
+struct irq_work mce_event_process_work = {
         .func = machine_check_process_queued_event,
 };
 
@@ -72,8 +72,9 @@ void save_mce_event(struct pt_regs *regs, long handled,
 		    struct mce_error_info *mce_err,
 		    uint64_t nip, uint64_t addr)
 {
-	int index = __this_cpu_inc_return(mce_nest_count) - 1;
-	struct machine_check_event *mce = this_cpu_ptr(&mce_event[index]);
+	uint64_t srr1;
+	int index = __get_cpu_var(mce_nest_count)++;
+	struct machine_check_event *mce = &__get_cpu_var(mce_event[index]);
 
 	/*
 	 * Return if we don't have enough space to log mce event.
@@ -91,12 +92,13 @@ void save_mce_event(struct pt_regs *regs, long handled,
 	mce->in_use = 1;
 
 	mce->initiator = MCE_INITIATOR_CPU;
-	/* Mark it recovered if we have handled it and MSR(RI=1). */
-	if (handled && (regs->msr & MSR_RI))
+	if (handled)
 		mce->disposition = MCE_DISPOSITION_RECOVERED;
 	else
 		mce->disposition = MCE_DISPOSITION_NOT_RECOVERED;
 	mce->severity = MCE_SEV_ERROR_SYNC;
+
+	srr1 = regs->msr;
 
 	/*
 	 * Populate the mce error_type and type-specific error_type.
@@ -141,7 +143,7 @@ void save_mce_event(struct pt_regs *regs, long handled,
  */
 int get_mce_event(struct machine_check_event *mce, bool release)
 {
-	int index = __this_cpu_read(mce_nest_count) - 1;
+	int index = __get_cpu_var(mce_nest_count) - 1;
 	struct machine_check_event *mc_evt;
 	int ret = 0;
 
@@ -151,7 +153,7 @@ int get_mce_event(struct machine_check_event *mce, bool release)
 
 	/* Check if we have MCE info to process. */
 	if (index < MAX_MC_EVT) {
-		mc_evt = this_cpu_ptr(&mce_event[index]);
+		mc_evt = &__get_cpu_var(mce_event[index]);
 		/* Copy the event structure and release the original */
 		if (mce)
 			*mce = *mc_evt;
@@ -161,7 +163,7 @@ int get_mce_event(struct machine_check_event *mce, bool release)
 	}
 	/* Decrement the count to free the slot. */
 	if (release)
-		__this_cpu_dec(mce_nest_count);
+		__get_cpu_var(mce_nest_count)--;
 
 	return ret;
 }
@@ -182,13 +184,13 @@ void machine_check_queue_event(void)
 	if (!get_mce_event(&evt, MCE_EVENT_RELEASE))
 		return;
 
-	index = __this_cpu_inc_return(mce_queue_count) - 1;
+	index = __get_cpu_var(mce_queue_count)++;
 	/* If queue is full, just return for now. */
 	if (index >= MAX_MC_EVT) {
-		__this_cpu_dec(mce_queue_count);
+		__get_cpu_var(mce_queue_count)--;
 		return;
 	}
-	memcpy(this_cpu_ptr(&mce_event_queue[index]), &evt, sizeof(evt));
+	__get_cpu_var(mce_event_queue[index]) = evt;
 
 	/* Queue irq work to process this event later. */
 	irq_work_queue(&mce_event_process_work);
@@ -206,11 +208,11 @@ static void machine_check_process_queued_event(struct irq_work *work)
 	 * For now just print it to console.
 	 * TODO: log this error event to FSP or nvram.
 	 */
-	while (__this_cpu_read(mce_queue_count) > 0) {
-		index = __this_cpu_read(mce_queue_count) - 1;
+	while (__get_cpu_var(mce_queue_count) > 0) {
+		index = __get_cpu_var(mce_queue_count) - 1;
 		machine_check_print_event_info(
-				this_cpu_ptr(&mce_event_queue[index]));
-		__this_cpu_dec(mce_queue_count);
+				&__get_cpu_var(mce_event_queue[index]));
+		__get_cpu_var(mce_queue_count)--;
 	}
 }
 
@@ -282,7 +284,7 @@ void machine_check_print_event_info(struct machine_check_event *evt)
 			printk("%s    Effective address: %016llx\n",
 			       level, evt->u.ue_error.effective_address);
 		if (evt->u.ue_error.physical_address_provided)
-			printk("%s      Physical address: %016llx\n",
+			printk("%s      Physial address: %016llx\n",
 			       level, evt->u.ue_error.physical_address);
 		break;
 	case MCE_ERROR_TYPE_SLB:

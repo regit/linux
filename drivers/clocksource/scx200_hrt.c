@@ -43,10 +43,10 @@ MODULE_PARM_DESC(ppm, "+-adjust to actual XO freq (ppm)");
 /* The base timer frequency, * 27 if selected */
 #define HRT_FREQ   1000000
 
-static u64 read_hrt(struct clocksource *cs)
+static cycle_t read_hrt(struct clocksource *cs)
 {
 	/* Read the timer value */
-	return (u64) inl(scx200_cb_base + SCx200_TIMER_OFFSET);
+	return (cycle_t) inl(scx200_cb_base + SCx200_TIMER_OFFSET);
 }
 
 static struct clocksource cs_hrt = {

@@ -10,7 +10,7 @@ Required properties :
 Recommended properties :
 
  - clock-frequency : maximal I2C bus clock frequency in Hz.
- - energymicro,location : Decides the location of the USART I/O pins.
+ - efm32,location : Decides the location of the USART I/O pins.
    Allowed range : [0 .. 6]
 
 Example:
@@ -23,7 +23,7 @@ Example:
 		clocks = <&cmu clk_HFPERCLKI2C0>;
 		clock-frequency = <100000>;
 		status = "ok";
-		energymicro,location = <3>;
+		efm32,location = <3>;
 
 		eeprom@50 {
 			compatible = "microchip,24c02";

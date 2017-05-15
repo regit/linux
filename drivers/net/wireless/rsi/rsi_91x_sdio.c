@@ -820,11 +820,9 @@ static struct sdio_driver rsi_driver = {
  */
 static int rsi_module_init(void)
 {
-	int ret;
-
-	ret = sdio_register_driver(&rsi_driver);
+	sdio_register_driver(&rsi_driver);
 	rsi_dbg(INIT_ZONE, "%s: Registering driver\n", __func__);
-	return ret;
+	return 0;
 }
 
 /**

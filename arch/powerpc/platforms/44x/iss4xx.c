@@ -32,7 +32,7 @@
 #include <asm/mpic.h>
 #include <asm/mmu.h>
 
-static const struct of_device_id iss4xx_of_bus[] __initconst = {
+static __initdata struct of_device_id iss4xx_of_bus[] = {
 	{ .compatible = "ibm,plb4", },
 	{ .compatible = "ibm,plb6", },
 	{ .compatible = "ibm,opb", },
@@ -149,7 +149,9 @@ static void __init iss4xx_setup_arch(void)
  */
 static int __init iss4xx_probe(void)
 {
-	if (!of_machine_is_compatible("ibm,iss-4xx"))
+	unsigned long root = of_get_flat_dt_root();
+
+	if (!of_flat_dt_is_compatible(root, "ibm,iss-4xx"))
 		return 0;
 
 	return 1;

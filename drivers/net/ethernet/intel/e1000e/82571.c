@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2014 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -95,6 +95,7 @@ static s32 e1000_init_phy_params_82571(struct e1000_hw *hw)
 		break;
 	default:
 		return -E1000_ERR_PHY;
+		break;
 	}
 
 	/* This can only be done after all function pointers are setup. */
@@ -185,7 +186,7 @@ static s32 e1000_init_nvm_params_82571(struct e1000_hw *hw)
 		/* EEPROM access above 16k is unsupported */
 		if (size > 14)
 			size = 14;
-		nvm->word_size = BIT(size);
+		nvm->word_size = 1 << size;
 		break;
 	}
 
@@ -421,6 +422,7 @@ static s32 e1000_get_phy_id_82571(struct e1000_hw *hw)
 		break;
 	case e1000_82573:
 		return e1000e_get_phy_id(hw);
+		break;
 	case e1000_82574:
 	case e1000_82583:
 		ret_val = e1e_rphy(hw, MII_PHYSID1, &phy_id);
@@ -438,6 +440,7 @@ static s32 e1000_get_phy_id_82571(struct e1000_hw *hw)
 		break;
 	default:
 		return -E1000_ERR_PHY;
+		break;
 	}
 
 	return 0;
@@ -1163,12 +1166,12 @@ static void e1000_initialize_hw_bits_82571(struct e1000_hw *hw)
 
 	/* Transmit Descriptor Control 0 */
 	reg = er32(TXDCTL(0));
-	reg |= BIT(22);
+	reg |= (1 << 22);
 	ew32(TXDCTL(0), reg);
 
 	/* Transmit Descriptor Control 1 */
 	reg = er32(TXDCTL(1));
-	reg |= BIT(22);
+	reg |= (1 << 22);
 	ew32(TXDCTL(1), reg);
 
 	/* Transmit Arbitration Control 0 */
@@ -1177,11 +1180,11 @@ static void e1000_initialize_hw_bits_82571(struct e1000_hw *hw)
 	switch (hw->mac.type) {
 	case e1000_82571:
 	case e1000_82572:
-		reg |= BIT(23) | BIT(24) | BIT(25) | BIT(26);
+		reg |= (1 << 23) | (1 << 24) | (1 << 25) | (1 << 26);
 		break;
 	case e1000_82574:
 	case e1000_82583:
-		reg |= BIT(26);
+		reg |= (1 << 26);
 		break;
 	default:
 		break;
@@ -1193,12 +1196,12 @@ static void e1000_initialize_hw_bits_82571(struct e1000_hw *hw)
 	switch (hw->mac.type) {
 	case e1000_82571:
 	case e1000_82572:
-		reg &= ~(BIT(29) | BIT(30));
-		reg |= BIT(22) | BIT(24) | BIT(25) | BIT(26);
+		reg &= ~((1 << 29) | (1 << 30));
+		reg |= (1 << 22) | (1 << 24) | (1 << 25) | (1 << 26);
 		if (er32(TCTL) & E1000_TCTL_MULR)
-			reg &= ~BIT(28);
+			reg &= ~(1 << 28);
 		else
-			reg |= BIT(28);
+			reg |= (1 << 28);
 		ew32(TARC(1), reg);
 		break;
 	default:
@@ -1211,7 +1214,7 @@ static void e1000_initialize_hw_bits_82571(struct e1000_hw *hw)
 	case e1000_82574:
 	case e1000_82583:
 		reg = er32(CTRL);
-		reg &= ~BIT(29);
+		reg &= ~(1 << 29);
 		ew32(CTRL, reg);
 		break;
 	default:
@@ -1224,8 +1227,8 @@ static void e1000_initialize_hw_bits_82571(struct e1000_hw *hw)
 	case e1000_82574:
 	case e1000_82583:
 		reg = er32(CTRL_EXT);
-		reg &= ~BIT(23);
-		reg |= BIT(22);
+		reg &= ~(1 << 23);
+		reg |= (1 << 22);
 		ew32(CTRL_EXT, reg);
 		break;
 	default:
@@ -1261,7 +1264,7 @@ static void e1000_initialize_hw_bits_82571(struct e1000_hw *hw)
 	case e1000_82574:
 	case e1000_82583:
 		reg = er32(GCR);
-		reg |= BIT(22);
+		reg |= (1 << 22);
 		ew32(GCR, reg);
 
 		/* Workaround for hardware errata.
@@ -1308,8 +1311,8 @@ static void e1000_clear_vfta_82571(struct e1000_hw *hw)
 				       E1000_VFTA_ENTRY_SHIFT) &
 			    E1000_VFTA_ENTRY_MASK;
 			vfta_bit_in_reg =
-			    BIT(hw->mng_cookie.vlan_id &
-				E1000_VFTA_ENTRY_BIT_SHIFT_MASK);
+			    1 << (hw->mng_cookie.vlan_id &
+				  E1000_VFTA_ENTRY_BIT_SHIFT_MASK);
 		}
 		break;
 	default:
@@ -1455,6 +1458,7 @@ static s32 e1000_setup_copper_link_82571(struct e1000_hw *hw)
 		break;
 	default:
 		return -E1000_ERR_PHY;
+		break;
 	}
 
 	if (ret_val)
@@ -2010,7 +2014,7 @@ const struct e1000_info e1000_82573_info = {
 	.flags2			= FLAG2_DISABLE_ASPM_L1
 				  | FLAG2_DISABLE_ASPM_L0S,
 	.pba			= 20,
-	.max_hw_frame_size	= VLAN_ETH_FRAME_LEN + ETH_FCS_LEN,
+	.max_hw_frame_size	= ETH_FRAME_LEN + ETH_FCS_LEN,
 	.get_variants		= e1000_get_variants_82571,
 	.mac_ops		= &e82571_mac_ops,
 	.phy_ops		= &e82_phy_ops_m88,
@@ -2032,8 +2036,7 @@ const struct e1000_info e1000_82574_info = {
 				  | FLAG2_DISABLE_ASPM_L0S
 				  | FLAG2_DISABLE_ASPM_L1
 				  | FLAG2_NO_DISABLE_RX
-				  | FLAG2_DMA_BURST
-				  | FLAG2_CHECK_SYSTIM_OVERFLOW,
+				  | FLAG2_DMA_BURST,
 	.pba			= 32,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.get_variants		= e1000_get_variants_82571,
@@ -2054,8 +2057,7 @@ const struct e1000_info e1000_82583_info = {
 				  | FLAG_HAS_CTRLEXT_ON_LOAD,
 	.flags2			= FLAG2_DISABLE_ASPM_L0S
 				  | FLAG2_DISABLE_ASPM_L1
-				  | FLAG2_NO_DISABLE_RX
-				  | FLAG2_CHECK_SYSTIM_OVERFLOW,
+				  | FLAG2_NO_DISABLE_RX,
 	.pba			= 32,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.get_variants		= e1000_get_variants_82571,

@@ -12,6 +12,16 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
  */
 
 #include <linux/module.h>
@@ -32,27 +42,27 @@
 #define CCDC_MIN_HEIGHT		32
 
 static struct v4l2_mbus_framefmt *
-__ccdc_get_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg,
+__ccdc_get_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_fh *fh,
 		  unsigned int pad, enum v4l2_subdev_format_whence which);
 
 static const unsigned int ccdc_fmts[] = {
-	MEDIA_BUS_FMT_Y8_1X8,
-	MEDIA_BUS_FMT_Y10_1X10,
-	MEDIA_BUS_FMT_Y12_1X12,
-	MEDIA_BUS_FMT_SGRBG8_1X8,
-	MEDIA_BUS_FMT_SRGGB8_1X8,
-	MEDIA_BUS_FMT_SBGGR8_1X8,
-	MEDIA_BUS_FMT_SGBRG8_1X8,
-	MEDIA_BUS_FMT_SGRBG10_1X10,
-	MEDIA_BUS_FMT_SRGGB10_1X10,
-	MEDIA_BUS_FMT_SBGGR10_1X10,
-	MEDIA_BUS_FMT_SGBRG10_1X10,
-	MEDIA_BUS_FMT_SGRBG12_1X12,
-	MEDIA_BUS_FMT_SRGGB12_1X12,
-	MEDIA_BUS_FMT_SBGGR12_1X12,
-	MEDIA_BUS_FMT_SGBRG12_1X12,
-	MEDIA_BUS_FMT_YUYV8_2X8,
-	MEDIA_BUS_FMT_UYVY8_2X8,
+	V4L2_MBUS_FMT_Y8_1X8,
+	V4L2_MBUS_FMT_Y10_1X10,
+	V4L2_MBUS_FMT_Y12_1X12,
+	V4L2_MBUS_FMT_SGRBG8_1X8,
+	V4L2_MBUS_FMT_SRGGB8_1X8,
+	V4L2_MBUS_FMT_SBGGR8_1X8,
+	V4L2_MBUS_FMT_SGBRG8_1X8,
+	V4L2_MBUS_FMT_SGRBG10_1X10,
+	V4L2_MBUS_FMT_SRGGB10_1X10,
+	V4L2_MBUS_FMT_SBGGR10_1X10,
+	V4L2_MBUS_FMT_SGBRG10_1X10,
+	V4L2_MBUS_FMT_SGRBG12_1X12,
+	V4L2_MBUS_FMT_SRGGB12_1X12,
+	V4L2_MBUS_FMT_SBGGR12_1X12,
+	V4L2_MBUS_FMT_SGBRG12_1X12,
+	V4L2_MBUS_FMT_YUYV8_2X8,
+	V4L2_MBUS_FMT_UYVY8_2X8,
 };
 
 /*
@@ -151,8 +161,8 @@ static int ccdc_lsc_validate_config(struct isp_ccdc_device *ccdc,
 	}
 
 	if (lsc_cfg->offset & 3) {
-		dev_dbg(isp->dev,
-			"CCDC: LSC: Offset must be a multiple of 4\n");
+		dev_dbg(isp->dev, "CCDC: LSC: Offset must be a multiple of "
+			"4\n");
 		return -EINVAL;
 	}
 
@@ -266,10 +276,10 @@ static int __ccdc_lsc_enable(struct isp_ccdc_device *ccdc, int enable)
 		__ccdc_get_format(ccdc, NULL, CCDC_PAD_SINK,
 				  V4L2_SUBDEV_FORMAT_ACTIVE);
 
-	if ((format->code != MEDIA_BUS_FMT_SGRBG10_1X10) &&
-	    (format->code != MEDIA_BUS_FMT_SRGGB10_1X10) &&
-	    (format->code != MEDIA_BUS_FMT_SBGGR10_1X10) &&
-	    (format->code != MEDIA_BUS_FMT_SGBRG10_1X10))
+	if ((format->code != V4L2_MBUS_FMT_SGRBG10_1X10) &&
+	    (format->code != V4L2_MBUS_FMT_SRGGB10_1X10) &&
+	    (format->code != V4L2_MBUS_FMT_SBGGR10_1X10) &&
+	    (format->code != V4L2_MBUS_FMT_SGBRG10_1X10))
 		return -EINVAL;
 
 	if (enable)
@@ -416,9 +426,8 @@ static int ccdc_lsc_config(struct isp_ccdc_device *ccdc,
 		return 0;
 
 	if (update != (OMAP3ISP_CCDC_CONFIG_LSC | OMAP3ISP_CCDC_TBL_LSC)) {
-		dev_dbg(to_device(ccdc),
-			"%s: Both LSC configuration and table need to be supplied\n",
-			__func__);
+		dev_dbg(to_device(ccdc), "%s: Both LSC configuration and table "
+			"need to be supplied\n", __func__);
 		return -EINVAL;
 	}
 
@@ -482,13 +491,14 @@ done:
 static inline int ccdc_lsc_is_configured(struct isp_ccdc_device *ccdc)
 {
 	unsigned long flags;
-	int ret;
 
 	spin_lock_irqsave(&ccdc->lsc.req_lock, flags);
-	ret = ccdc->lsc.active != NULL;
+	if (ccdc->lsc.active) {
+		spin_unlock_irqrestore(&ccdc->lsc.req_lock, flags);
+		return 1;
+	}
 	spin_unlock_irqrestore(&ccdc->lsc.req_lock, flags);
-
-	return ret;
+	return 0;
 }
 
 static int ccdc_lsc_enable(struct isp_ccdc_device *ccdc)
@@ -808,48 +818,29 @@ static void ccdc_config_vp(struct isp_ccdc_device *ccdc)
 	struct isp_pipeline *pipe = to_isp_pipeline(&ccdc->subdev.entity);
 	struct isp_device *isp = to_isp_device(ccdc);
 	const struct isp_format_info *info;
-	struct v4l2_mbus_framefmt *format;
 	unsigned long l3_ick = pipe->l3_ick;
 	unsigned int max_div = isp->revision == ISP_REVISION_15_0 ? 64 : 8;
 	unsigned int div = 0;
-	u32 fmtcfg = ISPCCDC_FMTCFG_VPEN;
+	u32 fmtcfg_vp;
 
-	format = &ccdc->formats[CCDC_PAD_SOURCE_VP];
-
-	if (!format->code) {
-		/* Disable the video port when the input format isn't supported.
-		 * This is indicated by a pixel code set to 0.
-		 */
-		isp_reg_writel(isp, 0, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMTCFG);
-		return;
-	}
-
-	isp_reg_writel(isp, (0 << ISPCCDC_FMT_HORZ_FMTSPH_SHIFT) |
-		       (format->width << ISPCCDC_FMT_HORZ_FMTLNH_SHIFT),
-		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMT_HORZ);
-	isp_reg_writel(isp, (0 << ISPCCDC_FMT_VERT_FMTSLV_SHIFT) |
-		       ((format->height + 1) << ISPCCDC_FMT_VERT_FMTLNV_SHIFT),
-		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMT_VERT);
-
-	isp_reg_writel(isp, (format->width << ISPCCDC_VP_OUT_HORZ_NUM_SHIFT) |
-		       (format->height << ISPCCDC_VP_OUT_VERT_NUM_SHIFT),
-		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_VP_OUT);
+	fmtcfg_vp = isp_reg_readl(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMTCFG)
+		  & ~(ISPCCDC_FMTCFG_VPIN_MASK | ISPCCDC_FMTCFG_VPIF_FRQ_MASK);
 
 	info = omap3isp_video_format_info(ccdc->formats[CCDC_PAD_SINK].code);
 
 	switch (info->width) {
 	case 8:
 	case 10:
-		fmtcfg |= ISPCCDC_FMTCFG_VPIN_9_0;
+		fmtcfg_vp |= ISPCCDC_FMTCFG_VPIN_9_0;
 		break;
 	case 11:
-		fmtcfg |= ISPCCDC_FMTCFG_VPIN_10_1;
+		fmtcfg_vp |= ISPCCDC_FMTCFG_VPIN_10_1;
 		break;
 	case 12:
-		fmtcfg |= ISPCCDC_FMTCFG_VPIN_11_2;
+		fmtcfg_vp |= ISPCCDC_FMTCFG_VPIN_11_2;
 		break;
 	case 13:
-		fmtcfg |= ISPCCDC_FMTCFG_VPIN_12_3;
+		fmtcfg_vp |= ISPCCDC_FMTCFG_VPIN_12_3;
 		break;
 	}
 
@@ -859,59 +850,75 @@ static void ccdc_config_vp(struct isp_ccdc_device *ccdc)
 		div = l3_ick / pipe->external_rate;
 
 	div = clamp(div, 2U, max_div);
-	fmtcfg |= (div - 2) << ISPCCDC_FMTCFG_VPIF_FRQ_SHIFT;
+	fmtcfg_vp |= (div - 2) << ISPCCDC_FMTCFG_VPIF_FRQ_SHIFT;
 
-	isp_reg_writel(isp, fmtcfg, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMTCFG);
+	isp_reg_writel(isp, fmtcfg_vp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMTCFG);
+}
+
+/*
+ * ccdc_enable_vp - Enable Video Port.
+ * @ccdc: Pointer to ISP CCDC device.
+ * @enable: 0 Disables VP, 1 Enables VP
+ *
+ * This is needed for outputting image to Preview, H3A and HIST ISP submodules.
+ */
+static void ccdc_enable_vp(struct isp_ccdc_device *ccdc, u8 enable)
+{
+	struct isp_device *isp = to_isp_device(ccdc);
+
+	isp_reg_clr_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMTCFG,
+			ISPCCDC_FMTCFG_VPEN, enable ? ISPCCDC_FMTCFG_VPEN : 0);
 }
 
 /*
  * ccdc_config_outlineoffset - Configure memory saving output line offset
  * @ccdc: Pointer to ISP CCDC device.
- * @bpl: Number of bytes per line when stored in memory.
- * @field: Field order when storing interlaced formats in memory.
+ * @offset: Address offset to start a new line. Must be twice the
+ *          Output width and aligned on 32 byte boundary
+ * @oddeven: Specifies the odd/even line pattern to be chosen to store the
+ *           output.
+ * @numlines: Set the value 0-3 for +1-4lines, 4-7 for -1-4lines.
  *
- * Configure the offsets for the line output control:
- *
- * - The horizontal line offset is defined as the number of bytes between the
- *   start of two consecutive lines in memory. Set it to the given bytes per
- *   line value.
- *
- * - The field offset value is defined as the number of lines to offset the
- *   start of the field identified by FID = 1. Set it to one.
- *
- * - The line offset values are defined as the number of lines (as defined by
- *   the horizontal line offset) between the start of two consecutive lines for
- *   all combinations of odd/even lines in odd/even fields. When interleaving
- *   fields set them all to two lines, and to one line otherwise.
+ * - Configures the output line offset when stored in memory
+ * - Sets the odd/even line pattern to store the output
+ *    (EVENEVEN (1), ODDEVEN (2), EVENODD (3), ODDODD (4))
+ * - Configures the number of even and odd line fields in case of rearranging
+ * the lines.
  */
 static void ccdc_config_outlineoffset(struct isp_ccdc_device *ccdc,
-				      unsigned int bpl,
-				      enum v4l2_field field)
+					u32 offset, u8 oddeven, u8 numlines)
 {
 	struct isp_device *isp = to_isp_device(ccdc);
-	u32 sdofst = 0;
 
-	isp_reg_writel(isp, bpl & 0xffff, OMAP3_ISP_IOMEM_CCDC,
-		       ISPCCDC_HSIZE_OFF);
+	isp_reg_writel(isp, offset & 0xffff,
+		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_HSIZE_OFF);
 
-	switch (field) {
-	case V4L2_FIELD_INTERLACED_TB:
-	case V4L2_FIELD_INTERLACED_BT:
-		/* When interleaving fields in memory offset field one by one
-		 * line and set the line offset to two lines.
-		 */
-		sdofst |= (1 << ISPCCDC_SDOFST_LOFST0_SHIFT)
-		       |  (1 << ISPCCDC_SDOFST_LOFST1_SHIFT)
-		       |  (1 << ISPCCDC_SDOFST_LOFST2_SHIFT)
-		       |  (1 << ISPCCDC_SDOFST_LOFST3_SHIFT);
+	isp_reg_clr(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST,
+		    ISPCCDC_SDOFST_FINV);
+
+	isp_reg_clr(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST,
+		    ISPCCDC_SDOFST_FOFST_4L);
+
+	switch (oddeven) {
+	case EVENEVEN:
+		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST,
+			    (numlines & 0x7) << ISPCCDC_SDOFST_LOFST0_SHIFT);
 		break;
-
+	case ODDEVEN:
+		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST,
+			    (numlines & 0x7) << ISPCCDC_SDOFST_LOFST1_SHIFT);
+		break;
+	case EVENODD:
+		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST,
+			    (numlines & 0x7) << ISPCCDC_SDOFST_LOFST2_SHIFT);
+		break;
+	case ODDODD:
+		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST,
+			    (numlines & 0x7) << ISPCCDC_SDOFST_LOFST3_SHIFT);
+		break;
 	default:
-		/* In all other cases set the line offsets to one line. */
 		break;
 	}
-
-	isp_reg_writel(isp, sdofst, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SDOFST);
 }
 
 /*
@@ -959,11 +966,11 @@ void omap3isp_ccdc_max_rate(struct isp_ccdc_device *ccdc,
 /*
  * ccdc_config_sync_if - Set CCDC sync interface configuration
  * @ccdc: Pointer to ISP CCDC device.
- * @parcfg: Parallel interface platform data (may be NULL)
+ * @pdata: Parallel interface platform data (may be NULL)
  * @data_size: Data size
  */
 static void ccdc_config_sync_if(struct isp_ccdc_device *ccdc,
-				struct isp_parallel_cfg *parcfg,
+				struct isp_parallel_platform_data *pdata,
 				unsigned int data_size)
 {
 	struct isp_device *isp = to_isp_device(ccdc);
@@ -972,18 +979,12 @@ static void ccdc_config_sync_if(struct isp_ccdc_device *ccdc,
 
 	format = &ccdc->formats[CCDC_PAD_SINK];
 
-	if (format->code == MEDIA_BUS_FMT_YUYV8_2X8 ||
-	    format->code == MEDIA_BUS_FMT_UYVY8_2X8) {
-		/* According to the OMAP3 TRM the input mode only affects SYNC
-		 * mode, enabling BT.656 mode should take precedence. However,
-		 * in practice setting the input mode to YCbCr data on 8 bits
-		 * seems to be required in BT.656 mode. In SYNC mode set it to
-		 * YCbCr on 16 bits as the bridge is enabled in that case.
+	if (format->code == V4L2_MBUS_FMT_YUYV8_2X8 ||
+	    format->code == V4L2_MBUS_FMT_UYVY8_2X8) {
+		/* The bridge is enabled for YUV8 formats. Configure the input
+		 * mode accordingly.
 		 */
-		if (ccdc->bt656)
-			syn_mode |= ISPCCDC_SYN_MODE_INPMOD_YCBCR8;
-		else
-			syn_mode |= ISPCCDC_SYN_MODE_INPMOD_YCBCR16;
+		syn_mode |= ISPCCDC_SYN_MODE_INPMOD_YCBCR16;
 	}
 
 	switch (data_size) {
@@ -1001,43 +1002,29 @@ static void ccdc_config_sync_if(struct isp_ccdc_device *ccdc,
 		break;
 	}
 
-	if (parcfg && parcfg->data_pol)
+	if (pdata && pdata->data_pol)
 		syn_mode |= ISPCCDC_SYN_MODE_DATAPOL;
 
-	if (parcfg && parcfg->hs_pol)
+	if (pdata && pdata->hs_pol)
 		syn_mode |= ISPCCDC_SYN_MODE_HDPOL;
 
-	/* The polarity of the vertical sync signal output by the BT.656
-	 * decoder is not documented and seems to be active low.
-	 */
-	if ((parcfg && parcfg->vs_pol) || ccdc->bt656)
+	if (pdata && pdata->vs_pol)
 		syn_mode |= ISPCCDC_SYN_MODE_VDPOL;
-
-	if (parcfg && parcfg->fld_pol)
-		syn_mode |= ISPCCDC_SYN_MODE_FLDPOL;
 
 	isp_reg_writel(isp, syn_mode, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SYN_MODE);
 
 	/* The CCDC_CFG.Y8POS bit is used in YCbCr8 input mode only. The
 	 * hardware seems to ignore it in all other input modes.
 	 */
-	if (format->code == MEDIA_BUS_FMT_UYVY8_2X8)
+	if (format->code == V4L2_MBUS_FMT_UYVY8_2X8)
 		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_CFG,
 			    ISPCCDC_CFG_Y8POS);
 	else
 		isp_reg_clr(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_CFG,
 			    ISPCCDC_CFG_Y8POS);
 
-	/* Enable or disable BT.656 mode, including error correction for the
-	 * synchronization codes.
-	 */
-	if (ccdc->bt656)
-		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_REC656IF,
-			    ISPCCDC_REC656IF_R656ON | ISPCCDC_REC656IF_ECCFVH);
-	else
-		isp_reg_clr(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_REC656IF,
-			    ISPCCDC_REC656IF_R656ON | ISPCCDC_REC656IF_ECCFVH);
-
+	isp_reg_clr(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_REC656IF,
+		    ISPCCDC_REC656IF_R656ON);
 }
 
 /* CCDC formats descriptions */
@@ -1116,7 +1103,7 @@ static const u32 ccdc_sgbrg_pattern =
 static void ccdc_configure(struct isp_ccdc_device *ccdc)
 {
 	struct isp_device *isp = to_isp_device(ccdc);
-	struct isp_parallel_cfg *parcfg = NULL;
+	struct isp_parallel_platform_data *pdata = NULL;
 	struct v4l2_subdev *sensor;
 	struct v4l2_mbus_framefmt *format;
 	const struct v4l2_rect *crop;
@@ -1128,33 +1115,17 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 	unsigned long flags;
 	unsigned int bridge;
 	unsigned int shift;
-	unsigned int nph;
-	unsigned int sph;
 	u32 syn_mode;
 	u32 ccdc_pattern;
 
-	ccdc->bt656 = false;
-	ccdc->fields = 0;
-
 	pad = media_entity_remote_pad(&ccdc->pads[CCDC_PAD_SINK]);
 	sensor = media_entity_to_v4l2_subdev(pad->entity);
-	if (ccdc->input == CCDC_INPUT_PARALLEL) {
-		struct v4l2_mbus_config cfg;
-		int ret;
-
-		ret = v4l2_subdev_call(sensor, video, g_mbus_config, &cfg);
-		if (!ret)
-			ccdc->bt656 = cfg.type == V4L2_MBUS_BT656;
-
-		parcfg = &((struct isp_bus_cfg *)sensor->host_priv)
+	if (ccdc->input == CCDC_INPUT_PARALLEL)
+		pdata = &((struct isp_v4l2_subdevs_group *)sensor->host_priv)
 			->bus.parallel;
-	}
-
-	/* CCDC_PAD_SINK */
-	format = &ccdc->formats[CCDC_PAD_SINK];
 
 	/* Compute the lane shifter shift value and enable the bridge when the
-	 * input format is a non-BT.656 YUV variant.
+	 * input format is YUV.
 	 */
 	fmt_src.pad = pad->index;
 	fmt_src.which = V4L2_SUBDEV_FORMAT_ACTIVE;
@@ -1163,23 +1134,21 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 		depth_in = fmt_info->width;
 	}
 
-	fmt_info = omap3isp_video_format_info(format->code);
+	fmt_info = omap3isp_video_format_info
+		(isp->isp_ccdc.formats[CCDC_PAD_SINK].code);
 	depth_out = fmt_info->width;
 	shift = depth_in - depth_out;
 
-	if (ccdc->bt656)
-		bridge = ISPCTRL_PAR_BRIDGE_DISABLE;
-	else if (fmt_info->code == MEDIA_BUS_FMT_YUYV8_2X8)
+	if (fmt_info->code == V4L2_MBUS_FMT_YUYV8_2X8)
 		bridge = ISPCTRL_PAR_BRIDGE_LENDIAN;
-	else if (fmt_info->code == MEDIA_BUS_FMT_UYVY8_2X8)
+	else if (fmt_info->code == V4L2_MBUS_FMT_UYVY8_2X8)
 		bridge = ISPCTRL_PAR_BRIDGE_BENDIAN;
 	else
 		bridge = ISPCTRL_PAR_BRIDGE_DISABLE;
 
-	omap3isp_configure_bridge(isp, ccdc->input, parcfg, shift, bridge);
+	omap3isp_configure_bridge(isp, ccdc->input, pdata, shift, bridge);
 
-	/* Configure the sync interface. */
-	ccdc_config_sync_if(ccdc, parcfg, depth_out);
+	ccdc_config_sync_if(ccdc, pdata, depth_out);
 
 	syn_mode = isp_reg_readl(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SYN_MODE);
 
@@ -1198,18 +1167,21 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 	else
 		syn_mode &= ~ISPCCDC_SYN_MODE_SDR2RSZ;
 
+	/* CCDC_PAD_SINK */
+	format = &ccdc->formats[CCDC_PAD_SINK];
+
 	/* Mosaic filter */
 	switch (format->code) {
-	case MEDIA_BUS_FMT_SRGGB10_1X10:
-	case MEDIA_BUS_FMT_SRGGB12_1X12:
+	case V4L2_MBUS_FMT_SRGGB10_1X10:
+	case V4L2_MBUS_FMT_SRGGB12_1X12:
 		ccdc_pattern = ccdc_srggb_pattern;
 		break;
-	case MEDIA_BUS_FMT_SBGGR10_1X10:
-	case MEDIA_BUS_FMT_SBGGR12_1X12:
+	case V4L2_MBUS_FMT_SBGGR10_1X10:
+	case V4L2_MBUS_FMT_SBGGR12_1X12:
 		ccdc_pattern = ccdc_sbggr_pattern;
 		break;
-	case MEDIA_BUS_FMT_SGBRG10_1X10:
-	case MEDIA_BUS_FMT_SGBRG12_1X12:
+	case V4L2_MBUS_FMT_SGBRG10_1X10:
+	case V4L2_MBUS_FMT_SGBRG12_1X12:
 		ccdc_pattern = ccdc_sgbrg_pattern;
 		break;
 	default:
@@ -1230,56 +1202,29 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 	format = &ccdc->formats[CCDC_PAD_SOURCE_OF];
 	crop = &ccdc->crop;
 
-	/* The horizontal coordinates are expressed in pixel clock cycles. We
-	 * need two cycles per pixel in BT.656 mode, and one cycle per pixel in
-	 * SYNC mode regardless of the format as the bridge is enabled for YUV
-	 * formats in that case.
-	 */
-	if (ccdc->bt656) {
-		sph = crop->left * 2;
-		nph = crop->width * 2 - 1;
-	} else {
-		sph = crop->left;
-		nph = crop->width - 1;
-	}
-
-	isp_reg_writel(isp, (sph << ISPCCDC_HORZ_INFO_SPH_SHIFT) |
-		       (nph << ISPCCDC_HORZ_INFO_NPH_SHIFT),
+	isp_reg_writel(isp, (crop->left << ISPCCDC_HORZ_INFO_SPH_SHIFT) |
+		       ((crop->width - 1) << ISPCCDC_HORZ_INFO_NPH_SHIFT),
 		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_HORZ_INFO);
-	isp_reg_writel(isp, (crop->top << ISPCCDC_VERT_START_SLV0_SHIFT) |
-		       (crop->top << ISPCCDC_VERT_START_SLV1_SHIFT),
+	isp_reg_writel(isp, crop->top << ISPCCDC_VERT_START_SLV0_SHIFT,
 		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_VERT_START);
 	isp_reg_writel(isp, (crop->height - 1)
 			<< ISPCCDC_VERT_LINES_NLV_SHIFT,
 		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_VERT_LINES);
 
-	ccdc_config_outlineoffset(ccdc, ccdc->video_out.bpl_value,
-				  format->field);
-
-	/* When interleaving fields enable processing of the field input signal.
-	 * This will cause the line output control module to apply the field
-	 * offset to field 1.
-	 */
-	if (ccdc->formats[CCDC_PAD_SINK].field == V4L2_FIELD_ALTERNATE &&
-	    (format->field == V4L2_FIELD_INTERLACED_TB ||
-	     format->field == V4L2_FIELD_INTERLACED_BT))
-		syn_mode |= ISPCCDC_SYN_MODE_FLDMODE;
+	ccdc_config_outlineoffset(ccdc, ccdc->video_out.bpl_value, 0, 0);
 
 	/* The CCDC outputs data in UYVY order by default. Swap bytes to get
 	 * YUYV.
 	 */
-	if (format->code == MEDIA_BUS_FMT_YUYV8_1X16)
+	if (format->code == V4L2_MBUS_FMT_YUYV8_1X16)
 		isp_reg_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_CFG,
 			    ISPCCDC_CFG_BSWD);
 	else
 		isp_reg_clr(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_CFG,
 			    ISPCCDC_CFG_BSWD);
 
-	/* Use PACK8 mode for 1byte per pixel formats. Check for BT.656 mode
-	 * explicitly as the driver reports 1X16 instead of 2X8 at the OF pad
-	 * for simplicity.
-	 */
-	if (omap3isp_video_format_info(format->code)->width <= 8 || ccdc->bt656)
+	/* Use PACK8 mode for 1byte per pixel formats. */
+	if (omap3isp_video_format_info(format->code)->width <= 8)
 		syn_mode |= ISPCCDC_SYN_MODE_PACK8;
 	else
 		syn_mode &= ~ISPCCDC_SYN_MODE_PACK8;
@@ -1287,7 +1232,18 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 	isp_reg_writel(isp, syn_mode, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SYN_MODE);
 
 	/* CCDC_PAD_SOURCE_VP */
-	ccdc_config_vp(ccdc);
+	format = &ccdc->formats[CCDC_PAD_SOURCE_VP];
+
+	isp_reg_writel(isp, (0 << ISPCCDC_FMT_HORZ_FMTSPH_SHIFT) |
+		       (format->width << ISPCCDC_FMT_HORZ_FMTLNH_SHIFT),
+		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMT_HORZ);
+	isp_reg_writel(isp, (0 << ISPCCDC_FMT_VERT_FMTSLV_SHIFT) |
+		       ((format->height + 1) << ISPCCDC_FMT_VERT_FMTLNV_SHIFT),
+		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_FMT_VERT);
+
+	isp_reg_writel(isp, (format->width << ISPCCDC_VP_OUT_HORZ_NUM_SHIFT) |
+		       (format->height << ISPCCDC_VP_OUT_VERT_NUM_SHIFT),
+		       OMAP3_ISP_IOMEM_CCDC, ISPCCDC_VP_OUT);
 
 	/* Lens shading correction. */
 	spin_lock_irqsave(&ccdc->lsc.req_lock, flags);
@@ -1321,8 +1277,6 @@ static void __ccdc_enable(struct isp_ccdc_device *ccdc, int enable)
 
 	isp_reg_clr_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_PCR,
 			ISPCCDC_PCR_EN, enable ? ISPCCDC_PCR_EN : 0);
-
-	ccdc->running = enable;
 }
 
 static int ccdc_disable(struct isp_ccdc_device *ccdc)
@@ -1333,8 +1287,6 @@ static int ccdc_disable(struct isp_ccdc_device *ccdc)
 	spin_lock_irqsave(&ccdc->lock, flags);
 	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS)
 		ccdc->stopping = CCDC_STOP_REQUEST;
-	if (!ccdc->running)
-		ccdc->stopping = CCDC_STOP_FINISHED;
 	spin_unlock_irqrestore(&ccdc->lock, flags);
 
 	ret = wait_event_timeout(ccdc->wait,
@@ -1417,14 +1369,14 @@ static int ccdc_sbl_wait_idle(struct isp_ccdc_device *ccdc,
 	return -EBUSY;
 }
 
-/* ccdc_handle_stopping - Handle CCDC and/or LSC stopping sequence
+/* __ccdc_handle_stopping - Handle CCDC and/or LSC stopping sequence
  * @ccdc: Pointer to ISP CCDC device.
  * @event: Pointing which event trigger handler
  *
  * Return 1 when the event and stopping request combination is satisfied,
  * zero otherwise.
  */
-static int ccdc_handle_stopping(struct isp_ccdc_device *ccdc, u32 event)
+static int __ccdc_handle_stopping(struct isp_ccdc_device *ccdc, u32 event)
 {
 	int rval = 0;
 
@@ -1506,7 +1458,7 @@ static void ccdc_lsc_isr(struct isp_ccdc_device *ccdc, u32 events)
 	if (ccdc->lsc.state == LSC_STATE_STOPPING)
 		ccdc->lsc.state = LSC_STATE_STOPPED;
 
-	if (ccdc_handle_stopping(ccdc, CCDC_EVENT_LSC_DONE))
+	if (__ccdc_handle_stopping(ccdc, CCDC_EVENT_LSC_DONE))
 		goto done;
 
 	if (ccdc->lsc.state != LSC_STATE_RECONFIG)
@@ -1534,59 +1486,12 @@ done:
 	spin_unlock_irqrestore(&ccdc->lsc.req_lock, flags);
 }
 
-/*
- * Check whether the CCDC has captured all fields necessary to complete the
- * buffer.
- */
-static bool ccdc_has_all_fields(struct isp_ccdc_device *ccdc)
-{
-	struct isp_pipeline *pipe = to_isp_pipeline(&ccdc->subdev.entity);
-	struct isp_device *isp = to_isp_device(ccdc);
-	enum v4l2_field of_field = ccdc->formats[CCDC_PAD_SOURCE_OF].field;
-	enum v4l2_field field;
-
-	/* When the input is progressive fields don't matter. */
-	if (of_field == V4L2_FIELD_NONE)
-		return true;
-
-	/* Read the current field identifier. */
-	field = isp_reg_readl(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_SYN_MODE)
-	      & ISPCCDC_SYN_MODE_FLDSTAT
-	      ? V4L2_FIELD_BOTTOM : V4L2_FIELD_TOP;
-
-	/* When capturing fields in alternate order just store the current field
-	 * identifier in the pipeline.
-	 */
-	if (of_field == V4L2_FIELD_ALTERNATE) {
-		pipe->field = field;
-		return true;
-	}
-
-	/* The format is interlaced. Make sure we've captured both fields. */
-	ccdc->fields |= field == V4L2_FIELD_BOTTOM
-		      ? CCDC_FIELD_BOTTOM : CCDC_FIELD_TOP;
-
-	if (ccdc->fields != CCDC_FIELD_BOTH)
-		return false;
-
-	/* Verify that the field just captured corresponds to the last field
-	 * needed based on the desired field order.
-	 */
-	if ((of_field == V4L2_FIELD_INTERLACED_TB && field == V4L2_FIELD_TOP) ||
-	    (of_field == V4L2_FIELD_INTERLACED_BT && field == V4L2_FIELD_BOTTOM))
-		return false;
-
-	/* The buffer can be completed, reset the fields for the next buffer. */
-	ccdc->fields = 0;
-
-	return true;
-}
-
 static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 {
 	struct isp_pipeline *pipe = to_isp_pipeline(&ccdc->subdev.entity);
 	struct isp_device *isp = to_isp_device(ccdc);
 	struct isp_buffer *buffer;
+	int restart = 0;
 
 	/* The CCDC generates VD0 interrupts even when disabled (the datasheet
 	 * doesn't explicitly state if that's supposed to happen or not, so it
@@ -1595,31 +1500,30 @@ static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 	 * would thus not be enough, we need to handle the situation explicitly.
 	 */
 	if (list_empty(&ccdc->video_out.dmaqueue))
-		return 0;
+		goto done;
 
 	/* We're in continuous mode, and memory writes were disabled due to a
 	 * buffer underrun. Reenable them now that we have a buffer. The buffer
 	 * address has been set in ccdc_video_queue.
 	 */
 	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS && ccdc->underrun) {
+		restart = 1;
 		ccdc->underrun = 0;
-		return 1;
+		goto done;
 	}
 
-	/* Wait for the CCDC to become idle. */
 	if (ccdc_sbl_wait_idle(ccdc, 1000)) {
 		dev_info(isp->dev, "CCDC won't become idle!\n");
-		media_entity_enum_set(&isp->crashed, &ccdc->subdev.entity);
+		isp->crashed |= 1U << ccdc->subdev.entity.id;
 		omap3isp_pipeline_cancel_stream(pipe);
-		return 0;
+		goto done;
 	}
 
-	if (!ccdc_has_all_fields(ccdc))
-		return 1;
-
 	buffer = omap3isp_video_buffer_next(&ccdc->video_out);
-	if (buffer != NULL)
+	if (buffer != NULL) {
 		ccdc_set_outaddr(ccdc, buffer->dma);
+		restart = 1;
+	}
 
 	pipe->state |= ISP_PIPELINE_IDLE_OUTPUT;
 
@@ -1628,7 +1532,8 @@ static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 		omap3isp_pipeline_set_stream(pipe,
 					ISP_PIPELINE_STREAM_SINGLESHOT);
 
-	return buffer != NULL;
+done:
+	return restart;
 }
 
 /*
@@ -1642,38 +1547,11 @@ static void ccdc_vd0_isr(struct isp_ccdc_device *ccdc)
 	unsigned long flags;
 	int restart = 0;
 
-	/* In BT.656 mode the CCDC doesn't generate an HS/VS interrupt. We thus
-	 * need to increment the frame counter here.
-	 */
-	if (ccdc->bt656) {
-		struct isp_pipeline *pipe =
-			to_isp_pipeline(&ccdc->subdev.entity);
-
-		atomic_inc(&pipe->frame_number);
-	}
-
-	/* Emulate a VD1 interrupt for BT.656 mode, as we can't stop the CCDC in
-	 * the VD1 interrupt handler in that mode without risking a CCDC stall
-	 * if a short frame is received.
-	 */
-	if (ccdc->bt656) {
-		spin_lock_irqsave(&ccdc->lock, flags);
-		if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS &&
-		    ccdc->output & CCDC_OUTPUT_MEMORY) {
-			if (ccdc->lsc.state != LSC_STATE_STOPPED)
-				__ccdc_lsc_enable(ccdc, 0);
-			__ccdc_enable(ccdc, 0);
-		}
-		ccdc_handle_stopping(ccdc, CCDC_EVENT_VD1);
-		spin_unlock_irqrestore(&ccdc->lock, flags);
-	}
-
 	if (ccdc->output & CCDC_OUTPUT_MEMORY)
 		restart = ccdc_isr_buffer(ccdc);
 
 	spin_lock_irqsave(&ccdc->lock, flags);
-
-	if (ccdc_handle_stopping(ccdc, CCDC_EVENT_VD0)) {
+	if (__ccdc_handle_stopping(ccdc, CCDC_EVENT_VD0)) {
 		spin_unlock_irqrestore(&ccdc->lock, flags);
 		return;
 	}
@@ -1693,18 +1571,6 @@ static void ccdc_vd0_isr(struct isp_ccdc_device *ccdc)
 static void ccdc_vd1_isr(struct isp_ccdc_device *ccdc)
 {
 	unsigned long flags;
-
-	/* In BT.656 mode the synchronization signals are generated by the CCDC
-	 * from the embedded sync codes. The VD0 and VD1 interrupts are thus
-	 * only triggered when the CCDC is enabled, unlike external sync mode
-	 * where the line counter runs even when the CCDC is stopped. We can't
-	 * disable the CCDC at VD1 time, as no VD0 interrupt would be generated
-	 * for a short frame, which would result in the CCDC being stopped and
-	 * no VD interrupt generated anymore. The CCDC is stopped from the VD0
-	 * interrupt handler instead for BT.656.
-	 */
-	if (ccdc->bt656)
-		return;
 
 	spin_lock_irqsave(&ccdc->lsc.req_lock, flags);
 
@@ -1735,7 +1601,7 @@ static void ccdc_vd1_isr(struct isp_ccdc_device *ccdc)
 		break;
 	}
 
-	if (ccdc_handle_stopping(ccdc, CCDC_EVENT_VD1))
+	if (__ccdc_handle_stopping(ccdc, CCDC_EVENT_VD1))
 		goto done;
 
 	if (ccdc->lsc.request == NULL)
@@ -1790,8 +1656,6 @@ int omap3isp_ccdc_isr(struct isp_ccdc_device *ccdc, u32 events)
 static int ccdc_video_queue(struct isp_video *video, struct isp_buffer *buffer)
 {
 	struct isp_ccdc_device *ccdc = &video->isp->isp_ccdc;
-	unsigned long flags;
-	bool restart = false;
 
 	if (!(ccdc->output & CCDC_OUTPUT_MEMORY))
 		return -ENODEV;
@@ -1800,20 +1664,9 @@ static int ccdc_video_queue(struct isp_video *video, struct isp_buffer *buffer)
 
 	/* We now have a buffer queued on the output, restart the pipeline
 	 * on the next CCDC interrupt if running in continuous mode (or when
-	 * starting the stream) in external sync mode, or immediately in BT.656
-	 * sync mode as no CCDC interrupt is generated when the CCDC is stopped
-	 * in that case.
+	 * starting the stream).
 	 */
-	spin_lock_irqsave(&ccdc->lock, flags);
-	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS && !ccdc->running &&
-	    ccdc->bt656)
-		restart = true;
-	else
-		ccdc->underrun = 1;
-	spin_unlock_irqrestore(&ccdc->lock, flags);
-
-	if (restart)
-		ccdc_enable(ccdc);
+	ccdc->underrun = 1;
 
 	return 0;
 }
@@ -1900,6 +1753,11 @@ static int ccdc_set_stream(struct v4l2_subdev *sd, int enable)
 
 		ccdc_configure(ccdc);
 
+		/* TODO: Don't configure the video port if all of its output
+		 * links are inactive.
+		 */
+		ccdc_config_vp(ccdc);
+		ccdc_enable_vp(ccdc, 1);
 		ccdc_print_status(ccdc);
 	}
 
@@ -1936,21 +1794,21 @@ static int ccdc_set_stream(struct v4l2_subdev *sd, int enable)
 }
 
 static struct v4l2_mbus_framefmt *
-__ccdc_get_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg,
+__ccdc_get_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_fh *fh,
 		  unsigned int pad, enum v4l2_subdev_format_whence which)
 {
 	if (which == V4L2_SUBDEV_FORMAT_TRY)
-		return v4l2_subdev_get_try_format(&ccdc->subdev, cfg, pad);
+		return v4l2_subdev_get_try_format(fh, pad);
 	else
 		return &ccdc->formats[pad];
 }
 
 static struct v4l2_rect *
-__ccdc_get_crop(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg,
+__ccdc_get_crop(struct isp_ccdc_device *ccdc, struct v4l2_subdev_fh *fh,
 		enum v4l2_subdev_format_whence which)
 {
 	if (which == V4L2_SUBDEV_FORMAT_TRY)
-		return v4l2_subdev_get_try_crop(&ccdc->subdev, cfg, CCDC_PAD_SOURCE_OF);
+		return v4l2_subdev_get_try_crop(fh, CCDC_PAD_SOURCE_OF);
 	else
 		return &ccdc->crop;
 }
@@ -1958,21 +1816,20 @@ __ccdc_get_crop(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg
 /*
  * ccdc_try_format - Try video format on a pad
  * @ccdc: ISP CCDC device
- * @cfg : V4L2 subdev pad configuration
+ * @fh : V4L2 subdev file handle
  * @pad: Pad number
  * @fmt: Format
  */
 static void
-ccdc_try_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg,
+ccdc_try_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_fh *fh,
 		unsigned int pad, struct v4l2_mbus_framefmt *fmt,
 		enum v4l2_subdev_format_whence which)
 {
 	const struct isp_format_info *info;
-	u32 pixelcode;
+	enum v4l2_mbus_pixelcode pixelcode;
 	unsigned int width = fmt->width;
 	unsigned int height = fmt->height;
 	struct v4l2_rect *crop;
-	enum v4l2_field field;
 	unsigned int i;
 
 	switch (pad) {
@@ -1984,72 +1841,51 @@ ccdc_try_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg
 
 		/* If not found, use SGRBG10 as default */
 		if (i >= ARRAY_SIZE(ccdc_fmts))
-			fmt->code = MEDIA_BUS_FMT_SGRBG10_1X10;
+			fmt->code = V4L2_MBUS_FMT_SGRBG10_1X10;
 
 		/* Clamp the input size. */
 		fmt->width = clamp_t(u32, width, 32, 4096);
 		fmt->height = clamp_t(u32, height, 32, 4096);
-
-		/* Default to progressive field order. */
-		if (fmt->field == V4L2_FIELD_ANY)
-			fmt->field = V4L2_FIELD_NONE;
-
 		break;
 
 	case CCDC_PAD_SOURCE_OF:
 		pixelcode = fmt->code;
-		field = fmt->field;
-		*fmt = *__ccdc_get_format(ccdc, cfg, CCDC_PAD_SINK, which);
+		*fmt = *__ccdc_get_format(ccdc, fh, CCDC_PAD_SINK, which);
 
-		/* In SYNC mode the bridge converts YUV formats from 2X8 to
-		 * 1X16. In BT.656 no such conversion occurs. As we don't know
-		 * at this point whether the source will use SYNC or BT.656 mode
-		 * let's pretend the conversion always occurs. The CCDC will be
-		 * configured to pack bytes in BT.656, hiding the inaccuracy.
-		 * In all cases bytes can be swapped.
+		/* YUV formats are converted from 2X8 to 1X16 by the bridge and
+		 * can be byte-swapped.
 		 */
-		if (fmt->code == MEDIA_BUS_FMT_YUYV8_2X8 ||
-		    fmt->code == MEDIA_BUS_FMT_UYVY8_2X8) {
+		if (fmt->code == V4L2_MBUS_FMT_YUYV8_2X8 ||
+		    fmt->code == V4L2_MBUS_FMT_UYVY8_2X8) {
 			/* Use the user requested format if YUV. */
-			if (pixelcode == MEDIA_BUS_FMT_YUYV8_2X8 ||
-			    pixelcode == MEDIA_BUS_FMT_UYVY8_2X8 ||
-			    pixelcode == MEDIA_BUS_FMT_YUYV8_1X16 ||
-			    pixelcode == MEDIA_BUS_FMT_UYVY8_1X16)
+			if (pixelcode == V4L2_MBUS_FMT_YUYV8_2X8 ||
+			    pixelcode == V4L2_MBUS_FMT_UYVY8_2X8 ||
+			    pixelcode == V4L2_MBUS_FMT_YUYV8_1X16 ||
+			    pixelcode == V4L2_MBUS_FMT_UYVY8_1X16)
 				fmt->code = pixelcode;
 
-			if (fmt->code == MEDIA_BUS_FMT_YUYV8_2X8)
-				fmt->code = MEDIA_BUS_FMT_YUYV8_1X16;
-			else if (fmt->code == MEDIA_BUS_FMT_UYVY8_2X8)
-				fmt->code = MEDIA_BUS_FMT_UYVY8_1X16;
+			if (fmt->code == V4L2_MBUS_FMT_YUYV8_2X8)
+				fmt->code = V4L2_MBUS_FMT_YUYV8_1X16;
+			else if (fmt->code == V4L2_MBUS_FMT_UYVY8_2X8)
+				fmt->code = V4L2_MBUS_FMT_UYVY8_1X16;
 		}
 
 		/* Hardcode the output size to the crop rectangle size. */
-		crop = __ccdc_get_crop(ccdc, cfg, which);
+		crop = __ccdc_get_crop(ccdc, fh, which);
 		fmt->width = crop->width;
 		fmt->height = crop->height;
-
-		/* When input format is interlaced with alternating fields the
-		 * CCDC can interleave the fields.
-		 */
-		if (fmt->field == V4L2_FIELD_ALTERNATE &&
-		    (field == V4L2_FIELD_INTERLACED_TB ||
-		     field == V4L2_FIELD_INTERLACED_BT)) {
-			fmt->field = field;
-			fmt->height *= 2;
-		}
-
 		break;
 
 	case CCDC_PAD_SOURCE_VP:
-		*fmt = *__ccdc_get_format(ccdc, cfg, CCDC_PAD_SINK, which);
+		*fmt = *__ccdc_get_format(ccdc, fh, CCDC_PAD_SINK, which);
 
 		/* The video port interface truncates the data to 10 bits. */
 		info = omap3isp_video_format_info(fmt->code);
 		fmt->code = info->truncated;
 
 		/* YUV formats are not supported by the video port. */
-		if (fmt->code == MEDIA_BUS_FMT_YUYV8_2X8 ||
-		    fmt->code == MEDIA_BUS_FMT_UYVY8_2X8)
+		if (fmt->code == V4L2_MBUS_FMT_YUYV8_2X8 ||
+		    fmt->code == V4L2_MBUS_FMT_UYVY8_2X8)
 			fmt->code = 0;
 
 		/* The number of lines that can be clocked out from the video
@@ -2065,6 +1901,7 @@ ccdc_try_format(struct isp_ccdc_device *ccdc, struct v4l2_subdev_pad_config *cfg
 	 * stored on 2 bytes.
 	 */
 	fmt->colorspace = V4L2_COLORSPACE_SRGB;
+	fmt->field = V4L2_FIELD_NONE;
 }
 
 /*
@@ -2084,7 +1921,7 @@ static void ccdc_try_crop(struct isp_ccdc_device *ccdc,
 	 * to keep the Bayer pattern.
 	 */
 	info = omap3isp_video_format_info(sink->code);
-	if (info->flavor != MEDIA_BUS_FMT_Y8_1X8) {
+	if (info->flavor != V4L2_MBUS_FMT_Y8_1X8) {
 		crop->left &= ~1;
 		crop->top &= ~1;
 	}
@@ -2104,7 +1941,7 @@ static void ccdc_try_crop(struct isp_ccdc_device *ccdc,
 			       sink->height - crop->top);
 
 	/* Odd width/height values don't make sense for Bayer formats. */
-	if (info->flavor != MEDIA_BUS_FMT_Y8_1X8) {
+	if (info->flavor != V4L2_MBUS_FMT_Y8_1X8) {
 		crop->width &= ~1;
 		crop->height &= ~1;
 	}
@@ -2113,12 +1950,12 @@ static void ccdc_try_crop(struct isp_ccdc_device *ccdc,
 /*
  * ccdc_enum_mbus_code - Handle pixel format enumeration
  * @sd     : pointer to v4l2 subdev structure
- * @cfg : V4L2 subdev pad configuration
+ * @fh : V4L2 subdev file handle
  * @code   : pointer to v4l2_subdev_mbus_code_enum structure
  * return -EINVAL or zero on success
  */
 static int ccdc_enum_mbus_code(struct v4l2_subdev *sd,
-			       struct v4l2_subdev_pad_config *cfg,
+			       struct v4l2_subdev_fh *fh,
 			       struct v4l2_subdev_mbus_code_enum *code)
 {
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
@@ -2133,16 +1970,16 @@ static int ccdc_enum_mbus_code(struct v4l2_subdev *sd,
 		break;
 
 	case CCDC_PAD_SOURCE_OF:
-		format = __ccdc_get_format(ccdc, cfg, code->pad,
-					   code->which);
+		format = __ccdc_get_format(ccdc, fh, code->pad,
+					   V4L2_SUBDEV_FORMAT_TRY);
 
-		if (format->code == MEDIA_BUS_FMT_YUYV8_2X8 ||
-		    format->code == MEDIA_BUS_FMT_UYVY8_2X8) {
+		if (format->code == V4L2_MBUS_FMT_YUYV8_2X8 ||
+		    format->code == V4L2_MBUS_FMT_UYVY8_2X8) {
 			/* In YUV mode the CCDC can swap bytes. */
 			if (code->index == 0)
-				code->code = MEDIA_BUS_FMT_YUYV8_1X16;
+				code->code = V4L2_MBUS_FMT_YUYV8_1X16;
 			else if (code->index == 1)
-				code->code = MEDIA_BUS_FMT_UYVY8_1X16;
+				code->code = V4L2_MBUS_FMT_UYVY8_1X16;
 			else
 				return -EINVAL;
 		} else {
@@ -2164,8 +2001,8 @@ static int ccdc_enum_mbus_code(struct v4l2_subdev *sd,
 		if (code->index != 0)
 			return -EINVAL;
 
-		format = __ccdc_get_format(ccdc, cfg, code->pad,
-					   code->which);
+		format = __ccdc_get_format(ccdc, fh, code->pad,
+					   V4L2_SUBDEV_FORMAT_TRY);
 
 		/* A pixel code equal to 0 means that the video port doesn't
 		 * support the input format. Don't enumerate any pixel code.
@@ -2184,7 +2021,7 @@ static int ccdc_enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int ccdc_enum_frame_size(struct v4l2_subdev *sd,
-				struct v4l2_subdev_pad_config *cfg,
+				struct v4l2_subdev_fh *fh,
 				struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
@@ -2196,7 +2033,7 @@ static int ccdc_enum_frame_size(struct v4l2_subdev *sd,
 	format.code = fse->code;
 	format.width = 1;
 	format.height = 1;
-	ccdc_try_format(ccdc, cfg, fse->pad, &format, fse->which);
+	ccdc_try_format(ccdc, fh, fse->pad, &format, V4L2_SUBDEV_FORMAT_TRY);
 	fse->min_width = format.width;
 	fse->min_height = format.height;
 
@@ -2206,7 +2043,7 @@ static int ccdc_enum_frame_size(struct v4l2_subdev *sd,
 	format.code = fse->code;
 	format.width = -1;
 	format.height = -1;
-	ccdc_try_format(ccdc, cfg, fse->pad, &format, fse->which);
+	ccdc_try_format(ccdc, fh, fse->pad, &format, V4L2_SUBDEV_FORMAT_TRY);
 	fse->max_width = format.width;
 	fse->max_height = format.height;
 
@@ -2216,7 +2053,7 @@ static int ccdc_enum_frame_size(struct v4l2_subdev *sd,
 /*
  * ccdc_get_selection - Retrieve a selection rectangle on a pad
  * @sd: ISP CCDC V4L2 subdevice
- * @cfg: V4L2 subdev pad configuration
+ * @fh: V4L2 subdev file handle
  * @sel: Selection rectangle
  *
  * The only supported rectangles are the crop rectangles on the output formatter
@@ -2224,7 +2061,7 @@ static int ccdc_enum_frame_size(struct v4l2_subdev *sd,
  *
  * Return 0 on success or a negative error code otherwise.
  */
-static int ccdc_get_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg,
+static int ccdc_get_selection(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
 			      struct v4l2_subdev_selection *sel)
 {
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
@@ -2240,12 +2077,12 @@ static int ccdc_get_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_con
 		sel->r.width = INT_MAX;
 		sel->r.height = INT_MAX;
 
-		format = __ccdc_get_format(ccdc, cfg, CCDC_PAD_SINK, sel->which);
+		format = __ccdc_get_format(ccdc, fh, CCDC_PAD_SINK, sel->which);
 		ccdc_try_crop(ccdc, format, &sel->r);
 		break;
 
 	case V4L2_SEL_TGT_CROP:
-		sel->r = *__ccdc_get_crop(ccdc, cfg, sel->which);
+		sel->r = *__ccdc_get_crop(ccdc, fh, sel->which);
 		break;
 
 	default:
@@ -2258,7 +2095,7 @@ static int ccdc_get_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_con
 /*
  * ccdc_set_selection - Set a selection rectangle on a pad
  * @sd: ISP CCDC V4L2 subdevice
- * @cfg: V4L2 subdev pad configuration
+ * @fh: V4L2 subdev file handle
  * @sel: Selection rectangle
  *
  * The only supported rectangle is the actual crop rectangle on the output
@@ -2266,7 +2103,7 @@ static int ccdc_get_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_con
  *
  * Return 0 on success or a negative error code otherwise.
  */
-static int ccdc_set_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg,
+static int ccdc_set_selection(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
 			      struct v4l2_subdev_selection *sel)
 {
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
@@ -2285,17 +2122,17 @@ static int ccdc_set_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_con
 	 * rectangle.
 	 */
 	if (sel->flags & V4L2_SEL_FLAG_KEEP_CONFIG) {
-		sel->r = *__ccdc_get_crop(ccdc, cfg, sel->which);
+		sel->r = *__ccdc_get_crop(ccdc, fh, sel->which);
 		return 0;
 	}
 
-	format = __ccdc_get_format(ccdc, cfg, CCDC_PAD_SINK, sel->which);
+	format = __ccdc_get_format(ccdc, fh, CCDC_PAD_SINK, sel->which);
 	ccdc_try_crop(ccdc, format, &sel->r);
-	*__ccdc_get_crop(ccdc, cfg, sel->which) = sel->r;
+	*__ccdc_get_crop(ccdc, fh, sel->which) = sel->r;
 
 	/* Update the source format. */
-	format = __ccdc_get_format(ccdc, cfg, CCDC_PAD_SOURCE_OF, sel->which);
-	ccdc_try_format(ccdc, cfg, CCDC_PAD_SOURCE_OF, format, sel->which);
+	format = __ccdc_get_format(ccdc, fh, CCDC_PAD_SOURCE_OF, sel->which);
+	ccdc_try_format(ccdc, fh, CCDC_PAD_SOURCE_OF, format, sel->which);
 
 	return 0;
 }
@@ -2303,19 +2140,19 @@ static int ccdc_set_selection(struct v4l2_subdev *sd, struct v4l2_subdev_pad_con
 /*
  * ccdc_get_format - Retrieve the video format on a pad
  * @sd : ISP CCDC V4L2 subdevice
- * @cfg: V4L2 subdev pad configuration
+ * @fh : V4L2 subdev file handle
  * @fmt: Format
  *
  * Return 0 on success or -EINVAL if the pad is invalid or doesn't correspond
  * to the format type.
  */
-static int ccdc_get_format(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg,
+static int ccdc_get_format(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
 			   struct v4l2_subdev_format *fmt)
 {
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
 	struct v4l2_mbus_framefmt *format;
 
-	format = __ccdc_get_format(ccdc, cfg, fmt->pad, fmt->which);
+	format = __ccdc_get_format(ccdc, fh, fmt->pad, fmt->which);
 	if (format == NULL)
 		return -EINVAL;
 
@@ -2326,30 +2163,30 @@ static int ccdc_get_format(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config
 /*
  * ccdc_set_format - Set the video format on a pad
  * @sd : ISP CCDC V4L2 subdevice
- * @cfg: V4L2 subdev pad configuration
+ * @fh : V4L2 subdev file handle
  * @fmt: Format
  *
  * Return 0 on success or -EINVAL if the pad is invalid or doesn't correspond
  * to the format type.
  */
-static int ccdc_set_format(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg,
+static int ccdc_set_format(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
 			   struct v4l2_subdev_format *fmt)
 {
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
 	struct v4l2_mbus_framefmt *format;
 	struct v4l2_rect *crop;
 
-	format = __ccdc_get_format(ccdc, cfg, fmt->pad, fmt->which);
+	format = __ccdc_get_format(ccdc, fh, fmt->pad, fmt->which);
 	if (format == NULL)
 		return -EINVAL;
 
-	ccdc_try_format(ccdc, cfg, fmt->pad, &fmt->format, fmt->which);
+	ccdc_try_format(ccdc, fh, fmt->pad, &fmt->format, fmt->which);
 	*format = fmt->format;
 
 	/* Propagate the format from sink to source */
 	if (fmt->pad == CCDC_PAD_SINK) {
 		/* Reset the crop rectangle. */
-		crop = __ccdc_get_crop(ccdc, cfg, fmt->which);
+		crop = __ccdc_get_crop(ccdc, fh, fmt->which);
 		crop->left = 0;
 		crop->top = 0;
 		crop->width = fmt->format.width;
@@ -2358,16 +2195,16 @@ static int ccdc_set_format(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config
 		ccdc_try_crop(ccdc, &fmt->format, crop);
 
 		/* Update the source formats. */
-		format = __ccdc_get_format(ccdc, cfg, CCDC_PAD_SOURCE_OF,
+		format = __ccdc_get_format(ccdc, fh, CCDC_PAD_SOURCE_OF,
 					   fmt->which);
 		*format = fmt->format;
-		ccdc_try_format(ccdc, cfg, CCDC_PAD_SOURCE_OF, format,
+		ccdc_try_format(ccdc, fh, CCDC_PAD_SOURCE_OF, format,
 				fmt->which);
 
-		format = __ccdc_get_format(ccdc, cfg, CCDC_PAD_SOURCE_VP,
+		format = __ccdc_get_format(ccdc, fh, CCDC_PAD_SOURCE_VP,
 					   fmt->which);
 		*format = fmt->format;
-		ccdc_try_format(ccdc, cfg, CCDC_PAD_SOURCE_VP, format,
+		ccdc_try_format(ccdc, fh, CCDC_PAD_SOURCE_VP, format,
 				fmt->which);
 	}
 
@@ -2384,7 +2221,9 @@ static int ccdc_set_format(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config
  * return true if the combination is possible
  * return false otherwise
  */
-static bool ccdc_is_shiftable(u32 in, u32 out, unsigned int additional_shift)
+static bool ccdc_is_shiftable(enum v4l2_mbus_pixelcode in,
+			      enum v4l2_mbus_pixelcode out,
+			      unsigned int additional_shift)
 {
 	const struct isp_format_info *in_info, *out_info;
 
@@ -2418,11 +2257,11 @@ static int ccdc_link_validate(struct v4l2_subdev *sd,
 
 	/* We've got a parallel sensor here. */
 	if (ccdc->input == CCDC_INPUT_PARALLEL) {
-		struct isp_parallel_cfg *parcfg =
-			&((struct isp_bus_cfg *)
+		struct isp_parallel_platform_data *pdata =
+			&((struct isp_v4l2_subdevs_group *)
 			  media_entity_to_v4l2_subdev(link->source->entity)
 			  ->host_priv)->bus.parallel;
-		parallel_shift = parcfg->data_lane_shift;
+		parallel_shift = pdata->data_lane_shift * 2;
 	} else {
 		parallel_shift = 0;
 	}
@@ -2451,10 +2290,10 @@ static int ccdc_init_formats(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	memset(&format, 0, sizeof(format));
 	format.pad = CCDC_PAD_SINK;
 	format.which = fh ? V4L2_SUBDEV_FORMAT_TRY : V4L2_SUBDEV_FORMAT_ACTIVE;
-	format.format.code = MEDIA_BUS_FMT_SGRBG10_1X10;
+	format.format.code = V4L2_MBUS_FMT_SGRBG10_1X10;
 	format.format.width = 4096;
 	format.format.height = 4096;
-	ccdc_set_format(sd, fh ? fh->pad : NULL, &format);
+	ccdc_set_format(sd, fh, &format);
 
 	return 0;
 }
@@ -2514,14 +2353,9 @@ static int ccdc_link_setup(struct media_entity *entity,
 	struct v4l2_subdev *sd = media_entity_to_v4l2_subdev(entity);
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
 	struct isp_device *isp = to_isp_device(ccdc);
-	unsigned int index = local->index;
 
-	/* FIXME: this is actually a hack! */
-	if (is_media_entity_v4l2_subdev(remote->entity))
-		index |= 2 << 16;
-
-	switch (index) {
-	case CCDC_PAD_SINK | 2 << 16:
+	switch (local->index | media_entity_type(remote->entity)) {
+	case CCDC_PAD_SINK | MEDIA_ENT_T_V4L2_SUBDEV:
 		/* Read from the sensor (parallel interface), CCP2, CSI2a or
 		 * CSI2c.
 		 */
@@ -2549,7 +2383,7 @@ static int ccdc_link_setup(struct media_entity *entity,
 	 * Revisit this when it will be implemented, and return -EBUSY for now.
 	 */
 
-	case CCDC_PAD_SOURCE_VP | 2 << 16:
+	case CCDC_PAD_SOURCE_VP | MEDIA_ENT_T_V4L2_SUBDEV:
 		/* Write to preview engine, histogram and H3A. When none of
 		 * those links are active, the video port can be disabled.
 		 */
@@ -2562,7 +2396,7 @@ static int ccdc_link_setup(struct media_entity *entity,
 		}
 		break;
 
-	case CCDC_PAD_SOURCE_OF:
+	case CCDC_PAD_SOURCE_OF | MEDIA_ENT_T_DEVNODE:
 		/* Write to memory */
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (ccdc->output & ~CCDC_OUTPUT_MEMORY)
@@ -2573,7 +2407,7 @@ static int ccdc_link_setup(struct media_entity *entity,
 		}
 		break;
 
-	case CCDC_PAD_SOURCE_OF | 2 << 16:
+	case CCDC_PAD_SOURCE_OF | MEDIA_ENT_T_V4L2_SUBDEV:
 		/* Write to resizer */
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (ccdc->output & ~CCDC_OUTPUT_RESIZER)
@@ -2656,7 +2490,7 @@ static int ccdc_init_entities(struct isp_ccdc_device *ccdc)
 	pads[CCDC_PAD_SOURCE_OF].flags = MEDIA_PAD_FL_SOURCE;
 
 	me->ops = &ccdc_media_ops;
-	ret = media_entity_pads_init(me, CCDC_PADS_NUM, pads);
+	ret = media_entity_init(me, CCDC_PADS_NUM, pads, 0);
 	if (ret < 0)
 		return ret;
 
@@ -2670,11 +2504,19 @@ static int ccdc_init_entities(struct isp_ccdc_device *ccdc)
 
 	ret = omap3isp_video_init(&ccdc->video_out, "CCDC");
 	if (ret < 0)
-		goto error;
+		goto error_video;
+
+	/* Connect the CCDC subdev to the video node. */
+	ret = media_entity_create_link(&ccdc->subdev.entity, CCDC_PAD_SOURCE_OF,
+			&ccdc->video_out.video.entity, 0, 0);
+	if (ret < 0)
+		goto error_link;
 
 	return 0;
 
-error:
+error_link:
+	omap3isp_video_cleanup(&ccdc->video_out);
+error_video:
 	media_entity_cleanup(me);
 	return ret;
 }

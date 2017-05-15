@@ -52,7 +52,7 @@
 #include <linux/platform_device.h>
 #include <linux/gfp.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 
 #include <linux/sonypi.h>
@@ -934,7 +934,7 @@ static ssize_t sonypi_misc_read(struct file *file, char __user *buf,
 
 	if (ret > 0) {
 		struct inode *inode = file_inode(file);
-		inode->i_atime = current_time(inode);
+		inode->i_atime = current_fs_time(inode->i_sb);
 	}
 
 	return ret;
@@ -1482,6 +1482,7 @@ static void sonypi_shutdown(struct platform_device *dev)
 static struct platform_driver sonypi_driver = {
 	.driver		= {
 		.name	= "sonypi",
+		.owner	= THIS_MODULE,
 		.pm	= SONYPI_PM,
 	},
 	.probe		= sonypi_probe,

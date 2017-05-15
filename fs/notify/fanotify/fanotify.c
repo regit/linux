@@ -67,7 +67,11 @@ static int fanotify_get_response(struct fsnotify_group *group,
 
 	pr_debug("%s: group=%p event=%p\n", __func__, group, event);
 
-	wait_event(group->fanotify_data.access_waitq, event->response);
+	wait_event(group->fanotify_data.access_waitq, event->response ||
+				atomic_read(&group->fanotify_data.bypass_perm));
+
+	if (!event->response) /* bypass_perm set */
+		return 0;
 
 	/* userspace responded, convert to something usable */
 	switch (event->response) {
@@ -90,10 +94,10 @@ static int fanotify_get_response(struct fsnotify_group *group,
 static bool fanotify_should_send_event(struct fsnotify_mark *inode_mark,
 				       struct fsnotify_mark *vfsmnt_mark,
 				       u32 event_mask,
-				       const void *data, int data_type)
+				       void *data, int data_type)
 {
 	__u32 marks_mask, marks_ignored_mask;
-	const struct path *path = data;
+	struct path *path = data;
 
 	pr_debug("%s: inode_mark=%p vfsmnt_mark=%p mask=%x data=%p"
 		 " data_type=%d\n", __func__, inode_mark, vfsmnt_mark,
@@ -104,8 +108,8 @@ static bool fanotify_should_send_event(struct fsnotify_mark *inode_mark,
 		return false;
 
 	/* sorry, fanotify only gives a damn about files and dirs */
-	if (!d_is_reg(path->dentry) &&
-	    !d_can_lookup(path->dentry))
+	if (!S_ISREG(path->dentry->d_inode->i_mode) &&
+	    !S_ISDIR(path->dentry->d_inode->i_mode))
 		return false;
 
 	if (inode_mark && vfsmnt_mark) {
@@ -128,19 +132,18 @@ static bool fanotify_should_send_event(struct fsnotify_mark *inode_mark,
 		BUG();
 	}
 
-	if (d_is_dir(path->dentry) &&
-	    !(marks_mask & FS_ISDIR & ~marks_ignored_mask))
+	if (S_ISDIR(path->dentry->d_inode->i_mode) &&
+	    (marks_ignored_mask & FS_ISDIR))
 		return false;
 
-	if (event_mask & FAN_ALL_OUTGOING_EVENTS & marks_mask &
-				 ~marks_ignored_mask)
+	if (event_mask & marks_mask & ~marks_ignored_mask)
 		return true;
 
 	return false;
 }
 
 struct fanotify_event_info *fanotify_alloc_event(struct inode *inode, u32 mask,
-						 const struct path *path)
+						 struct path *path)
 {
 	struct fanotify_event_info *event;
 
@@ -177,7 +180,7 @@ static int fanotify_handle_event(struct fsnotify_group *group,
 				 struct inode *inode,
 				 struct fsnotify_mark *inode_mark,
 				 struct fsnotify_mark *fanotify_mark,
-				 u32 mask, const void *data, int data_type,
+				 u32 mask, void *data, int data_type,
 				 const unsigned char *file_name, u32 cookie)
 {
 	int ret = 0;
@@ -207,7 +210,7 @@ static int fanotify_handle_event(struct fsnotify_group *group,
 		return -ENOMEM;
 
 	fsn_event = &event->fse;
-	ret = fsnotify_add_event(group, fsn_event, fanotify_merge);
+	ret = fsnotify_add_notify_event(group, fsn_event, fanotify_merge);
 	if (ret) {
 		/* Permission events shouldn't be merged */
 		BUG_ON(ret == 1 && mask & FAN_ALL_PERM_EVENTS);

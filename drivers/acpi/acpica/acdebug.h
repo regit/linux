@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,16 +44,10 @@
 #ifndef __ACDEBUG_H__
 #define __ACDEBUG_H__
 
-/* The debugger is used in conjunction with the disassembler most of time */
-
-#ifdef ACPI_DISASSEMBLER
-#include "acdisasm.h"
-#endif
-
 #define ACPI_DEBUG_BUFFER_SIZE  0x4000	/* 16K buffer for return objects */
 
 struct acpi_db_command_info {
-	const char *name;	/* Command Name */
+	char *name;		/* Command Name */
 	u8 min_args;		/* Minimum arguments required */
 };
 
@@ -64,7 +58,7 @@ struct acpi_db_command_help {
 };
 
 struct acpi_db_argument_info {
-	const char *name;	/* Argument Name */
+	char *name;		/* Argument Name */
 };
 
 struct acpi_db_execute_walk {
@@ -73,6 +67,9 @@ struct acpi_db_execute_walk {
 };
 
 #define PARAM_LIST(pl)                  pl
+#define DBTEST_OUTPUT_LEVEL(lvl)        if (acpi_gbl_db_opt_verbose)
+#define VERBOSE_PRINT(fp)               DBTEST_OUTPUT_LEVEL(lvl) {\
+			  acpi_os_printf PARAM_LIST(fp);}
 
 #define EX_NO_SINGLE_STEP               1
 #define EX_SINGLE_STEP                  2
@@ -80,15 +77,13 @@ struct acpi_db_execute_walk {
 /*
  * dbxface - external debugger interfaces
  */
-ACPI_DBR_DEPENDENT_RETURN_OK(acpi_status
-			     acpi_db_single_step(struct acpi_walk_state
-						 *walk_state,
-						 union acpi_parse_object *op,
-						 u32 op_type))
- ACPI_DBR_DEPENDENT_RETURN_VOID(void
-				acpi_db_signal_break_point(struct
-							   acpi_walk_state
-							   *walk_state))
+acpi_status acpi_db_initialize(void);
+
+void acpi_db_terminate(void);
+
+acpi_status
+acpi_db_single_step(struct acpi_walk_state *walk_state,
+		    union acpi_parse_object *op, u32 op_type);
 
 /*
  * dbcmds - debug commands and output routines
@@ -106,8 +101,6 @@ void acpi_db_send_notify(char *name, u32 value);
 void acpi_db_display_interfaces(char *action_arg, char *interface_name_arg);
 
 acpi_status acpi_db_sleep(char *object_arg);
-
-void acpi_db_trace(char *enable_arg, char *method_arg, char *once_arg);
 
 void acpi_db_display_locks(void);
 
@@ -155,7 +148,7 @@ acpi_status acpi_db_disassemble_method(char *name);
 
 void acpi_db_disassemble_aml(char *statements, union acpi_parse_object *op);
 
-void acpi_db_evaluate_predefined_names(void);
+void acpi_db_batch_execute(char *count_arg);
 
 /*
  * dbnames - namespace commands
@@ -188,13 +181,9 @@ void acpi_db_display_method_info(union acpi_parse_object *op);
 
 void acpi_db_decode_and_display_object(char *target, char *output_type);
 
-ACPI_DBR_DEPENDENT_RETURN_VOID(void
-			       acpi_db_display_result_object(union
-							     acpi_operand_object
-							     *obj_desc,
-							     struct
-							     acpi_walk_state
-							     *walk_state))
+void
+acpi_db_display_result_object(union acpi_operand_object *obj_desc,
+			      struct acpi_walk_state *walk_state);
 
 acpi_status acpi_db_display_all_methods(char *display_count_arg);
 
@@ -208,19 +197,15 @@ void acpi_db_display_calling_tree(void);
 
 void acpi_db_display_object_type(char *object_arg);
 
-ACPI_DBR_DEPENDENT_RETURN_VOID(void
-			       acpi_db_display_argument_object(union
-							       acpi_operand_object
-							       *obj_desc,
-							       struct
-							       acpi_walk_state
-							       *walk_state))
+void
+acpi_db_display_argument_object(union acpi_operand_object *obj_desc,
+				struct acpi_walk_state *walk_state);
 
 /*
  * dbexec - debugger control method execution
  */
 void
-acpi_db_execute(char *name, char **args, acpi_object_type *types, u32 flags);
+acpi_db_execute(char *name, char **args, acpi_object_type * types, u32 flags);
 
 void
 acpi_db_create_execution_threads(char *num_threads_arg,
@@ -245,7 +230,11 @@ void acpi_db_open_debug_file(char *name);
 
 acpi_status acpi_db_load_acpi_table(char *filename);
 
-acpi_status acpi_db_load_tables(struct acpi_new_table_desc *list_head);
+acpi_status
+acpi_db_get_table_from_file(char *filename, struct acpi_table_header **table);
+
+acpi_status
+acpi_db_read_table_from_file(char *filename, struct acpi_table_header **table);
 
 /*
  * dbhistry - debugger HISTORY command
@@ -268,27 +257,10 @@ acpi_db_command_dispatch(char *input_buffer,
 
 void ACPI_SYSTEM_XFACE acpi_db_execute_thread(void *context);
 
-acpi_status acpi_db_user_commands(void);
+acpi_status acpi_db_user_commands(char prompt, union acpi_parse_object *op);
 
 char *acpi_db_get_next_token(char *string,
-			     char **next, acpi_object_type *return_type);
-
-/*
- * dbobject
- */
-void acpi_db_decode_internal_object(union acpi_operand_object *obj_desc);
-
-void
-acpi_db_display_internal_object(union acpi_operand_object *obj_desc,
-				struct acpi_walk_state *walk_state);
-
-void acpi_db_decode_arguments(struct acpi_walk_state *walk_state);
-
-void acpi_db_decode_locals(struct acpi_walk_state *walk_state);
-
-void
-acpi_db_dump_method_info(acpi_status status,
-			 struct acpi_walk_state *walk_state);
+			     char **next, acpi_object_type * return_type);
 
 /*
  * dbstats - Generation and display of ACPI table statistics

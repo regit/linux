@@ -14,22 +14,8 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/netdevice.h>
-#include <linux/etherdevice.h>
 #include <linux/filter.h>
 #include <linux/if_team.h>
-
-static rx_handler_result_t lb_receive(struct team *team, struct team_port *port,
-				      struct sk_buff *skb)
-{
-	if (unlikely(skb->protocol == htons(ETH_P_SLOW))) {
-		/* LACPDU packets should go to exact delivery */
-		const unsigned char *dest = eth_hdr(skb)->h_dest;
-
-		if (is_link_local_ether_addr(dest) && dest[5] == 0x02)
-			return RX_HANDLER_EXACT;
-	}
-	return RX_HANDLER_ANOTHER;
-}
 
 struct lb_priv;
 
@@ -72,7 +58,7 @@ struct lb_priv_ex {
 };
 
 struct lb_priv {
-	struct bpf_prog __rcu *fp;
+	struct sk_filter __rcu *fp;
 	lb_select_tx_port_func_t __rcu *select_tx_port_func;
 	struct lb_pcpu_stats __percpu *pcpu_stats;
 	struct lb_priv_ex *ex; /* priv extension */
@@ -188,14 +174,14 @@ static lb_select_tx_port_func_t *lb_select_tx_port_get_func(const char *name)
 static unsigned int lb_get_skb_hash(struct lb_priv *lb_priv,
 				    struct sk_buff *skb)
 {
-	struct bpf_prog *fp;
+	struct sk_filter *fp;
 	uint32_t lhash;
 	unsigned char *c;
 
 	fp = rcu_dereference_bh(lb_priv->fp);
 	if (unlikely(!fp))
 		return 0;
-	lhash = BPF_PROG_RUN(fp, skb);
+	lhash = SK_RUN_FILTER(fp, skb);
 	c = (char *) &lhash;
 	return c[0] ^ c[1] ^ c[2] ^ c[3];
 }
@@ -285,8 +271,8 @@ static void __fprog_destroy(struct sock_fprog_kern *fprog)
 static int lb_bpf_func_set(struct team *team, struct team_gsetter_ctx *ctx)
 {
 	struct lb_priv *lb_priv = get_lb_priv(team);
-	struct bpf_prog *fp = NULL;
-	struct bpf_prog *orig_fp = NULL;
+	struct sk_filter *fp = NULL;
+	struct sk_filter *orig_fp;
 	struct sock_fprog_kern *fprog = NULL;
 	int err;
 
@@ -295,7 +281,7 @@ static int lb_bpf_func_set(struct team *team, struct team_gsetter_ctx *ctx)
 				     ctx->data.bin_val.ptr);
 		if (err)
 			return err;
-		err = bpf_prog_create(&fp, fprog);
+		err = sk_unattached_filter_create(&fp, fprog);
 		if (err) {
 			__fprog_destroy(fprog);
 			return err;
@@ -307,15 +293,11 @@ static int lb_bpf_func_set(struct team *team, struct team_gsetter_ctx *ctx)
 		__fprog_destroy(lb_priv->ex->orig_fprog);
 		orig_fp = rcu_dereference_protected(lb_priv->fp,
 						lockdep_is_held(&team->lock));
+		sk_unattached_filter_destroy(orig_fp);
 	}
 
 	rcu_assign_pointer(lb_priv->fp, fp);
 	lb_priv->ex->orig_fprog = fprog;
-
-	if (orig_fp) {
-		synchronize_rcu();
-		bpf_prog_destroy(orig_fp);
-	}
 	return 0;
 }
 
@@ -666,7 +648,6 @@ static const struct team_mode_ops lb_mode_ops = {
 	.port_enter		= lb_port_enter,
 	.port_leave		= lb_port_leave,
 	.port_disabled		= lb_port_disabled,
-	.receive		= lb_receive,
 	.transmit		= lb_transmit,
 };
 
@@ -676,7 +657,6 @@ static const struct team_mode lb_mode = {
 	.priv_size	= sizeof(struct lb_priv),
 	.port_priv_size	= sizeof(struct lb_port_priv),
 	.ops		= &lb_mode_ops,
-	.lag_tx_type	= NETDEV_LAG_TX_TYPE_HASH,
 };
 
 static int __init lb_init_module(void)

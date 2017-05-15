@@ -17,8 +17,8 @@ struct vsyscall_gtod_data {
 	unsigned seq;
 
 	int vclock_mode;
-	u64	cycle_last;
-	u64	mask;
+	cycle_t	cycle_last;
+	cycle_t	mask;
 	u32	mult;
 	u32	shift;
 
@@ -36,12 +36,6 @@ struct vsyscall_gtod_data {
 	int		tz_dsttime;
 };
 extern struct vsyscall_gtod_data vsyscall_gtod_data;
-
-extern int vclocks_used;
-static inline bool vclock_was_used(int vclock)
-{
-	return READ_ONCE(vclocks_used) & (1 << vclock);
-}
 
 static inline unsigned gtod_read_begin(const struct vsyscall_gtod_data *s)
 {
@@ -75,31 +69,5 @@ static inline void gtod_write_end(struct vsyscall_gtod_data *s)
 	smp_wmb();
 	++s->seq;
 }
-
-#ifdef CONFIG_X86_64
-
-#define VGETCPU_CPU_MASK 0xfff
-
-static inline unsigned int __getcpu(void)
-{
-	unsigned int p;
-
-	/*
-	 * Load per CPU data from GDT.  LSL is faster than RDTSCP and
-	 * works on all CPUs.  This is volatile so that it orders
-	 * correctly wrt barrier() and to keep gcc from cleverly
-	 * hoisting it out of the calling function.
-	 *
-	 * If RDPID is available, use it.
-	 */
-	alternative_io ("lsl %[p],%[seg]",
-			".byte 0xf3,0x0f,0xc7,0xf8", /* RDPID %eax/rax */
-			X86_FEATURE_RDPID,
-			[p] "=a" (p), [seg] "r" (__PER_CPU_SEG));
-
-	return p;
-}
-
-#endif /* CONFIG_X86_64 */
 
 #endif /* _ASM_X86_VGTOD_H */

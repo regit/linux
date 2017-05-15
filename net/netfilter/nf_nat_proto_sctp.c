@@ -7,7 +7,9 @@
  */
 
 #include <linux/types.h>
+#include <linux/init.h>
 #include <linux/sctp.h>
+#include <linux/module.h>
 #include <net/sctp/checksum.h>
 
 #include <net/netfilter/nf_nat_l4proto.h>
@@ -47,20 +49,48 @@ sctp_manip_pkt(struct sk_buff *skb,
 		hdr->dest = tuple->dst.u.sctp.port;
 	}
 
-	if (skb->ip_summed != CHECKSUM_PARTIAL) {
-		hdr->checksum = sctp_compute_cksum(skb, hdroff);
-		skb->ip_summed = CHECKSUM_NONE;
-	}
+	hdr->checksum = sctp_compute_cksum(skb, hdroff);
 
 	return true;
 }
 
-const struct nf_nat_l4proto nf_nat_l4proto_sctp = {
+static const struct nf_nat_l4proto nf_nat_l4proto_sctp = {
 	.l4proto		= IPPROTO_SCTP,
 	.manip_pkt		= sctp_manip_pkt,
 	.in_range		= nf_nat_l4proto_in_range,
 	.unique_tuple		= sctp_unique_tuple,
-#if IS_ENABLED(CONFIG_NF_CT_NETLINK)
+#if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
 	.nlattr_to_range	= nf_nat_l4proto_nlattr_to_range,
 #endif
 };
+
+static int __init nf_nat_proto_sctp_init(void)
+{
+	int err;
+
+	err = nf_nat_l4proto_register(NFPROTO_IPV4, &nf_nat_l4proto_sctp);
+	if (err < 0)
+		goto err1;
+	err = nf_nat_l4proto_register(NFPROTO_IPV6, &nf_nat_l4proto_sctp);
+	if (err < 0)
+		goto err2;
+	return 0;
+
+err2:
+	nf_nat_l4proto_unregister(NFPROTO_IPV4, &nf_nat_l4proto_sctp);
+err1:
+	return err;
+}
+
+static void __exit nf_nat_proto_sctp_exit(void)
+{
+	nf_nat_l4proto_unregister(NFPROTO_IPV6, &nf_nat_l4proto_sctp);
+	nf_nat_l4proto_unregister(NFPROTO_IPV4, &nf_nat_l4proto_sctp);
+}
+
+module_init(nf_nat_proto_sctp_init);
+module_exit(nf_nat_proto_sctp_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("SCTP NAT protocol helper");
+MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");

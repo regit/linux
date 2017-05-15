@@ -102,18 +102,6 @@ static void gelic_card_get_ether_port_status(struct gelic_card *card,
 	}
 }
 
-/**
- * gelic_descr_get_status -- returns the status of a descriptor
- * @descr: descriptor to look at
- *
- * returns the status as in the dmac_cmd_status field of the descriptor
- */
-static enum gelic_descr_dma_status
-gelic_descr_get_status(struct gelic_descr *descr)
-{
-	return be32_to_cpu(descr->dmac_cmd_status) & GELIC_DESCR_DMA_STAT_MASK;
-}
-
 static int gelic_card_set_link_mode(struct gelic_card *card, int mode)
 {
 	int status;
@@ -287,6 +275,18 @@ void gelic_card_down(struct gelic_card *card)
 	}
 	mutex_unlock(&card->updown_lock);
 	pr_debug("%s: done\n", __func__);
+}
+
+/**
+ * gelic_descr_get_status -- returns the status of a descriptor
+ * @descr: descriptor to look at
+ *
+ * returns the status as in the dmac_cmd_status field of the descriptor
+ */
+static enum gelic_descr_dma_status
+gelic_descr_get_status(struct gelic_descr *descr)
+{
+	return be32_to_cpu(descr->dmac_cmd_status) & GELIC_DESCR_DMA_STAT_MASK;
 }
 
 /**
@@ -1065,7 +1065,7 @@ refill:
 
 	/*
 	 * this call can fail, but for now, just leave this
-	 * descriptor without skb
+	 * decriptor without skb
 	 */
 	gelic_descr_prepare_rx(card, descr);
 
@@ -1113,6 +1113,24 @@ static int gelic_net_poll(struct napi_struct *napi, int budget)
 		gelic_card_rx_irq_on(card);
 	}
 	return packets_done;
+}
+/**
+ * gelic_net_change_mtu - changes the MTU of an interface
+ * @netdev: interface device structure
+ * @new_mtu: new MTU value
+ *
+ * returns 0 on success, <0 on failure
+ */
+int gelic_net_change_mtu(struct net_device *netdev, int new_mtu)
+{
+	/* no need to re-alloc skbs or so -- the max mtu is about 2.3k
+	 * and mtu is outbound only anyway */
+	if ((new_mtu < GELIC_NET_MIN_MTU) ||
+	    (new_mtu > GELIC_NET_MAX_MTU)) {
+		return -EINVAL;
+	}
+	netdev->mtu = new_mtu;
+	return 0;
 }
 
 /**
@@ -1428,6 +1446,7 @@ static const struct net_device_ops gelic_netdevice_ops = {
 	.ndo_stop = gelic_net_stop,
 	.ndo_start_xmit = gelic_net_xmit,
 	.ndo_set_rx_mode = gelic_net_set_multi,
+	.ndo_change_mtu = gelic_net_change_mtu,
 	.ndo_tx_timeout = gelic_net_tx_timeout,
 	.ndo_set_mac_address = eth_mac_addr,
 	.ndo_validate_addr = eth_validate_addr,
@@ -1493,10 +1512,6 @@ int gelic_net_setup_netdev(struct net_device *netdev, struct gelic_card *card)
 		 */
 		netdev->features |= NETIF_F_VLAN_CHALLENGED;
 	}
-
-	/* MTU range: 64 - 1518 */
-	netdev->min_mtu = GELIC_NET_MIN_MTU;
-	netdev->max_mtu = GELIC_NET_MAX_MTU;
 
 	status = register_netdev(netdev);
 	if (status) {
@@ -1754,7 +1769,7 @@ static int ps3_gelic_driver_probe(struct ps3_system_bus_device *dev)
 	gelic_ether_setup_netdev_ops(netdev, &card->napi);
 	result = gelic_net_setup_netdev(netdev, card);
 	if (result) {
-		dev_dbg(&dev->core, "%s: setup_netdev failed %d\n",
+		dev_dbg(&dev->core, "%s: setup_netdev failed %d",
 			__func__, result);
 		goto fail_setup_netdev;
 	}
@@ -1776,7 +1791,7 @@ fail_alloc_rx:
 	gelic_card_free_chain(card, card->tx_chain.head);
 fail_alloc_tx:
 	free_irq(card->irq, card);
-	netdev->irq = 0;
+	netdev->irq = NO_IRQ;
 fail_request_irq:
 	ps3_sb_event_receive_port_destroy(dev, card->irq);
 fail_alloc_irq:
@@ -1828,7 +1843,7 @@ static int ps3_gelic_driver_remove(struct ps3_system_bus_device *dev)
 	netdev0 = card->netdev[GELIC_PORT_ETHERNET_0];
 	/* disconnect event port */
 	free_irq(card->irq, card);
-	netdev0->irq = 0;
+	netdev0->irq = NO_IRQ;
 	ps3_sb_event_receive_port_destroy(card->dev, card->irq);
 
 	wait_event(card->waitq,

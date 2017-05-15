@@ -258,8 +258,7 @@ void usb_serial_generic_wait_until_sent(struct tty_struct *tty, long timeout)
 	 * character or at least one jiffy.
 	 */
 	period = max_t(unsigned long, (10 * HZ / bps), 1);
-	if (timeout)
-		period = min_t(unsigned long, period, timeout);
+	period = min_t(unsigned long, period, timeout);
 
 	dev_dbg(&port->dev, "%s - timeout = %u ms, period = %u ms\n",
 					__func__, jiffies_to_msecs(timeout),
@@ -269,7 +268,7 @@ void usb_serial_generic_wait_until_sent(struct tty_struct *tty, long timeout)
 		schedule_timeout_interruptible(period);
 		if (signal_pending(current))
 			break;
-		if (timeout && time_after(jiffies, expire))
+		if (time_after(jiffies, expire))
 			break;
 	}
 }
@@ -287,7 +286,7 @@ static int usb_serial_generic_submit_read_urb(struct usb_serial_port *port,
 
 	res = usb_submit_urb(port->read_urbs[index], mem_flags);
 	if (res) {
-		if (res != -EPERM && res != -ENODEV) {
+		if (res != -EPERM) {
 			dev_err(&port->dev,
 					"%s - usb_submit_urb failed: %d\n",
 					__func__, res);
@@ -350,7 +349,6 @@ void usb_serial_generic_read_bulk_callback(struct urb *urb)
 	struct usb_serial_port *port = urb->context;
 	unsigned char *data = urb->transfer_buffer;
 	unsigned long flags;
-	int status = urb->status;
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(port->read_urbs); ++i) {
@@ -361,22 +359,22 @@ void usb_serial_generic_read_bulk_callback(struct urb *urb)
 
 	dev_dbg(&port->dev, "%s - urb %d, len %d\n", __func__, i,
 							urb->actual_length);
-	switch (status) {
+	switch (urb->status) {
 	case 0:
 		break;
 	case -ENOENT:
 	case -ECONNRESET:
 	case -ESHUTDOWN:
 		dev_dbg(&port->dev, "%s - urb stopped: %d\n",
-							__func__, status);
+							__func__, urb->status);
 		return;
 	case -EPIPE:
 		dev_err(&port->dev, "%s - urb stopped: %d\n",
-							__func__, status);
+							__func__, urb->status);
 		return;
 	default:
-		dev_dbg(&port->dev, "%s - nonzero urb status: %d\n",
-							__func__, status);
+		dev_err(&port->dev, "%s - nonzero urb status: %d\n",
+							__func__, urb->status);
 		goto resubmit;
 	}
 
@@ -400,7 +398,6 @@ void usb_serial_generic_write_bulk_callback(struct urb *urb)
 {
 	unsigned long flags;
 	struct usb_serial_port *port = urb->context;
-	int status = urb->status;
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(port->write_urbs); ++i) {
@@ -412,22 +409,22 @@ void usb_serial_generic_write_bulk_callback(struct urb *urb)
 	set_bit(i, &port->write_urbs_free);
 	spin_unlock_irqrestore(&port->lock, flags);
 
-	switch (status) {
+	switch (urb->status) {
 	case 0:
 		break;
 	case -ENOENT:
 	case -ECONNRESET:
 	case -ESHUTDOWN:
 		dev_dbg(&port->dev, "%s - urb stopped: %d\n",
-							__func__, status);
+							__func__, urb->status);
 		return;
 	case -EPIPE:
 		dev_err_console(port, "%s - urb stopped: %d\n",
-							__func__, status);
+							__func__, urb->status);
 		return;
 	default:
 		dev_err_console(port, "%s - nonzero urb status: %d\n",
-							__func__, status);
+							__func__, urb->status);
 		goto resubmit;
 	}
 
@@ -475,7 +472,7 @@ static bool usb_serial_generic_msr_changed(struct tty_struct *tty,
 	 * Use tty-port initialised flag to detect all hangups including the
 	 * one generated at USB-device disconnect.
 	 */
-	if (!tty_port_initialized(&port->port))
+	if (!test_bit(ASYNCB_INITIALIZED, &port->port.flags))
 		return true;
 
 	spin_lock_irqsave(&port->lock, flags);
@@ -505,7 +502,7 @@ int usb_serial_generic_tiocmiwait(struct tty_struct *tty, unsigned long arg)
 
 	ret = wait_event_interruptible(port->port.delta_msr_wait,
 			usb_serial_generic_msr_changed(tty, arg, &cnow));
-	if (!ret && !tty_port_initialized(&port->port))
+	if (!ret && !test_bit(ASYNCB_INITIALIZED, &port->port.flags))
 		ret = -EIO;
 
 	return ret;
@@ -608,7 +605,7 @@ int usb_serial_generic_resume(struct usb_serial *serial)
 
 	for (i = 0; i < serial->num_ports; i++) {
 		port = serial->port[i];
-		if (!tty_port_initialized(&port->port))
+		if (!test_bit(ASYNCB_INITIALIZED, &port->port.flags))
 			continue;
 
 		if (port->bulk_in_size) {

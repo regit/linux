@@ -107,21 +107,13 @@ static int ptp_clock_getres(struct posix_clock *pc, struct timespec *tp)
 static int ptp_clock_settime(struct posix_clock *pc, const struct timespec *tp)
 {
 	struct ptp_clock *ptp = container_of(pc, struct ptp_clock, clock);
-	struct timespec64 ts = timespec_to_timespec64(*tp);
-
-	return  ptp->info->settime64(ptp->info, &ts);
+	return ptp->info->settime(ptp->info, tp);
 }
 
 static int ptp_clock_gettime(struct posix_clock *pc, struct timespec *tp)
 {
 	struct ptp_clock *ptp = container_of(pc, struct ptp_clock, clock);
-	struct timespec64 ts;
-	int err;
-
-	err = ptp->info->gettime64(ptp->info, &ts);
-	if (!err)
-		*tp = timespec64_to_timespec(ts);
-	return err;
+	return ptp->info->gettime(ptp->info, tp);
 }
 
 static int ptp_clock_adjtime(struct posix_clock *pc, struct timex *tx)
@@ -153,10 +145,7 @@ static int ptp_clock_adjtime(struct posix_clock *pc, struct timex *tx)
 		s32 ppb = scaled_ppm_to_ppb(tx->freq);
 		if (ppb > ops->max_adj || ppb < -ops->max_adj)
 			return -ERANGE;
-		if (ops->adjfine)
-			err = ops->adjfine(ops, tx->freq);
-		else
-			err = ops->adjfreq(ops, ppb);
+		err = ops->adjfreq(ops, ppb);
 		ptp->dialed_frequency = tx->freq;
 	} else if (tx->modes == 0) {
 		tx->freq = ptp->dialed_frequency;
@@ -266,7 +255,6 @@ no_sysfs:
 no_device:
 	mutex_destroy(&ptp->tsevq_mux);
 	mutex_destroy(&ptp->pincfg_mux);
-	ida_simple_remove(&ptp_clocks_map, index);
 no_slot:
 	kfree(ptp);
 no_memory:

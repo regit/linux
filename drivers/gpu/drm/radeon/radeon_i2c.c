@@ -938,8 +938,10 @@ struct radeon_i2c_chan *radeon_i2c_create(struct drm_device *dev,
 			 "Radeon i2c hw bus %s", name);
 		i2c->adapter.algo = &radeon_i2c_algo;
 		ret = i2c_add_adapter(&i2c->adapter);
-		if (ret)
+		if (ret) {
+			DRM_ERROR("Failed to register hw i2c %s\n", name);
 			goto out_free;
+		}
 	} else if (rec->hw_capable &&
 		   radeon_hw_i2c &&
 		   ASIC_IS_DCE3(rdev)) {
@@ -948,8 +950,10 @@ struct radeon_i2c_chan *radeon_i2c_create(struct drm_device *dev,
 			 "Radeon i2c hw bus %s", name);
 		i2c->adapter.algo = &radeon_atom_i2c_algo;
 		ret = i2c_add_adapter(&i2c->adapter);
-		if (ret)
+		if (ret) {
+			DRM_ERROR("Failed to register hw i2c %s\n", name);
 			goto out_free;
+		}
 	} else {
 		/* set the radeon bit adapter */
 		snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
@@ -982,8 +986,9 @@ void radeon_i2c_destroy(struct radeon_i2c_chan *i2c)
 {
 	if (!i2c)
 		return;
-	WARN_ON(i2c->has_aux);
 	i2c_del_adapter(&i2c->adapter);
+	if (i2c->has_aux)
+		drm_dp_aux_unregister(&i2c->aux);
 	kfree(i2c);
 }
 
@@ -1040,6 +1045,11 @@ struct radeon_i2c_chan *radeon_i2c_lookup(struct radeon_device *rdev,
 			return rdev->i2c_bus[i];
 		}
 	}
+	return NULL;
+}
+
+struct drm_encoder *radeon_best_encoder(struct drm_connector *connector)
+{
 	return NULL;
 }
 

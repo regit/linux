@@ -11,7 +11,6 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
@@ -50,7 +49,6 @@ static const char *wm8904_supply_names[WM8904_NUM_SUPPLIES] = {
 /* codec private data */
 struct wm8904_priv {
 	struct regmap *regmap;
-	struct clk *mclk;
 
 	enum wm8904_type devtype;
 
@@ -312,7 +310,7 @@ static bool wm8904_readable_register(struct device *dev, unsigned int reg)
 	case WM8904_FLL_NCO_TEST_1:
 		return true;
 	default:
-		return false;
+		return true;
 	}
 }
 
@@ -396,7 +394,7 @@ static int wm8904_put_drc_enum(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
 	struct wm8904_pdata *pdata = wm8904->pdata;
-	int value = ucontrol->value.enumerated.item[0];
+	int value = ucontrol->value.integer.value[0];
 
 	if (value >= pdata->num_drc_cfgs)
 		return -EINVAL;
@@ -467,7 +465,7 @@ static int wm8904_put_retune_mobile_enum(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
 	struct wm8904_pdata *pdata = wm8904->pdata;
-	int value = ucontrol->value.enumerated.item[0];
+	int value = ucontrol->value.integer.value[0];
 
 	if (value >= pdata->num_retune_mobile_cfgs)
 		return -EINVAL;
@@ -525,7 +523,7 @@ static int wm8904_get_deemph(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
 
-	ucontrol->value.integer.value[0] = wm8904->deemph;
+	ucontrol->value.enumerated.item[0] = wm8904->deemph;
 	return 0;
 }
 
@@ -534,7 +532,7 @@ static int wm8904_put_deemph(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
-	unsigned int deemph = ucontrol->value.integer.value[0];
+	int deemph = ucontrol->value.enumerated.item[0];
 
 	if (deemph > 1)
 		return -EINVAL;
@@ -673,7 +671,7 @@ static int cp_event(struct snd_soc_dapm_widget *w,
 static int sysclk_event(struct snd_soc_dapm_widget *w,
 			 struct snd_kcontrol *kcontrol, int event)
 {
-	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
+	struct snd_soc_codec *codec = w->codec;
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
 
 	switch (event) {
@@ -711,7 +709,7 @@ static int sysclk_event(struct snd_soc_dapm_widget *w,
 static int out_pga_event(struct snd_soc_dapm_widget *w,
 			 struct snd_kcontrol *kcontrol, int event)
 {
-	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
+	struct snd_soc_codec *codec = w->codec;
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
 	int reg, val;
 	int dcs_mask;
@@ -1076,13 +1074,10 @@ static const struct snd_soc_dapm_route adc_intercon[] = {
 	{ "Right Capture PGA", NULL, "Right Capture Mux" },
 	{ "Right Capture PGA", NULL, "Right Capture Inverting Mux" },
 
-	{ "AIFOUTL Mux", "Left", "ADCL" },
-	{ "AIFOUTL Mux", "Right", "ADCR" },
-	{ "AIFOUTR Mux", "Left", "ADCL" },
-	{ "AIFOUTR Mux", "Right", "ADCR" },
-
-	{ "AIFOUTL", NULL, "AIFOUTL Mux" },
-	{ "AIFOUTR", NULL, "AIFOUTR Mux" },
+	{ "AIFOUTL", "Left",  "ADCL" },
+	{ "AIFOUTL", "Right", "ADCR" },
+	{ "AIFOUTR", "Left",  "ADCL" },
+	{ "AIFOUTR", "Right", "ADCR" },
 
 	{ "ADCL", NULL, "CLK_DSP" },
 	{ "ADCL", NULL, "Left Capture PGA" },
@@ -1092,16 +1087,12 @@ static const struct snd_soc_dapm_route adc_intercon[] = {
 };
 
 static const struct snd_soc_dapm_route dac_intercon[] = {
-	{ "DACL Mux", "Left", "AIFINL" },
-	{ "DACL Mux", "Right", "AIFINR" },
-
-	{ "DACR Mux", "Left", "AIFINL" },
-	{ "DACR Mux", "Right", "AIFINR" },
-
-	{ "DACL", NULL, "DACL Mux" },
+	{ "DACL", "Right", "AIFINR" },
+	{ "DACL", "Left",  "AIFINL" },
 	{ "DACL", NULL, "CLK_DSP" },
 
-	{ "DACR", NULL, "DACR Mux" },
+	{ "DACR", "Right", "AIFINR" },
+	{ "DACR", "Left",  "AIFINL" },
 	{ "DACR", NULL, "CLK_DSP" },
 
 	{ "Charge pump", NULL, "SYSCLK" },
@@ -1168,7 +1159,7 @@ static const struct snd_soc_dapm_route wm8912_intercon[] = {
 static int wm8904_add_widgets(struct snd_soc_codec *codec)
 {
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
-	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
+	struct snd_soc_dapm_context *dapm = &codec->dapm;
 
 	snd_soc_dapm_new_controls(dapm, wm8904_core_dapm_widgets,
 				  ARRAY_SIZE(wm8904_core_dapm_widgets));
@@ -1299,16 +1290,16 @@ static int wm8904_hw_params(struct snd_pcm_substream *substream,
 		wm8904->bclk = snd_soc_params_to_bclk(params);
 	}
 
-	switch (params_width(params)) {
-	case 16:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S16_LE:
 		break;
-	case 20:
+	case SNDRV_PCM_FORMAT_S20_3LE:
 		aif1 |= 0x40;
 		break;
-	case 24:
+	case SNDRV_PCM_FORMAT_S24_LE:
 		aif1 |= 0x80;
 		break;
-	case 32:
+	case SNDRV_PCM_FORMAT_S32_LE:
 		aif1 |= 0xc0;
 		break;
 	default:
@@ -1837,9 +1828,6 @@ static int wm8904_set_bias_level(struct snd_soc_codec *codec,
 
 	switch (level) {
 	case SND_SOC_BIAS_ON:
-		ret = clk_prepare_enable(wm8904->mclk);
-		if (ret)
-			return ret;
 		break;
 
 	case SND_SOC_BIAS_PREPARE:
@@ -1854,7 +1842,7 @@ static int wm8904_set_bias_level(struct snd_soc_codec *codec,
 		break;
 
 	case SND_SOC_BIAS_STANDBY:
-		if (snd_soc_codec_get_bias_level(codec) == SND_SOC_BIAS_OFF) {
+		if (codec->dapm.bias_level == SND_SOC_BIAS_OFF) {
 			ret = regulator_bulk_enable(ARRAY_SIZE(wm8904->supplies),
 						    wm8904->supplies);
 			if (ret != 0) {
@@ -1906,9 +1894,9 @@ static int wm8904_set_bias_level(struct snd_soc_codec *codec,
 
 		regulator_bulk_disable(ARRAY_SIZE(wm8904->supplies),
 				       wm8904->supplies);
-		clk_disable_unprepare(wm8904->mclk);
 		break;
 	}
+	codec->dapm.bias_level = level;
 	return 0;
 }
 
@@ -2025,8 +2013,12 @@ static void wm8904_handle_pdata(struct snd_soc_codec *codec)
 		/* We need an array of texts for the enum API */
 		wm8904->drc_texts = kmalloc(sizeof(char *)
 					    * pdata->num_drc_cfgs, GFP_KERNEL);
-		if (!wm8904->drc_texts)
+		if (!wm8904->drc_texts) {
+			dev_err(codec->dev,
+				"Failed to allocate %d DRC config texts\n",
+				pdata->num_drc_cfgs);
 			return;
+		}
 
 		for (i = 0; i < pdata->num_drc_cfgs; i++)
 			wm8904->drc_texts[i] = pdata->drc_cfgs[i].name;
@@ -2086,7 +2078,7 @@ static int wm8904_remove(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static const struct snd_soc_codec_driver soc_codec_dev_wm8904 = {
+static struct snd_soc_codec_driver soc_codec_dev_wm8904 = {
 	.probe =	wm8904_probe,
 	.remove =	wm8904_remove,
 	.set_bias_level = wm8904_set_bias_level,
@@ -2106,24 +2098,6 @@ static const struct regmap_config wm8904_regmap = {
 	.num_reg_defaults = ARRAY_SIZE(wm8904_reg_defaults),
 };
 
-#ifdef CONFIG_OF
-static enum wm8904_type wm8904_data = WM8904;
-static enum wm8904_type wm8912_data = WM8912;
-
-static const struct of_device_id wm8904_of_match[] = {
-	{
-		.compatible = "wlf,wm8904",
-		.data = &wm8904_data,
-	}, {
-		.compatible = "wlf,wm8912",
-		.data = &wm8912_data,
-	}, {
-		/* sentinel */
-	}
-};
-MODULE_DEVICE_TABLE(of, wm8904_of_match);
-#endif
-
 static int wm8904_i2c_probe(struct i2c_client *i2c,
 			    const struct i2c_device_id *id)
 {
@@ -2136,13 +2110,6 @@ static int wm8904_i2c_probe(struct i2c_client *i2c,
 	if (wm8904 == NULL)
 		return -ENOMEM;
 
-	wm8904->mclk = devm_clk_get(&i2c->dev, "mclk");
-	if (IS_ERR(wm8904->mclk)) {
-		ret = PTR_ERR(wm8904->mclk);
-		dev_err(&i2c->dev, "Failed to get MCLK\n");
-		return ret;
-	}
-
 	wm8904->regmap = devm_regmap_init_i2c(i2c, &wm8904_regmap);
 	if (IS_ERR(wm8904->regmap)) {
 		ret = PTR_ERR(wm8904->regmap);
@@ -2151,17 +2118,7 @@ static int wm8904_i2c_probe(struct i2c_client *i2c,
 		return ret;
 	}
 
-	if (i2c->dev.of_node) {
-		const struct of_device_id *match;
-
-		match = of_match_node(wm8904_of_match, i2c->dev.of_node);
-		if (match == NULL)
-			return -EINVAL;
-		wm8904->devtype = *((enum wm8904_type *)match->data);
-	} else {
-		wm8904->devtype = id->driver_data;
-	}
-
+	wm8904->devtype = id->driver_data;
 	i2c_set_clientdata(i2c, wm8904);
 	wm8904->pdata = i2c->dev.platform_data;
 
@@ -2294,7 +2251,7 @@ MODULE_DEVICE_TABLE(i2c, wm8904_i2c_id);
 static struct i2c_driver wm8904_i2c_driver = {
 	.driver = {
 		.name = "wm8904",
-		.of_match_table = of_match_ptr(wm8904_of_match),
+		.owner = THIS_MODULE,
 	},
 	.probe =    wm8904_i2c_probe,
 	.remove =   wm8904_i2c_remove,

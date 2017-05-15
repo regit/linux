@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,11 +47,12 @@
  * Option strings:
  *    "f"       - Option has no arguments
  *    "f:"      - Option requires an argument
- *    "f+"      - Option has an optional argument
  *    "f^"      - Option has optional single-char sub-options
  *    "f|"      - Option has required single-char sub-options
  */
 
+#include <stdio.h>
+#include <string.h>
 #include <acpi/acpi.h>
 #include "accommon.h"
 #include "acapps.h"
@@ -86,7 +87,6 @@ static int current_char_ptr = 1;
 
 int acpi_getopt_argument(int argc, char **argv)
 {
-
 	acpi_gbl_optind--;
 	current_char_ptr++;
 
@@ -94,7 +94,7 @@ int acpi_getopt_argument(int argc, char **argv)
 		acpi_gbl_optarg =
 		    &argv[acpi_gbl_optind++][(int)(current_char_ptr + 1)];
 	} else if (++acpi_gbl_optind >= argc) {
-		ACPI_OPTION_ERROR("\nOption requires an argument", 0);
+		ACPI_OPTION_ERROR("Option requires an argument: -", 'v');
 
 		current_char_ptr = 1;
 		return (-1);
@@ -113,7 +113,7 @@ int acpi_getopt_argument(int argc, char **argv)
  * PARAMETERS:  argc, argv          - from main
  *              opts                - options info list
  *
- * RETURN:      Option character or ACPI_OPT_END
+ * RETURN:      Option character or EOF
  *
  * DESCRIPTION: Get the next option
  *
@@ -128,10 +128,10 @@ int acpi_getopt(int argc, char **argv, char *opts)
 		if (acpi_gbl_optind >= argc ||
 		    argv[acpi_gbl_optind][0] != '-' ||
 		    argv[acpi_gbl_optind][1] == '\0') {
-			return (ACPI_OPT_END);
+			return (EOF);
 		} else if (strcmp(argv[acpi_gbl_optind], "--") == 0) {
 			acpi_gbl_optind++;
-			return (ACPI_OPT_END);
+			return (EOF);
 		}
 	}
 

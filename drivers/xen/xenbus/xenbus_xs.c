@@ -44,6 +44,7 @@
 #include <linux/fcntl.h>
 #include <linux/kthread.h>
 #include <linux/rwsem.h>
+#include <linux/module.h>
 #include <linux/mutex.h>
 #include <asm/xen/hypervisor.h>
 #include <xen/xenbus.h>
@@ -232,10 +233,10 @@ static void transaction_resume(void)
 void *xenbus_dev_request_and_reply(struct xsd_sockmsg *msg)
 {
 	void *ret;
-	enum xsd_sockmsg_type type = msg->type;
+	struct xsd_sockmsg req_msg = *msg;
 	int err;
 
-	if (type == XS_TRANSACTION_START)
+	if (req_msg.type == XS_TRANSACTION_START)
 		transaction_start();
 
 	mutex_lock(&xs_state.request_mutex);
@@ -249,8 +250,12 @@ void *xenbus_dev_request_and_reply(struct xsd_sockmsg *msg)
 
 	mutex_unlock(&xs_state.request_mutex);
 
+	if (IS_ERR(ret))
+		return ret;
+
 	if ((msg->type == XS_TRANSACTION_END) ||
-	    ((type == XS_TRANSACTION_START) && (msg->type == XS_ERROR)))
+	    ((req_msg.type == XS_TRANSACTION_START) &&
+	     (msg->type == XS_ERROR)))
 		transaction_end();
 
 	return ret;
@@ -559,21 +564,6 @@ int xenbus_scanf(struct xenbus_transaction t,
 }
 EXPORT_SYMBOL_GPL(xenbus_scanf);
 
-/* Read an (optional) unsigned value. */
-unsigned int xenbus_read_unsigned(const char *dir, const char *node,
-				  unsigned int default_val)
-{
-	unsigned int val;
-	int ret;
-
-	ret = xenbus_scanf(XBT_NIL, dir, node, "%u", &val);
-	if (ret <= 0)
-		val = default_val;
-
-	return val;
-}
-EXPORT_SYMBOL_GPL(xenbus_read_unsigned);
-
 /* Single printf and write: returns -errno or 0. */
 int xenbus_printf(struct xenbus_transaction t,
 		  const char *dir, const char *node, const char *fmt, ...)
@@ -687,7 +677,7 @@ static bool xen_strict_xenbus_quirk(void)
 }
 static void xs_reset_watches(void)
 {
-	int err;
+	int err, supported = 0;
 
 	if (!xen_hvm_domain() || xen_initial_domain())
 		return;
@@ -695,8 +685,9 @@ static void xs_reset_watches(void)
 	if (xen_strict_xenbus_quirk())
 		return;
 
-	if (!xenbus_read_unsigned("control",
-				  "platform-feature-xs_reset_watches", 0))
+	err = xenbus_scanf(XBT_NIL, "control",
+			"platform-feature-xs_reset_watches", "%d", &supported);
+	if (err != 1 || !supported)
 		return;
 
 	err = xs_error(xs_single(XBT_NIL, XS_RESET_WATCHES, "", NULL));

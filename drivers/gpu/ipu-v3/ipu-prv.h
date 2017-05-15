@@ -24,6 +24,23 @@ struct ipu_soc;
 
 #include <video/imx-ipu-v3.h>
 
+#define IPUV3_CHANNEL_CSI0			 0
+#define IPUV3_CHANNEL_CSI1			 1
+#define IPUV3_CHANNEL_CSI2			 2
+#define IPUV3_CHANNEL_CSI3			 3
+#define IPUV3_CHANNEL_MEM_BG_SYNC		23
+#define IPUV3_CHANNEL_MEM_FG_SYNC		27
+#define IPUV3_CHANNEL_MEM_DC_SYNC		28
+#define IPUV3_CHANNEL_MEM_FG_SYNC_ALPHA		31
+#define IPUV3_CHANNEL_MEM_DC_ASYNC		41
+#define IPUV3_CHANNEL_ROT_ENC_MEM		45
+#define IPUV3_CHANNEL_ROT_VF_MEM		46
+#define IPUV3_CHANNEL_ROT_PP_MEM		47
+#define IPUV3_CHANNEL_ROT_ENC_MEM_OUT		48
+#define IPUV3_CHANNEL_ROT_VF_MEM_OUT		49
+#define IPUV3_CHANNEL_ROT_PP_MEM_OUT		50
+#define IPUV3_CHANNEL_MEM_BG_SYNC_ALPHA		51
+
 #define IPU_MCU_T_DEFAULT	8
 #define IPU_CM_IDMAC_REG_OFS	0x00008000
 #define IPU_CM_IC_REG_OFS	0x00020000
@@ -68,39 +85,11 @@ struct ipu_soc;
 #define IPU_DISP_TASK_STAT		IPU_CM_REG(0x0254)
 #define IPU_CHA_BUF0_RDY(ch)		IPU_CM_REG(0x0268 + 4 * ((ch) / 32))
 #define IPU_CHA_BUF1_RDY(ch)		IPU_CM_REG(0x0270 + 4 * ((ch) / 32))
-#define IPU_CHA_BUF2_RDY(ch)		IPU_CM_REG(0x0288 + 4 * ((ch) / 32))
 #define IPU_ALT_CHA_BUF0_RDY(ch)	IPU_CM_REG(0x0278 + 4 * ((ch) / 32))
 #define IPU_ALT_CHA_BUF1_RDY(ch)	IPU_CM_REG(0x0280 + 4 * ((ch) / 32))
 
 #define IPU_INT_CTRL(n)		IPU_CM_REG(0x003C + 4 * (n))
 #define IPU_INT_STAT(n)		IPU_CM_REG(0x0200 + 4 * (n))
-
-/* FS_PROC_FLOW1 */
-#define FS_PRPENC_ROT_SRC_SEL_MASK	(0xf << 0)
-#define FS_PRPENC_ROT_SRC_SEL_ENC		(0x7 << 0)
-#define FS_PRPVF_ROT_SRC_SEL_MASK	(0xf << 8)
-#define FS_PRPVF_ROT_SRC_SEL_VF			(0x8 << 8)
-#define FS_PP_SRC_SEL_MASK		(0xf << 12)
-#define FS_PP_ROT_SRC_SEL_MASK		(0xf << 16)
-#define FS_PP_ROT_SRC_SEL_PP			(0x5 << 16)
-#define FS_VDI1_SRC_SEL_MASK		(0x3 << 20)
-#define FS_VDI3_SRC_SEL_MASK		(0x3 << 20)
-#define FS_PRP_SRC_SEL_MASK		(0xf << 24)
-#define FS_VDI_SRC_SEL_MASK		(0x3 << 28)
-#define FS_VDI_SRC_SEL_CSI_DIRECT		(0x1 << 28)
-#define FS_VDI_SRC_SEL_VDOA			(0x2 << 28)
-
-/* FS_PROC_FLOW2 */
-#define FS_PRP_ENC_DEST_SEL_MASK	(0xf << 0)
-#define FS_PRP_ENC_DEST_SEL_IRT_ENC		(0x1 << 0)
-#define FS_PRPVF_DEST_SEL_MASK		(0xf << 4)
-#define FS_PRPVF_DEST_SEL_IRT_VF		(0x1 << 4)
-#define FS_PRPVF_ROT_DEST_SEL_MASK	(0xf << 8)
-#define FS_PP_DEST_SEL_MASK		(0xf << 12)
-#define FS_PP_DEST_SEL_IRT_PP			(0x3 << 12)
-#define FS_PP_ROT_DEST_SEL_MASK		(0xf << 16)
-#define FS_PRPENC_ROT_DEST_SEL_MASK	(0xf << 20)
-#define FS_PRP_DEST_SEL_MASK		(0xf << 24)
 
 #define IPU_DI0_COUNTER_RELEASE			(1 << 24)
 #define IPU_DI1_COUNTER_RELEASE			(1 << 25)
@@ -159,14 +148,9 @@ struct ipuv3_channel {
 	struct ipu_soc *ipu;
 };
 
-struct ipu_cpmem;
-struct ipu_csi;
 struct ipu_dc_priv;
 struct ipu_dmfc_priv;
 struct ipu_di;
-struct ipu_ic_priv;
-struct ipu_vdi;
-struct ipu_image_convert_priv;
 struct ipu_smfc_priv;
 
 struct ipu_devtype;
@@ -180,8 +164,8 @@ struct ipu_soc {
 
 	void __iomem		*cm_reg;
 	void __iomem		*idmac_reg;
+	struct ipu_ch_param __iomem	*cpmem_base;
 
-	int			id;
 	int			usecount;
 
 	struct clk		*clk;
@@ -192,28 +176,12 @@ struct ipu_soc {
 	int			irq_err;
 	struct irq_domain	*domain;
 
-	struct ipu_cpmem	*cpmem_priv;
 	struct ipu_dc_priv	*dc_priv;
 	struct ipu_dp_priv	*dp_priv;
 	struct ipu_dmfc_priv	*dmfc_priv;
 	struct ipu_di		*di_priv[2];
-	struct ipu_csi		*csi_priv[2];
-	struct ipu_ic_priv	*ic_priv;
-	struct ipu_vdi          *vdi_priv;
-	struct ipu_image_convert_priv *image_convert_priv;
 	struct ipu_smfc_priv	*smfc_priv;
 };
-
-static inline u32 ipu_idmac_read(struct ipu_soc *ipu, unsigned offset)
-{
-	return readl(ipu->idmac_reg + offset);
-}
-
-static inline void ipu_idmac_write(struct ipu_soc *ipu, u32 value,
-				   unsigned offset)
-{
-	writel(value, ipu->idmac_reg + offset);
-}
 
 void ipu_srm_dp_sync_update(struct ipu_soc *ipu);
 
@@ -222,21 +190,6 @@ int ipu_module_disable(struct ipu_soc *ipu, u32 mask);
 
 bool ipu_idmac_channel_busy(struct ipu_soc *ipu, unsigned int chno);
 int ipu_wait_interrupt(struct ipu_soc *ipu, int irq, int ms);
-
-int ipu_csi_init(struct ipu_soc *ipu, struct device *dev, int id,
-		 unsigned long base, u32 module, struct clk *clk_ipu);
-void ipu_csi_exit(struct ipu_soc *ipu, int id);
-
-int ipu_ic_init(struct ipu_soc *ipu, struct device *dev,
-		unsigned long base, unsigned long tpmem_base);
-void ipu_ic_exit(struct ipu_soc *ipu);
-
-int ipu_vdi_init(struct ipu_soc *ipu, struct device *dev,
-		 unsigned long base, u32 module);
-void ipu_vdi_exit(struct ipu_soc *ipu);
-
-int ipu_image_convert_init(struct ipu_soc *ipu, struct device *dev);
-void ipu_image_convert_exit(struct ipu_soc *ipu);
 
 int ipu_di_init(struct ipu_soc *ipu, struct device *dev, int id,
 		unsigned long base, u32 module, struct clk *ipu_clk);

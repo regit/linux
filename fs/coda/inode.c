@@ -21,7 +21,9 @@
 #include <linux/vfs.h>
 #include <linux/slab.h>
 #include <linux/pid_namespace.h>
-#include <linux/uaccess.h>
+
+#include <asm/uaccess.h>
+
 #include <linux/fs.h>
 #include <linux/vmalloc.h>
 
@@ -74,9 +76,9 @@ static void init_once(void *foo)
 int __init coda_init_inodecache(void)
 {
 	coda_inode_cachep = kmem_cache_create("coda_inode_cache",
-				sizeof(struct coda_inode_info), 0,
-				SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD|
-				SLAB_ACCOUNT, init_once);
+				sizeof(struct coda_inode_info),
+				0, SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD,
+				init_once);
 	if (coda_inode_cachep == NULL)
 		return -ENOMEM;
 	return 0;
@@ -183,7 +185,7 @@ static int coda_fill_super(struct super_block *sb, void *data, int silent)
 		goto unlock_out;
 	}
 
-	error = bdi_setup_and_register(&vc->bdi, "coda");
+	error = bdi_setup_and_register(&vc->bdi, "coda", BDI_CAP_MAP_COPY);
 	if (error)
 		goto unlock_out;
 
@@ -257,21 +259,21 @@ static void coda_evict_inode(struct inode *inode)
 
 int coda_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
 {
-	int err = coda_revalidate_inode(d_inode(dentry));
+	int err = coda_revalidate_inode(dentry->d_inode);
 	if (!err)
-		generic_fillattr(d_inode(dentry), stat);
+		generic_fillattr(dentry->d_inode, stat);
 	return err;
 }
 
 int coda_setattr(struct dentry *de, struct iattr *iattr)
 {
-	struct inode *inode = d_inode(de);
+	struct inode *inode = de->d_inode;
 	struct coda_vattr vattr;
 	int error;
 
 	memset(&vattr, 0, sizeof(vattr)); 
 
-	inode->i_ctime = current_time(inode);
+	inode->i_ctime = CURRENT_TIME_SEC;
 	coda_iattr_to_vattr(iattr, &vattr);
 	vattr.va_type = C_VNON; /* cannot set type */
 

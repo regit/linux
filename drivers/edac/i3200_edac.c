@@ -13,9 +13,9 @@
 #include <linux/pci_ids.h>
 #include <linux/edac.h>
 #include <linux/io.h>
-#include "edac_module.h"
+#include "edac_core.h"
 
-#include <linux/io-64-nonatomic-lo-hi.h>
+#include <asm-generic/io-64-nonatomic-lo-hi.h>
 
 #define I3200_REVISION        "1.1"
 
@@ -242,11 +242,11 @@ static void i3200_process_error_info(struct mem_ctl_info *mci,
 					     -1, -1,
 					     "i3000 UE", "");
 		} else if (log & I3200_ECCERRLOG_CE) {
-			edac_mc_handle_error(HW_EVENT_ERR_CORRECTED, mci, 1,
+			edac_mc_handle_error(HW_EVENT_ERR_UNCORRECTED, mci, 1,
 					     0, 0, eccerrlog_syndrome(log),
 					     eccerrlog_row(channel, log),
 					     -1, -1,
-					     "i3000 CE", "");
+					     "i3000 UE", "");
 		}
 	}
 }
@@ -523,7 +523,8 @@ fail1:
 	pci_unregister_driver(&i3200_driver);
 
 fail0:
-	pci_dev_put(mci_pdev);
+	if (mci_pdev)
+		pci_dev_put(mci_pdev);
 
 	return pci_rc;
 }

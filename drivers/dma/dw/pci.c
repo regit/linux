@@ -15,10 +15,16 @@
 
 #include "internal.h"
 
+static struct dw_dma_platform_data dw_pci_pdata = {
+	.is_private = 1,
+	.chan_allocation_order = CHAN_ALLOCATION_ASCENDING,
+	.chan_priority = CHAN_PRIORITY_ASCENDING,
+};
+
 static int dw_pci_probe(struct pci_dev *pdev, const struct pci_device_id *pid)
 {
-	const struct dw_dma_platform_data *pdata = (void *)pid->driver_data;
 	struct dw_dma_chip *chip;
+	struct dw_dma_platform_data *pdata = (void *)pid->driver_data;
 	int ret;
 
 	ret = pcim_enable_device(pdev);
@@ -49,9 +55,8 @@ static int dw_pci_probe(struct pci_dev *pdev, const struct pci_device_id *pid)
 	chip->dev = &pdev->dev;
 	chip->regs = pcim_iomap_table(pdev)[0];
 	chip->irq = pdev->irq;
-	chip->pdata = pdata;
 
-	ret = dw_dma_probe(chip);
+	ret = dw_dma_probe(chip, pdata);
 	if (ret)
 		return ret;
 
@@ -77,7 +82,7 @@ static int dw_pci_suspend_late(struct device *dev)
 	struct pci_dev *pci = to_pci_dev(dev);
 	struct dw_dma_chip *chip = pci_get_drvdata(pci);
 
-	return dw_dma_disable(chip);
+	return dw_dma_suspend(chip);
 };
 
 static int dw_pci_resume_early(struct device *dev)
@@ -85,7 +90,7 @@ static int dw_pci_resume_early(struct device *dev)
 	struct pci_dev *pci = to_pci_dev(dev);
 	struct dw_dma_chip *chip = pci_get_drvdata(pci);
 
-	return dw_dma_enable(chip);
+	return dw_dma_resume(chip);
 };
 
 #endif /* CONFIG_PM_SLEEP */
@@ -96,23 +101,15 @@ static const struct dev_pm_ops dw_pci_dev_pm_ops = {
 
 static const struct pci_device_id dw_pci_id_table[] = {
 	/* Medfield */
-	{ PCI_VDEVICE(INTEL, 0x0827) },
-	{ PCI_VDEVICE(INTEL, 0x0830) },
+	{ PCI_VDEVICE(INTEL, 0x0827), (kernel_ulong_t)&dw_pci_pdata },
+	{ PCI_VDEVICE(INTEL, 0x0830), (kernel_ulong_t)&dw_pci_pdata },
 
 	/* BayTrail */
-	{ PCI_VDEVICE(INTEL, 0x0f06) },
-	{ PCI_VDEVICE(INTEL, 0x0f40) },
-
-	/* Braswell */
-	{ PCI_VDEVICE(INTEL, 0x2286) },
-	{ PCI_VDEVICE(INTEL, 0x22c0) },
+	{ PCI_VDEVICE(INTEL, 0x0f06), (kernel_ulong_t)&dw_pci_pdata },
+	{ PCI_VDEVICE(INTEL, 0x0f40), (kernel_ulong_t)&dw_pci_pdata },
 
 	/* Haswell */
-	{ PCI_VDEVICE(INTEL, 0x9c60) },
-
-	/* Broadwell */
-	{ PCI_VDEVICE(INTEL, 0x9ce0) },
-
+	{ PCI_VDEVICE(INTEL, 0x9c60), (kernel_ulong_t)&dw_pci_pdata },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, dw_pci_id_table);

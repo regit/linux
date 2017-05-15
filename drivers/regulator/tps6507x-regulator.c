@@ -375,7 +375,7 @@ static struct tps6507x_board *tps6507x_parse_dt_reg_data(
 	struct device_node *np = pdev->dev.parent->of_node;
 	struct device_node *regulators;
 	struct of_regulator_match *matches;
-	struct regulator_init_data *reg_data;
+	static struct regulator_init_data *reg_data;
 	int idx = 0, count, ret;
 
 	tps_board = devm_kzalloc(&pdev->dev, sizeof(*tps_board),
@@ -519,6 +519,7 @@ static int tps6507x_pmic_probe(struct platform_device *pdev)
 static struct platform_driver tps6507x_pmic_driver = {
 	.driver = {
 		.name = "tps6507x-pmic",
+		.owner = THIS_MODULE,
 	},
 	.probe = tps6507x_pmic_probe,
 };

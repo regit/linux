@@ -34,7 +34,7 @@
 #include <linux/mutex.h>
 #include <linux/anon_inodes.h>
 #include <linux/device.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/mman.h>
 #include <linux/atomic.h>
@@ -92,12 +92,7 @@
  */
 
 /* Epoll private bits inside the event mask */
-#define EP_PRIVATE_BITS (EPOLLWAKEUP | EPOLLONESHOT | EPOLLET | EPOLLEXCLUSIVE)
-
-#define EPOLLINOUT_BITS (POLLIN | POLLOUT)
-
-#define EPOLLEXCLUSIVE_OK_BITS (EPOLLINOUT_BITS | POLLERR | POLLHUP | \
-				EPOLLWAKEUP | EPOLLET | EPOLLEXCLUSIVE)
+#define EP_PRIVATE_BITS (EPOLLWAKEUP | EPOLLONESHOT | EPOLLET)
 
 /* Maximum number of nesting allowed inside epoll sets */
 #define EP_MAX_NESTS 4
@@ -875,22 +870,25 @@ static unsigned int ep_eventpoll_poll(struct file *file, poll_table *wait)
 }
 
 #ifdef CONFIG_PROC_FS
-static void ep_show_fdinfo(struct seq_file *m, struct file *f)
+static int ep_show_fdinfo(struct seq_file *m, struct file *f)
 {
 	struct eventpoll *ep = f->private_data;
 	struct rb_node *rbp;
+	int ret = 0;
 
 	mutex_lock(&ep->mtx);
 	for (rbp = rb_first(&ep->rbr); rbp; rbp = rb_next(rbp)) {
 		struct epitem *epi = rb_entry(rbp, struct epitem, rbn);
 
-		seq_printf(m, "tfd: %8d events: %8x data: %16llx\n",
-			   epi->ffd.fd, epi->event.events,
-			   (long long)epi->event.data);
-		if (seq_has_overflowed(m))
+		ret = seq_printf(m, "tfd: %8d events: %8x data: %16llx\n",
+				 epi->ffd.fd, epi->event.events,
+				 (long long)epi->event.data);
+		if (ret)
 			break;
 	}
 	mutex_unlock(&ep->mtx);
+
+	return ret;
 }
 #endif
 
@@ -1007,7 +1005,6 @@ static int ep_poll_callback(wait_queue_t *wait, unsigned mode, int sync, void *k
 	unsigned long flags;
 	struct epitem *epi = ep_item_from_wait(wait);
 	struct eventpoll *ep = epi->ep;
-	int ewake = 0;
 
 	if ((unsigned long)key & POLLFREE) {
 		ep_pwq_from_wait(wait)->whead = NULL;
@@ -1072,25 +1069,8 @@ static int ep_poll_callback(wait_queue_t *wait, unsigned mode, int sync, void *k
 	 * Wake up ( if active ) both the eventpoll wait list and the ->poll()
 	 * wait list.
 	 */
-	if (waitqueue_active(&ep->wq)) {
-		if ((epi->event.events & EPOLLEXCLUSIVE) &&
-					!((unsigned long)key & POLLFREE)) {
-			switch ((unsigned long)key & EPOLLINOUT_BITS) {
-			case POLLIN:
-				if (epi->event.events & POLLIN)
-					ewake = 1;
-				break;
-			case POLLOUT:
-				if (epi->event.events & POLLOUT)
-					ewake = 1;
-				break;
-			case 0:
-				ewake = 1;
-				break;
-			}
-		}
+	if (waitqueue_active(&ep->wq))
 		wake_up_locked(&ep->wq);
-	}
 	if (waitqueue_active(&ep->poll_wait))
 		pwake++;
 
@@ -1100,9 +1080,6 @@ out_unlock:
 	/* We have to call this outside the lock */
 	if (pwake)
 		ep_poll_safewake(&ep->poll_wait);
-
-	if (epi->event.events & EPOLLEXCLUSIVE)
-		return ewake;
 
 	return 1;
 }
@@ -1121,10 +1098,7 @@ static void ep_ptable_queue_proc(struct file *file, wait_queue_head_t *whead,
 		init_waitqueue_func_entry(&pwq->wait, ep_poll_callback);
 		pwq->whead = whead;
 		pwq->base = epi;
-		if (epi->event.events & EPOLLEXCLUSIVE)
-			add_wait_queue_exclusive(whead, &pwq->wait);
-		else
-			add_wait_queue(whead, &pwq->wait);
+		add_wait_queue(whead, &pwq->wait);
 		list_add_tail(&pwq->llink, &epi->pwqlist);
 		epi->nwait++;
 	} else {
@@ -1583,15 +1557,15 @@ static int ep_send_events(struct eventpoll *ep,
 	return ep_scan_ready_list(ep, ep_send_events_proc, &esed, 0, false);
 }
 
-static inline struct timespec64 ep_set_mstimeout(long ms)
+static inline struct timespec ep_set_mstimeout(long ms)
 {
-	struct timespec64 now, ts = {
+	struct timespec now, ts = {
 		.tv_sec = ms / MSEC_PER_SEC,
 		.tv_nsec = NSEC_PER_MSEC * (ms % MSEC_PER_SEC),
 	};
 
-	ktime_get_ts64(&now);
-	return timespec64_add_safe(now, ts);
+	ktime_get_ts(&now);
+	return timespec_add_safe(now, ts);
 }
 
 /**
@@ -1616,16 +1590,16 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 {
 	int res = 0, eavail, timed_out = 0;
 	unsigned long flags;
-	u64 slack = 0;
+	long slack = 0;
 	wait_queue_t wait;
 	ktime_t expires, *to = NULL;
 
 	if (timeout > 0) {
-		struct timespec64 end_time = ep_set_mstimeout(timeout);
+		struct timespec end_time = ep_set_mstimeout(timeout);
 
 		slack = select_estimate_accuracy(&end_time);
 		to = &expires;
-		*to = timespec64_to_ktime(end_time);
+		*to = timespec_to_ktime(end_time);
 	} else if (timeout == 0) {
 		/*
 		 * Avoid the unnecessary trip to the wait queue loop, if the
@@ -1668,9 +1642,9 @@ fetch_events:
 
 			spin_lock_irqsave(&ep->lock, flags);
 		}
-
 		__remove_wait_queue(&ep->wq, &wait);
-		__set_current_state(TASK_RUNNING);
+
+		set_current_state(TASK_RUNNING);
 	}
 check_events:
 	/* Is it worth to try to dig for events ? */
@@ -1878,8 +1852,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 		goto error_tgt_fput;
 
 	/* Check if EPOLLWAKEUP is allowed */
-	if (ep_op_has_event(op))
-		ep_take_care_of_epollwakeup(&epds);
+	ep_take_care_of_epollwakeup(&epds);
 
 	/*
 	 * We have to check that the file structure underneath the file descriptor
@@ -1889,19 +1862,6 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	error = -EINVAL;
 	if (f.file == tf.file || !is_file_epoll(f.file))
 		goto error_tgt_fput;
-
-	/*
-	 * epoll adds to the wakeup queue at EPOLL_CTL_ADD time only,
-	 * so EPOLLEXCLUSIVE is not allowed for a EPOLL_CTL_MOD operation.
-	 * Also, we do not currently supported nested exclusive wakeups.
-	 */
-	if (epds.events & EPOLLEXCLUSIVE) {
-		if (op == EPOLL_CTL_MOD)
-			goto error_tgt_fput;
-		if (op == EPOLL_CTL_ADD && (is_file_epoll(tf.file) ||
-				(epds.events & ~EPOLLEXCLUSIVE_OK_BITS)))
-			goto error_tgt_fput;
-	}
 
 	/*
 	 * At this point it is safe to assume that the "private_data" contains
@@ -1974,10 +1934,8 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 		break;
 	case EPOLL_CTL_MOD:
 		if (epi) {
-			if (!(epi->event.events & EPOLLEXCLUSIVE)) {
-				epds.events |= POLLERR | POLLHUP;
-				error = ep_modify(ep, epi, &epds);
-			}
+			epds.events |= POLLERR | POLLHUP;
+			error = ep_modify(ep, epi, &epds);
 		} else
 			error = -ENOENT;
 		break;

@@ -1,5 +1,5 @@
 /*
- * drivers/media/platform/s5p-mfc/s5p_mfc_debug.h
+ * drivers/media/platform/samsung/mfc5/s5p_mfc_debug.h
  *
  * Header file for Samsung MFC (Multi Function Codec - FIMV) driver
  * This file contains debug macros
@@ -18,11 +18,11 @@
 #define DEBUG
 
 #ifdef DEBUG
-extern int mfc_debug_level;
+extern int debug;
 
 #define mfc_debug(level, fmt, args...)				\
 	do {							\
-		if (mfc_debug_level >= level)			\
+		if (debug >= level)				\
 			printk(KERN_DEBUG "%s:%d: " fmt,	\
 				__func__, __LINE__, ##args);	\
 	} while (0)
@@ -36,12 +36,6 @@ extern int mfc_debug_level;
 #define mfc_err(fmt, args...)				\
 	do {						\
 		printk(KERN_ERR "%s:%d: " fmt,		\
-		       __func__, __LINE__, ##args);	\
-	} while (0)
-
-#define mfc_err_limited(fmt, args...)			\
-	do {						\
-		printk_ratelimited(KERN_ERR "%s:%d: " fmt,	\
 		       __func__, __LINE__, ##args);	\
 	} while (0)
 

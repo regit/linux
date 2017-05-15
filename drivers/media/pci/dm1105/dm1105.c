@@ -315,7 +315,8 @@ static void dm1105_card_list(struct pci_dev *pci)
 			"dm1105: Updating to the latest version might help\n"
 			"dm1105: as well.\n");
 	}
-	printk(KERN_ERR "Here is a list of valid choices for the card=<n> insmod option:\n");
+	printk(KERN_ERR "Here is a list of valid choices for the card=<n> "
+		   "insmod option:\n");
 	for (i = 0; i < ARRAY_SIZE(dm1105_boards); i++)
 		printk(KERN_ERR "dm1105:    card=%d -> %s\n",
 				i, dm1105_boards[i].name);
@@ -590,8 +591,7 @@ static inline struct dm1105_dev *frontend_to_dm1105_dev(struct dvb_frontend *fe)
 	return container_of(fe->dvb, struct dm1105_dev, dvb_adapter);
 }
 
-static int dm1105_set_voltage(struct dvb_frontend *fe,
-			      enum fe_sec_voltage voltage)
+static int dm1105_set_voltage(struct dvb_frontend *fe, fe_sec_voltage_t voltage)
 {
 	struct dm1105_dev *dev = frontend_to_dm1105_dev(fe);
 
@@ -614,7 +614,7 @@ static int dm1105_set_voltage(struct dvb_frontend *fe,
 
 static void dm1105_set_dma_addr(struct dm1105_dev *dev)
 {
-	dm_writel(DM1105_STADR, (__force u32)cpu_to_le32(dev->dma_addr));
+	dm_writel(DM1105_STADR, cpu_to_le32(dev->dma_addr));
 }
 
 static int dm1105_dma_map(struct dm1105_dev *dev)
@@ -678,8 +678,7 @@ static void dm1105_emit_key(struct work_struct *work)
 
 	data = (ircom >> 8) & 0x7f;
 
-	/* FIXME: UNKNOWN because we don't generate a full NEC scancode (yet?) */
-	rc_keydown(ir->dev, RC_TYPE_UNKNOWN, data, 0);
+	rc_keydown(ir->dev, data, 0);
 }
 
 /* work handler */
@@ -1205,6 +1204,7 @@ static void dm1105_remove(struct pci_dev *pdev)
 	i2c_del_adapter(&dev->i2c_adap);
 
 	dm1105_hw_exit(dev);
+	synchronize_irq(pdev->irq);
 	free_irq(pdev->irq, dev);
 	pci_iounmap(pdev, dev->io_mem);
 	pci_release_regions(pdev);

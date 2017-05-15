@@ -49,6 +49,7 @@ struct tz1090_pdc_gpio {
 	void __iomem *reg;
 	int irq[GPIO_PDC_NIRQ];
 };
+#define to_pdc(c)	container_of(c, struct tz1090_pdc_gpio, chip)
 
 /* Register accesses into the PDC MMIO area */
 
@@ -69,7 +70,7 @@ static inline unsigned int pdc_read(struct tz1090_pdc_gpio *priv,
 static int tz1090_pdc_gpio_direction_input(struct gpio_chip *chip,
 					   unsigned int offset)
 {
-	struct tz1090_pdc_gpio *priv = gpiochip_get_data(chip);
+	struct tz1090_pdc_gpio *priv = to_pdc(chip);
 	u32 value;
 	int lstat;
 
@@ -86,7 +87,7 @@ static int tz1090_pdc_gpio_direction_output(struct gpio_chip *chip,
 					    unsigned int offset,
 					    int output_value)
 {
-	struct tz1090_pdc_gpio *priv = gpiochip_get_data(chip);
+	struct tz1090_pdc_gpio *priv = to_pdc(chip);
 	u32 value;
 	int lstat;
 
@@ -111,14 +112,14 @@ static int tz1090_pdc_gpio_direction_output(struct gpio_chip *chip,
 
 static int tz1090_pdc_gpio_get(struct gpio_chip *chip, unsigned int offset)
 {
-	struct tz1090_pdc_gpio *priv = gpiochip_get_data(chip);
-	return !!(pdc_read(priv, REG_SOC_GPIO_STATUS) & BIT(offset));
+	struct tz1090_pdc_gpio *priv = to_pdc(chip);
+	return pdc_read(priv, REG_SOC_GPIO_STATUS) & BIT(offset);
 }
 
 static void tz1090_pdc_gpio_set(struct gpio_chip *chip, unsigned int offset,
 				int output_value)
 {
-	struct tz1090_pdc_gpio *priv = gpiochip_get_data(chip);
+	struct tz1090_pdc_gpio *priv = to_pdc(chip);
 	u32 value;
 	int lstat;
 
@@ -136,9 +137,19 @@ static void tz1090_pdc_gpio_set(struct gpio_chip *chip, unsigned int offset,
 	__global_unlock2(lstat);
 }
 
+static int tz1090_pdc_gpio_request(struct gpio_chip *chip, unsigned int offset)
+{
+	return pinctrl_request_gpio(chip->base + offset);
+}
+
+static void tz1090_pdc_gpio_free(struct gpio_chip *chip, unsigned int offset)
+{
+	pinctrl_free_gpio(chip->base + offset);
+}
+
 static int tz1090_pdc_gpio_to_irq(struct gpio_chip *chip, unsigned int offset)
 {
-	struct tz1090_pdc_gpio *priv = gpiochip_get_data(chip);
+	struct tz1090_pdc_gpio *priv = to_pdc(chip);
 	unsigned int syswake = offset - GPIO_PDC_IRQ_FIRST;
 	int irq;
 
@@ -179,7 +190,7 @@ static int tz1090_pdc_gpio_probe(struct platform_device *pdev)
 
 	/* Ioremap the registers */
 	priv->reg = devm_ioremap(&pdev->dev, res_regs->start,
-				 resource_size(res_regs));
+				 res_regs->end - res_regs->start);
 	if (!priv->reg) {
 		dev_err(&pdev->dev, "unable to ioremap registers\n");
 		return -ENOMEM;
@@ -187,13 +198,13 @@ static int tz1090_pdc_gpio_probe(struct platform_device *pdev)
 
 	/* Set up GPIO chip */
 	priv->chip.label		= "tz1090-pdc-gpio";
-	priv->chip.parent		= &pdev->dev;
+	priv->chip.dev			= &pdev->dev;
 	priv->chip.direction_input	= tz1090_pdc_gpio_direction_input;
 	priv->chip.direction_output	= tz1090_pdc_gpio_direction_output;
 	priv->chip.get			= tz1090_pdc_gpio_get;
 	priv->chip.set			= tz1090_pdc_gpio_set;
-	priv->chip.free			= gpiochip_generic_free;
-	priv->chip.request		= gpiochip_generic_request;
+	priv->chip.free			= tz1090_pdc_gpio_free;
+	priv->chip.request		= tz1090_pdc_gpio_request;
 	priv->chip.to_irq		= tz1090_pdc_gpio_to_irq;
 	priv->chip.of_node		= np;
 
@@ -206,7 +217,7 @@ static int tz1090_pdc_gpio_probe(struct platform_device *pdev)
 		priv->irq[i] = irq_of_parse_and_map(np, i);
 
 	/* Add the GPIO bank */
-	gpiochip_add_data(&priv->chip, priv);
+	gpiochip_add(&priv->chip);
 
 	return 0;
 }
@@ -219,6 +230,7 @@ static struct of_device_id tz1090_pdc_gpio_of_match[] = {
 static struct platform_driver tz1090_pdc_gpio_driver = {
 	.driver = {
 		.name		= "tz1090-pdc-gpio",
+		.owner		= THIS_MODULE,
 		.of_match_table	= tz1090_pdc_gpio_of_match,
 	},
 	.probe		= tz1090_pdc_gpio_probe,

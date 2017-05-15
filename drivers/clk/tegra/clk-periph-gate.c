@@ -14,13 +14,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/err.h>
-
-#include <soc/tegra/fuse.h>
+#include <linux/tegra-soc.h>
 
 #include "clk.h"
 
@@ -134,7 +134,7 @@ struct clk *tegra_clk_register_periph_gate(const char *name,
 	struct tegra_clk_periph_gate *gate;
 	struct clk *clk;
 	struct clk_init_data init;
-	const struct tegra_clk_periph_regs *pregs;
+	struct tegra_clk_periph_regs *pregs;
 
 	pregs = get_reg_bank(clk_num);
 	if (!pregs)

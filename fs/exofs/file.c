@@ -2,7 +2,7 @@
  * Copyright (C) 2005, 2006
  * Avishay Traeger (avishay@gmail.com)
  * Copyright (C) 2008, 2009
- * Boaz Harrosh <ooo@electrozaur.com>
+ * Boaz Harrosh <bharrosh@panasas.com>
  *
  * Copyrights for code taken from ext2:
  *     Copyright (C) 1992, 1993, 1994, 1995
@@ -52,9 +52,9 @@ static int exofs_file_fsync(struct file *filp, loff_t start, loff_t end,
 	if (ret)
 		return ret;
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 	ret = sync_inode_metadata(filp->f_mapping->host, 1);
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 	return ret;
 }
 
@@ -67,6 +67,8 @@ static int exofs_flush(struct file *file, fl_owner_t id)
 
 const struct file_operations exofs_file_operations = {
 	.llseek		= generic_file_llseek,
+	.read		= new_sync_read,
+	.write		= new_sync_write,
 	.read_iter	= generic_file_read_iter,
 	.write_iter	= generic_file_write_iter,
 	.mmap		= generic_file_mmap,

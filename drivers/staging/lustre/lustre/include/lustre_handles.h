@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -38,13 +42,10 @@
  * @{
  */
 
-#include <linux/atomic.h>
-#include <linux/list.h>
-#include <linux/rcupdate.h>
-#include <linux/spinlock.h>
-#include <linux/types.h>
+#include <linux/lustre_handles.h>
 
-#include "../../include/linux/libcfs/libcfs.h"
+#include <linux/libcfs/libcfs.h>
+
 
 struct portals_handle_ops {
 	void (*hop_addref)(void *object);
@@ -61,20 +62,19 @@ struct portals_handle_ops {
  *
  * Now you're able to assign the results of cookie2handle directly to an
  * ldlm_lock.  If it's not at the top, you'll want to use container_of()
- * to compute the start of the structure based on the handle field.
- */
+ * to compute the start of the structure based on the handle field. */
 struct portals_handle {
 	struct list_head			h_link;
 	__u64				h_cookie;
-	const void			*h_owner;
 	struct portals_handle_ops	*h_ops;
 
 	/* newly added fields to handle the RCU issue. -jxiong */
-	struct rcu_head			h_rcu;
+	cfs_rcu_head_t			h_rcu;
 	spinlock_t			h_lock;
 	unsigned int			h_size:31;
 	unsigned int			h_in:1;
 };
+#define RCU2HANDLE(rcu)    container_of(rcu, struct portals_handle, h_rcu)
 
 /* handles.c */
 
@@ -82,8 +82,9 @@ struct portals_handle {
 void class_handle_hash(struct portals_handle *,
 		       struct portals_handle_ops *ops);
 void class_handle_unhash(struct portals_handle *);
-void *class_handle2object(__u64 cookie, const void *owner);
-void class_handle_free_cb(struct rcu_head *rcu);
+void class_handle_hash_back(struct portals_handle *);
+void *class_handle2object(__u64 cookie);
+void class_handle_free_cb(cfs_rcu_head_t *);
 int class_handle_init(void);
 void class_handle_cleanup(void);
 

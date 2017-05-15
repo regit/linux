@@ -25,7 +25,7 @@
 #include <linux/prctl.h>
 #include <asm/cacheflush.h>
 #include <asm/traps.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/unaligned.h>
 #include <arch/abi.h>
 #include <arch/spr_def.h>
@@ -222,9 +222,11 @@ static tilepro_bundle_bits rewrite_load_store_unaligned(
 	}
 
 	if (unaligned_printk || unaligned_fixup_count == 0) {
-		pr_info("Process %d/%s: PC %#lx: Fixup of unaligned %s at %#lx\n",
+		pr_info("Process %d/%s: PC %#lx: Fixup of"
+			" unaligned %s at %#lx.\n",
 			current->pid, current->comm, regs->pc,
-			mem_op == MEMOP_LOAD || mem_op == MEMOP_LOAD_POSTINCR ?
+			(mem_op == MEMOP_LOAD ||
+			 mem_op == MEMOP_LOAD_POSTINCR) ?
 			"load" : "store",
 			(unsigned long)addr);
 		if (!unaligned_printk) {
@@ -738,7 +740,7 @@ static DEFINE_PER_CPU(unsigned long, ss_saved_pc);
 
 void gx_singlestep_handle(struct pt_regs *regs, int fault_num)
 {
-	unsigned long *ss_pc = this_cpu_ptr(&ss_saved_pc);
+	unsigned long *ss_pc = &__get_cpu_var(ss_saved_pc);
 	struct thread_info *info = (void *)current_thread_info();
 	int is_single_step = test_ti_thread_flag(info, TIF_SINGLESTEP);
 	unsigned long control = __insn_mfspr(SPR_SINGLE_STEP_CONTROL_K);
@@ -764,7 +766,7 @@ void gx_singlestep_handle(struct pt_regs *regs, int fault_num)
 
 void single_step_once(struct pt_regs *regs)
 {
-	unsigned long *ss_pc = this_cpu_ptr(&ss_saved_pc);
+	unsigned long *ss_pc = &__get_cpu_var(ss_saved_pc);
 	unsigned long control = __insn_mfspr(SPR_SINGLE_STEP_CONTROL_K);
 
 	*ss_pc = regs->pc;

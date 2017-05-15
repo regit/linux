@@ -18,11 +18,12 @@
 #include <linux/rcupdate.h>
 
 /*
- * Using 6 bits at each layer allows us to allocate 7 layers out of each page.
- * 8 bits only gave us 3 layers out of every pair of pages, which is less
- * efficient except for trees with a largest element between 192-255 inclusive.
+ * We want shallower trees and thus more bits covered at each layer.  8
+ * bits gives us large enough first layer for most use cases and maximum
+ * tree depth of 4.  Each idr_layer is slightly larger than 2k on 64bit and
+ * 1k on 32bit.
  */
-#define IDR_BITS 6
+#define IDR_BITS 8
 #define IDR_SIZE (1 << IDR_BITS)
 #define IDR_MASK ((1 << IDR_BITS)-1)
 
@@ -53,32 +54,6 @@ struct idr {
 	.lock			= __SPIN_LOCK_UNLOCKED(name.lock),	\
 }
 #define DEFINE_IDR(name)	struct idr name = IDR_INIT(name)
-
-/**
- * idr_get_cursor - Return the current position of the cyclic allocator
- * @idr: idr handle
- *
- * The value returned is the value that will be next returned from
- * idr_alloc_cyclic() if it is free (otherwise the search will start from
- * this position).
- */
-static inline unsigned int idr_get_cursor(struct idr *idr)
-{
-	return READ_ONCE(idr->cur);
-}
-
-/**
- * idr_set_cursor - Set the current position of the cyclic allocator
- * @idr: idr handle
- * @val: new position
- *
- * The next call to idr_alloc_cyclic() will return @val if it is free
- * (otherwise the search will start from this position).
- */
-static inline void idr_set_cursor(struct idr *idr, unsigned int val)
-{
-	WRITE_ONCE(idr->cur, val);
-}
 
 /**
  * DOC: idr sync
@@ -160,20 +135,6 @@ static inline void *idr_find(struct idr *idr, int id)
 #define idr_for_each_entry(idp, entry, id)			\
 	for (id = 0; ((entry) = idr_get_next(idp, &(id))) != NULL; ++id)
 
-/**
- * idr_for_each_entry - continue iteration over an idr's elements of a given type
- * @idp:     idr handle
- * @entry:   the type * to use as cursor
- * @id:      id entry's key
- *
- * Continue to iterate over list of given type, continuing after
- * the current position.
- */
-#define idr_for_each_entry_continue(idp, entry, id)			\
-	for ((entry) = idr_get_next((idp), &(id));			\
-	     entry;							\
-	     ++id, (entry) = idr_get_next((idp), &(id)))
-
 /*
  * IDA - IDR based id allocator, use when translation from id to
  * pointer isn't necessary.
@@ -218,11 +179,6 @@ void ida_simple_remove(struct ida *ida, unsigned int id);
 static inline int ida_get_new(struct ida *ida, int *p_id)
 {
 	return ida_get_new_above(ida, 0, p_id);
-}
-
-static inline bool ida_is_empty(struct ida *ida)
-{
-	return idr_is_empty(&ida->idr);
 }
 
 void __init idr_init_cache(void);

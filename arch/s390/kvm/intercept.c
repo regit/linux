@@ -29,7 +29,6 @@ static const intercept_handler_t instruction_handlers[256] = {
 	[0x01] = kvm_s390_handle_01,
 	[0x82] = kvm_s390_handle_lpsw,
 	[0x83] = kvm_s390_handle_diag,
-	[0xaa] = kvm_s390_handle_aa,
 	[0xae] = kvm_s390_handle_sigp,
 	[0xb2] = kvm_s390_handle_b2,
 	[0xb6] = kvm_s390_handle_stctl,
@@ -39,37 +38,12 @@ static const intercept_handler_t instruction_handlers[256] = {
 	[0xeb] = kvm_s390_handle_eb,
 };
 
-u8 kvm_s390_get_ilen(struct kvm_vcpu *vcpu)
-{
-	struct kvm_s390_sie_block *sie_block = vcpu->arch.sie_block;
-	u8 ilen = 0;
-
-	switch (vcpu->arch.sie_block->icptcode) {
-	case ICPT_INST:
-	case ICPT_INSTPROGI:
-	case ICPT_OPEREXC:
-	case ICPT_PARTEXEC:
-	case ICPT_IOINST:
-		/* instruction only stored for these icptcodes */
-		ilen = insn_length(vcpu->arch.sie_block->ipa >> 8);
-		/* Use the length of the EXECUTE instruction if necessary */
-		if (sie_block->icptstatus & 1) {
-			ilen = (sie_block->icptstatus >> 4) & 0x6;
-			if (!ilen)
-				ilen = 4;
-		}
-		break;
-	case ICPT_PROGI:
-		/* bit 1+2 of pgmilc are the ilc, so we directly get ilen */
-		ilen = vcpu->arch.sie_block->pgmilc & 0x6;
-		break;
-	}
-	return ilen;
-}
-
 static int handle_noop(struct kvm_vcpu *vcpu)
 {
 	switch (vcpu->arch.sie_block->icptcode) {
+	case 0x0:
+		vcpu->stat.exit_null++;
+		break;
 	case 0x10:
 		vcpu->stat.exit_external_request++;
 		break;
@@ -81,36 +55,33 @@ static int handle_noop(struct kvm_vcpu *vcpu)
 
 static int handle_stop(struct kvm_vcpu *vcpu)
 {
-	struct kvm_s390_local_interrupt *li = &vcpu->arch.local_int;
 	int rc = 0;
-	uint8_t flags, stop_pending;
 
 	vcpu->stat.exit_stop_request++;
+	spin_lock_bh(&vcpu->arch.local_int.lock);
 
-	/* delay the stop if any non-stop irq is pending */
-	if (kvm_s390_vcpu_has_irq(vcpu, 1))
-		return 0;
+	trace_kvm_s390_stop_request(vcpu->arch.local_int.action_bits);
 
-	/* avoid races with the injection/SIGP STOP code */
-	spin_lock(&li->lock);
-	flags = li->irq.stop.flags;
-	stop_pending = kvm_s390_is_stop_irq_pending(vcpu);
-	spin_unlock(&li->lock);
-
-	trace_kvm_s390_stop_request(stop_pending, flags);
-	if (!stop_pending)
-		return 0;
-
-	if (flags & KVM_S390_STOP_FLAG_STORE_STATUS) {
-		rc = kvm_s390_vcpu_store_status(vcpu,
-						KVM_S390_STORE_STATUS_NOADDR);
-		if (rc)
-			return rc;
+	if (vcpu->arch.local_int.action_bits & ACTION_STOP_ON_STOP) {
+		kvm_s390_vcpu_stop(vcpu);
+		vcpu->arch.local_int.action_bits &= ~ACTION_STOP_ON_STOP;
+		VCPU_EVENT(vcpu, 3, "%s", "cpu stopped");
+		rc = -EOPNOTSUPP;
 	}
 
-	if (!kvm_s390_user_cpu_state_ctrl(vcpu->kvm))
-		kvm_s390_vcpu_stop(vcpu);
-	return -EOPNOTSUPP;
+	if (vcpu->arch.local_int.action_bits & ACTION_STORE_ON_STOP) {
+		vcpu->arch.local_int.action_bits &= ~ACTION_STORE_ON_STOP;
+		/* store status must be called unlocked. Since local_int.lock
+		 * only protects local_int.* and not guest memory we can give
+		 * up the lock here */
+		spin_unlock_bh(&vcpu->arch.local_int.lock);
+		rc = kvm_s390_vcpu_store_status(vcpu,
+						KVM_S390_STORE_STATUS_NOADDR);
+		if (rc >= 0)
+			rc = -EOPNOTSUPP;
+	} else
+		spin_unlock_bh(&vcpu->arch.local_int.lock);
+	return rc;
 }
 
 static int handle_validity(struct kvm_vcpu *vcpu)
@@ -119,13 +90,8 @@ static int handle_validity(struct kvm_vcpu *vcpu)
 
 	vcpu->stat.exit_validity++;
 	trace_kvm_s390_intercept_validity(vcpu, viwhy);
-	KVM_EVENT(3, "validity intercept 0x%x for pid %u (kvm 0x%pK)", viwhy,
-		  current->pid, vcpu->kvm);
-
-	/* do not warn on invalid runtime instrumentation mode */
-	WARN_ONCE(viwhy != 0x44, "kvm: unhandled validity intercept 0x%x\n",
-		  viwhy);
-	return -EINVAL;
+	WARN_ONCE(true, "kvm: unhandled validity intercept 0x%x\n", viwhy);
+	return -EOPNOTSUPP;
 }
 
 static int handle_instruction(struct kvm_vcpu *vcpu)
@@ -142,13 +108,11 @@ static int handle_instruction(struct kvm_vcpu *vcpu)
 	return -EOPNOTSUPP;
 }
 
-static int inject_prog_on_prog_intercept(struct kvm_vcpu *vcpu)
+static void __extract_prog_irq(struct kvm_vcpu *vcpu,
+			       struct kvm_s390_pgm_info *pgm_info)
 {
-	struct kvm_s390_pgm_info pgm_info = {
-		.code = vcpu->arch.sie_block->iprcc,
-		/* the PSW has already been rewound */
-		.flags = KVM_S390_PGM_FLAGS_NO_REWIND,
-	};
+	memset(pgm_info, 0, sizeof(struct kvm_s390_pgm_info));
+	pgm_info->code = vcpu->arch.sie_block->iprcc;
 
 	switch (vcpu->arch.sie_block->iprcc & ~PGM_PER) {
 	case PGM_AFX_TRANSLATION:
@@ -161,7 +125,7 @@ static int inject_prog_on_prog_intercept(struct kvm_vcpu *vcpu)
 	case PGM_PRIMARY_AUTHORITY:
 	case PGM_SECONDARY_AUTHORITY:
 	case PGM_SPACE_SWITCH:
-		pgm_info.trans_exc_code = vcpu->arch.sie_block->tecmc;
+		pgm_info->trans_exc_code = vcpu->arch.sie_block->tecmc;
 		break;
 	case PGM_ALEN_TRANSLATION:
 	case PGM_ALE_SEQUENCE:
@@ -169,7 +133,7 @@ static int inject_prog_on_prog_intercept(struct kvm_vcpu *vcpu)
 	case PGM_ASTE_SEQUENCE:
 	case PGM_ASTE_VALIDITY:
 	case PGM_EXTENDED_AUTHORITY:
-		pgm_info.exc_access_id = vcpu->arch.sie_block->eai;
+		pgm_info->exc_access_id = vcpu->arch.sie_block->eai;
 		break;
 	case PGM_ASCE_TYPE:
 	case PGM_PAGE_TRANSLATION:
@@ -177,33 +141,31 @@ static int inject_prog_on_prog_intercept(struct kvm_vcpu *vcpu)
 	case PGM_REGION_SECOND_TRANS:
 	case PGM_REGION_THIRD_TRANS:
 	case PGM_SEGMENT_TRANSLATION:
-		pgm_info.trans_exc_code = vcpu->arch.sie_block->tecmc;
-		pgm_info.exc_access_id  = vcpu->arch.sie_block->eai;
-		pgm_info.op_access_id  = vcpu->arch.sie_block->oai;
+		pgm_info->trans_exc_code = vcpu->arch.sie_block->tecmc;
+		pgm_info->exc_access_id  = vcpu->arch.sie_block->eai;
+		pgm_info->op_access_id  = vcpu->arch.sie_block->oai;
 		break;
 	case PGM_MONITOR:
-		pgm_info.mon_class_nr = vcpu->arch.sie_block->mcn;
-		pgm_info.mon_code = vcpu->arch.sie_block->tecmc;
+		pgm_info->mon_class_nr = vcpu->arch.sie_block->mcn;
+		pgm_info->mon_code = vcpu->arch.sie_block->tecmc;
 		break;
-	case PGM_VECTOR_PROCESSING:
 	case PGM_DATA:
-		pgm_info.data_exc_code = vcpu->arch.sie_block->dxc;
+		pgm_info->data_exc_code = vcpu->arch.sie_block->dxc;
 		break;
 	case PGM_PROTECTION:
-		pgm_info.trans_exc_code = vcpu->arch.sie_block->tecmc;
-		pgm_info.exc_access_id  = vcpu->arch.sie_block->eai;
+		pgm_info->trans_exc_code = vcpu->arch.sie_block->tecmc;
+		pgm_info->exc_access_id  = vcpu->arch.sie_block->eai;
 		break;
 	default:
 		break;
 	}
 
 	if (vcpu->arch.sie_block->iprcc & PGM_PER) {
-		pgm_info.per_code = vcpu->arch.sie_block->perc;
-		pgm_info.per_atmid = vcpu->arch.sie_block->peratmid;
-		pgm_info.per_address = vcpu->arch.sie_block->peraddr;
-		pgm_info.per_access_id = vcpu->arch.sie_block->peraid;
+		pgm_info->per_code = vcpu->arch.sie_block->perc;
+		pgm_info->per_atmid = vcpu->arch.sie_block->peratmid;
+		pgm_info->per_address = vcpu->arch.sie_block->peraddr;
+		pgm_info->per_access_id = vcpu->arch.sie_block->peraid;
 	}
-	return kvm_s390_inject_prog_irq(vcpu, &pgm_info);
 }
 
 /*
@@ -232,6 +194,7 @@ static int handle_itdb(struct kvm_vcpu *vcpu)
 
 static int handle_prog(struct kvm_vcpu *vcpu)
 {
+	struct kvm_s390_pgm_info pgm_info;
 	psw_t psw;
 	int rc;
 
@@ -257,7 +220,23 @@ static int handle_prog(struct kvm_vcpu *vcpu)
 	if (rc)
 		return rc;
 
-	return inject_prog_on_prog_intercept(vcpu);
+	__extract_prog_irq(vcpu, &pgm_info);
+	return kvm_s390_inject_prog_irq(vcpu, &pgm_info);
+}
+
+static int handle_instruction_and_prog(struct kvm_vcpu *vcpu)
+{
+	int rc, rc2;
+
+	vcpu->stat.exit_instr_and_program++;
+	rc = handle_instruction(vcpu);
+	rc2 = handle_prog(vcpu);
+
+	if (rc == -EOPNOTSUPP)
+		vcpu->arch.sie_block->icptcode = 0x04;
+	if (rc)
+		return rc;
+	return rc2;
 }
 
 /**
@@ -271,7 +250,7 @@ static int handle_prog(struct kvm_vcpu *vcpu)
 static int handle_external_interrupt(struct kvm_vcpu *vcpu)
 {
 	u16 eic = vcpu->arch.sie_block->eic;
-	struct kvm_s390_irq irq;
+	struct kvm_s390_interrupt irq;
 	psw_t newpsw;
 	int rc;
 
@@ -293,13 +272,11 @@ static int handle_external_interrupt(struct kvm_vcpu *vcpu)
 		irq.type = KVM_S390_INT_CPU_TIMER;
 		break;
 	case EXT_IRQ_EXTERNAL_CALL:
-		irq.type = KVM_S390_INT_EXTERNAL_CALL;
-		irq.u.extcall.code = vcpu->arch.sie_block->extcpuaddr;
-		rc = kvm_s390_inject_vcpu(vcpu, &irq);
-		/* ignore if another external call is already pending */
-		if (rc == -EBUSY)
+		if (kvm_s390_si_ext_call_pending(vcpu))
 			return 0;
-		return rc;
+		irq.type = KVM_S390_INT_EXTERNAL_CALL;
+		irq.parm = vcpu->arch.sie_block->extcpuaddr;
+		break;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -317,38 +294,35 @@ static int handle_external_interrupt(struct kvm_vcpu *vcpu)
  */
 static int handle_mvpg_pei(struct kvm_vcpu *vcpu)
 {
+	psw_t *psw = &vcpu->arch.sie_block->gpsw;
 	unsigned long srcaddr, dstaddr;
 	int reg1, reg2, rc;
 
 	kvm_s390_get_regs_rre(vcpu, &reg1, &reg2);
 
 	/* Make sure that the source is paged-in */
-	rc = guest_translate_address(vcpu, vcpu->run->s.regs.gprs[reg2],
-				     reg2, &srcaddr, GACC_FETCH);
-	if (rc)
-		return kvm_s390_inject_prog_cond(vcpu, rc);
+	srcaddr = kvm_s390_real_to_abs(vcpu, vcpu->run->s.regs.gprs[reg2]);
+	if (kvm_is_error_gpa(vcpu->kvm, srcaddr))
+		return kvm_s390_inject_program_int(vcpu, PGM_ADDRESSING);
 	rc = kvm_arch_fault_in_page(vcpu, srcaddr, 0);
 	if (rc != 0)
 		return rc;
 
 	/* Make sure that the destination is paged-in */
-	rc = guest_translate_address(vcpu, vcpu->run->s.regs.gprs[reg1],
-				     reg1, &dstaddr, GACC_STORE);
-	if (rc)
-		return kvm_s390_inject_prog_cond(vcpu, rc);
+	dstaddr = kvm_s390_real_to_abs(vcpu, vcpu->run->s.regs.gprs[reg1]);
+	if (kvm_is_error_gpa(vcpu->kvm, dstaddr))
+		return kvm_s390_inject_program_int(vcpu, PGM_ADDRESSING);
 	rc = kvm_arch_fault_in_page(vcpu, dstaddr, 1);
 	if (rc != 0)
 		return rc;
 
-	kvm_s390_retry_instr(vcpu);
+	psw->addr = __rewind_psw(*psw, 4);
 
 	return 0;
 }
 
 static int handle_partial_execution(struct kvm_vcpu *vcpu)
 {
-	vcpu->stat.exit_pei++;
-
 	if (vcpu->arch.sie_block->ipa == 0xb254)	/* MVPG */
 		return handle_mvpg_pei(vcpu);
 	if (vcpu->arch.sie_block->ipa >> 8 == 0xae)	/* SIGP */
@@ -357,59 +331,29 @@ static int handle_partial_execution(struct kvm_vcpu *vcpu)
 	return -EOPNOTSUPP;
 }
 
-static int handle_operexc(struct kvm_vcpu *vcpu)
-{
-	vcpu->stat.exit_operation_exception++;
-	trace_kvm_s390_handle_operexc(vcpu, vcpu->arch.sie_block->ipa,
-				      vcpu->arch.sie_block->ipb);
-
-	if (vcpu->arch.sie_block->ipa == 0xb256 &&
-	    test_kvm_facility(vcpu->kvm, 74))
-		return handle_sthyi(vcpu);
-
-	if (vcpu->arch.sie_block->ipa == 0 && vcpu->kvm->arch.user_instr0)
-		return -EOPNOTSUPP;
-
-	return kvm_s390_inject_program_int(vcpu, PGM_OPERATION);
-}
+static const intercept_handler_t intercept_funcs[] = {
+	[0x00 >> 2] = handle_noop,
+	[0x04 >> 2] = handle_instruction,
+	[0x08 >> 2] = handle_prog,
+	[0x0C >> 2] = handle_instruction_and_prog,
+	[0x10 >> 2] = handle_noop,
+	[0x14 >> 2] = handle_external_interrupt,
+	[0x18 >> 2] = handle_noop,
+	[0x1C >> 2] = kvm_s390_handle_wait,
+	[0x20 >> 2] = handle_validity,
+	[0x28 >> 2] = handle_stop,
+	[0x38 >> 2] = handle_partial_execution,
+};
 
 int kvm_handle_sie_intercept(struct kvm_vcpu *vcpu)
 {
-	int rc, per_rc = 0;
+	intercept_handler_t func;
+	u8 code = vcpu->arch.sie_block->icptcode;
 
-	if (kvm_is_ucontrol(vcpu->kvm))
+	if (code & 3 || (code >> 2) >= ARRAY_SIZE(intercept_funcs))
 		return -EOPNOTSUPP;
-
-	switch (vcpu->arch.sie_block->icptcode) {
-	case 0x10:
-	case 0x18:
-		return handle_noop(vcpu);
-	case 0x04:
-		rc = handle_instruction(vcpu);
-		break;
-	case 0x08:
-		return handle_prog(vcpu);
-	case 0x14:
-		return handle_external_interrupt(vcpu);
-	case 0x1c:
-		return kvm_s390_handle_wait(vcpu);
-	case 0x20:
-		return handle_validity(vcpu);
-	case 0x28:
-		return handle_stop(vcpu);
-	case 0x2c:
-		rc = handle_operexc(vcpu);
-		break;
-	case 0x38:
-		rc = handle_partial_execution(vcpu);
-		break;
-	default:
-		return -EOPNOTSUPP;
-	}
-
-	/* process PER, also if the instrution is processed in user space */
-	if (vcpu->arch.sie_block->icptstatus & 0x02 &&
-	    (!rc || rc == -EOPNOTSUPP))
-		per_rc = kvm_s390_handle_per_ifetch_icpt(vcpu);
-	return per_rc ? per_rc : rc;
+	func = intercept_funcs[code >> 2];
+	if (func)
+		return func(vcpu);
+	return -EOPNOTSUPP;
 }

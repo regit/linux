@@ -1,8 +1,6 @@
 # List of files in the vdso, has to be asm only for now
 
-KCOV_INSTRUMENT := n
-
-obj-vdso32 = gettimeofday.o clock_getres.o clock_gettime.o note.o getcpu.o
+obj-vdso32 = gettimeofday.o clock_getres.o clock_gettime.o note.o
 
 # Build rules
 
@@ -15,7 +13,7 @@ KBUILD_AFLAGS_31 += -m31 -s
 KBUILD_CFLAGS_31 := $(filter-out -m64,$(KBUILD_CFLAGS))
 KBUILD_CFLAGS_31 += -m31 -fPIC -shared -fno-common -fno-builtin
 KBUILD_CFLAGS_31 += -nostdlib -Wl,-soname=linux-vdso32.so.1 \
-			$(call cc-ldoption, -Wl$(comma)--hash-style=both)
+			$(call cc-ldoption, -Wl$(comma)--hash-style=sysv)
 
 $(targets:%=$(obj)/%.dbg): KBUILD_CFLAGS = $(KBUILD_CFLAGS_31)
 $(targets:%=$(obj)/%.dbg): KBUILD_AFLAGS = $(KBUILD_AFLAGS_31)
@@ -24,9 +22,8 @@ obj-y += vdso32_wrapper.o
 extra-y += vdso32.lds
 CPPFLAGS_vdso32.lds += -P -C -U$(ARCH)
 
-# Disable gcov profiling and ubsan for VDSO code
+# Disable gcov profiling for VDSO code
 GCOV_PROFILE := n
-UBSAN_SANITIZE := n
 
 # Force dependency (incbin is bad)
 $(obj)/vdso32_wrapper.o : $(obj)/vdso32.so

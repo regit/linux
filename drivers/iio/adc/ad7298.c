@@ -16,7 +16,6 @@
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
-#include <linux/bitops.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -26,18 +25,22 @@
 
 #include <linux/platform_data/ad7298.h>
 
-#define AD7298_WRITE	BIT(15) /* write to the control register */
-#define AD7298_REPEAT	BIT(14) /* repeated conversion enable */
-#define AD7298_CH(x)	BIT(13 - (x)) /* channel select */
-#define AD7298_TSENSE	BIT(5) /* temperature conversion enable */
-#define AD7298_EXTREF	BIT(2) /* external reference enable */
-#define AD7298_TAVG	BIT(1) /* temperature sensor averaging enable */
-#define AD7298_PDD	BIT(0) /* partial power down enable */
+#define AD7298_WRITE	(1 << 15) /* write to the control register */
+#define AD7298_REPEAT	(1 << 14) /* repeated conversion enable */
+#define AD7298_CH(x)	(1 << (13 - (x))) /* channel select */
+#define AD7298_TSENSE	(1 << 5) /* temperature conversion enable */
+#define AD7298_EXTREF	(1 << 2) /* external reference enable */
+#define AD7298_TAVG	(1 << 1) /* temperature sensor averaging enable */
+#define AD7298_PDD	(1 << 0) /* partial power down enable */
 
 #define AD7298_MAX_CHAN		8
+#define AD7298_BITS		12
+#define AD7298_STORAGE_BITS	16
 #define AD7298_INTREF_mV	2500
 
 #define AD7298_CH_TEMP		9
+
+#define RES_MASK(bits)	((1 << (bits)) - 1)
 
 struct ad7298_state {
 	struct spi_device		*spi;
@@ -163,7 +166,7 @@ static irqreturn_t ad7298_trigger_handler(int irq, void *p)
 		goto done;
 
 	iio_push_to_buffers_with_timestamp(indio_dev, st->rx_buf,
-		iio_get_time_ns(indio_dev));
+		iio_get_time_ns());
 
 done:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -239,22 +242,22 @@ static int ad7298_read_raw(struct iio_dev *indio_dev,
 
 	switch (m) {
 	case IIO_CHAN_INFO_RAW:
-		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
-			return ret;
-
-		if (chan->address == AD7298_CH_TEMP)
-			ret = ad7298_scan_temp(st, val);
-		else
-			ret = ad7298_scan_direct(st, chan->address);
-
-		iio_device_release_direct_mode(indio_dev);
+		mutex_lock(&indio_dev->mlock);
+		if (indio_dev->currentmode == INDIO_BUFFER_TRIGGERED) {
+			ret = -EBUSY;
+		} else {
+			if (chan->address == AD7298_CH_TEMP)
+				ret = ad7298_scan_temp(st, val);
+			else
+				ret = ad7298_scan_direct(st, chan->address);
+		}
+		mutex_unlock(&indio_dev->mlock);
 
 		if (ret < 0)
 			return ret;
 
 		if (chan->address != AD7298_CH_TEMP)
-			*val = ret & GENMASK(chan->scan_type.realbits - 1, 0);
+			*val = ret & RES_MASK(AD7298_BITS);
 
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
@@ -315,7 +318,6 @@ static int ad7298_probe(struct spi_device *spi)
 
 	indio_dev->name = spi_get_device_id(spi)->name;
 	indio_dev->dev.parent = &spi->dev;
-	indio_dev->dev.of_node = spi->dev.of_node;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = ad7298_channels;
 	indio_dev->num_channels = ARRAY_SIZE(ad7298_channels);
@@ -379,6 +381,7 @@ MODULE_DEVICE_TABLE(spi, ad7298_id);
 static struct spi_driver ad7298_driver = {
 	.driver = {
 		.name	= "ad7298",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= ad7298_probe,
 	.remove		= ad7298_remove,

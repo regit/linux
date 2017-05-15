@@ -24,7 +24,8 @@
 #include "gspca.h"
 
 MODULE_DESCRIPTION("Topro TP6800/6810 gspca webcam driver");
-MODULE_AUTHOR("Jean-Francois Moine <http://moinejf.free.fr>, Anders Blomdell <anders.blomdell@control.lth.se>");
+MODULE_AUTHOR("Jean-Francois Moine <http://moinejf.free.fr>, "
+		"Anders Blomdell <anders.blomdell@control.lth.se>");
 MODULE_LICENSE("GPL");
 
 static int force_sensor = -1;
@@ -173,8 +174,6 @@ static const u8 jpeg_q[17] = {
 #if BULK_OUT_SIZE > USB_BUF_SZ
 #error "USB buffer too small"
 #endif
-
-#define DEFAULT_FRAME_RATE 30
 
 static const u8 rates[] = {30, 20, 15, 10, 7, 5};
 static const struct framerates framerates[] = {
@@ -970,9 +969,7 @@ static void jpeg_set_qual(u8 *jpeg_hdr,
 {
 	int i, sc;
 
-	if (quality <= 0)
-		sc = 5000;
-	else if (quality < 50)
+	if (quality < 50)
 		sc = 5000 / quality;
 	else
 		sc = 200 - quality * 2;
@@ -4021,7 +4018,7 @@ static int sd_config(struct gspca_dev *gspca_dev,
 	gspca_dev->cam.mode_framerates = sd->bridge == BRIDGE_TP6800 ?
 			framerates : framerates_6810;
 
-	sd->framerate = DEFAULT_FRAME_RATE;
+	sd->framerate = 30;		/* default: 30 fps */
 	return 0;
 }
 
@@ -4803,11 +4800,7 @@ static void sd_set_streamparm(struct gspca_dev *gspca_dev,
 	struct v4l2_fract *tpf = &cp->timeperframe;
 	int fr, i;
 
-	if (tpf->numerator == 0 || tpf->denominator == 0)
-		sd->framerate = DEFAULT_FRAME_RATE;
-	else
-		sd->framerate = tpf->denominator / tpf->numerator;
-
+	sd->framerate = tpf->denominator / tpf->numerator;
 	if (gspca_dev->streaming)
 		setframerate(gspca_dev, v4l2_ctrl_g_ctrl(gspca_dev->exposure));
 

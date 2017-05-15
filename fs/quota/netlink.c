@@ -1,5 +1,7 @@
+
 #include <linux/cred.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/quotaops.h>
 #include <linux/sched.h>
@@ -12,8 +14,14 @@ static const struct genl_multicast_group quota_mcgrps[] = {
 };
 
 /* Netlink family structure for quota */
-static struct genl_family quota_genl_family __ro_after_init = {
-	.module = THIS_MODULE,
+static struct genl_family quota_genl_family = {
+	/*
+	 * Needed due to multicast group ID abuse - old code assumed
+	 * the family ID was also a valid multicast group ID (which
+	 * isn't true) and userspace might thus rely on it. Assign a
+	 * static ID for this group to make dealing with that easier.
+	 */
+	.id = GENL_ID_VFS_DQUOT,
 	.hdrsize = 0,
 	.name = "VFS_DQUOT",
 	.version = 1,
@@ -24,7 +32,8 @@ static struct genl_family quota_genl_family __ro_after_init = {
 
 /**
  * quota_send_warning - Send warning to userspace about exceeded quota
- * @qid: The kernel internal quota identifier.
+ * @type: The quota type: USRQQUOTA, GRPQUOTA,...
+ * @id: The user or group id of the quota that was exceeded
  * @dev: The device on which the fs is mounted (sb->s_dev)
  * @warntype: The type of the warning: QUOTA_NL_...
  *
@@ -41,7 +50,7 @@ void quota_send_warning(struct kqid qid, dev_t dev,
 	void *msg_head;
 	int ret;
 	int msg_size = 4 * nla_total_size(sizeof(u32)) +
-		       2 * nla_total_size_64bit(sizeof(u64));
+		       2 * nla_total_size(sizeof(u64));
 
 	/* We have to allocate using GFP_NOFS as we are called from a
 	 * filesystem performing write and thus further recursion into
@@ -62,9 +71,8 @@ void quota_send_warning(struct kqid qid, dev_t dev,
 	ret = nla_put_u32(skb, QUOTA_NL_A_QTYPE, qid.type);
 	if (ret)
 		goto attr_err_out;
-	ret = nla_put_u64_64bit(skb, QUOTA_NL_A_EXCESS_ID,
-				from_kqid_munged(&init_user_ns, qid),
-				QUOTA_NL_A_PAD);
+	ret = nla_put_u64(skb, QUOTA_NL_A_EXCESS_ID,
+			  from_kqid_munged(&init_user_ns, qid));
 	if (ret)
 		goto attr_err_out;
 	ret = nla_put_u32(skb, QUOTA_NL_A_WARNING, warntype);
@@ -76,9 +84,8 @@ void quota_send_warning(struct kqid qid, dev_t dev,
 	ret = nla_put_u32(skb, QUOTA_NL_A_DEV_MINOR, MINOR(dev));
 	if (ret)
 		goto attr_err_out;
-	ret = nla_put_u64_64bit(skb, QUOTA_NL_A_CAUSED_ID,
-				from_kuid_munged(&init_user_ns, current_uid()),
-				QUOTA_NL_A_PAD);
+	ret = nla_put_u64(skb, QUOTA_NL_A_CAUSED_ID,
+			  from_kuid_munged(&init_user_ns, current_uid()));
 	if (ret)
 		goto attr_err_out;
 	genlmsg_end(skb, msg_head);
@@ -99,4 +106,5 @@ static int __init quota_init(void)
 		       "VFS: Failed to create quota netlink interface.\n");
 	return 0;
 };
-fs_initcall(quota_init);
+
+module_init(quota_init);

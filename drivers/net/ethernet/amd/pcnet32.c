@@ -61,7 +61,7 @@ static const char *const version =
 /*
  * PCI device identifiers for "new style" Linux PCI Device Drivers
  */
-static const struct pci_device_id pcnet32_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(pcnet32_pci_tbl) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_LANCE_HOME), },
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_LANCE), },
 
@@ -448,7 +448,7 @@ static void pcnet32_netif_stop(struct net_device *dev)
 {
 	struct pcnet32_private *lp = netdev_priv(dev);
 
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	napi_disable(&lp->napi);
 	netif_tx_disable(dev);
 }
@@ -481,32 +481,37 @@ static void pcnet32_realloc_tx_ring(struct net_device *dev,
 	dma_addr_t *new_dma_addr_list;
 	struct pcnet32_tx_head *new_tx_ring;
 	struct sk_buff **new_skb_list;
-	unsigned int entries = BIT(size);
 
 	pcnet32_purge_tx_ring(dev);
 
-	new_tx_ring =
-		pci_zalloc_consistent(lp->pci_dev,
-				      sizeof(struct pcnet32_tx_head) * entries,
-				      &new_ring_dma_addr);
-	if (new_tx_ring == NULL)
+	new_tx_ring = pci_alloc_consistent(lp->pci_dev,
+					   sizeof(struct pcnet32_tx_head) *
+					   (1 << size),
+					   &new_ring_dma_addr);
+	if (new_tx_ring == NULL) {
+		netif_err(lp, drv, dev, "Consistent memory allocation failed\n");
 		return;
+	}
+	memset(new_tx_ring, 0, sizeof(struct pcnet32_tx_head) * (1 << size));
 
-	new_dma_addr_list = kcalloc(entries, sizeof(dma_addr_t), GFP_ATOMIC);
+	new_dma_addr_list = kcalloc(1 << size, sizeof(dma_addr_t),
+				    GFP_ATOMIC);
 	if (!new_dma_addr_list)
 		goto free_new_tx_ring;
 
-	new_skb_list = kcalloc(entries, sizeof(struct sk_buff *), GFP_ATOMIC);
+	new_skb_list = kcalloc(1 << size, sizeof(struct sk_buff *),
+			       GFP_ATOMIC);
 	if (!new_skb_list)
 		goto free_new_lists;
 
 	kfree(lp->tx_skbuff);
 	kfree(lp->tx_dma_addr);
 	pci_free_consistent(lp->pci_dev,
-			    sizeof(struct pcnet32_tx_head) * lp->tx_ring_size,
-			    lp->tx_ring, lp->tx_ring_dma_addr);
+			    sizeof(struct pcnet32_tx_head) *
+			    lp->tx_ring_size, lp->tx_ring,
+			    lp->tx_ring_dma_addr);
 
-	lp->tx_ring_size = entries;
+	lp->tx_ring_size = (1 << size);
 	lp->tx_mod_mask = lp->tx_ring_size - 1;
 	lp->tx_len_bits = (size << 12);
 	lp->tx_ring = new_tx_ring;
@@ -519,7 +524,8 @@ free_new_lists:
 	kfree(new_dma_addr_list);
 free_new_tx_ring:
 	pci_free_consistent(lp->pci_dev,
-			    sizeof(struct pcnet32_tx_head) * entries,
+			    sizeof(struct pcnet32_tx_head) *
+			    (1 << size),
 			    new_tx_ring,
 			    new_ring_dma_addr);
 }
@@ -543,14 +549,17 @@ static void pcnet32_realloc_rx_ring(struct net_device *dev,
 	struct pcnet32_rx_head *new_rx_ring;
 	struct sk_buff **new_skb_list;
 	int new, overlap;
-	unsigned int entries = BIT(size);
+	unsigned int entries = 1 << size;
 
-	new_rx_ring =
-		pci_zalloc_consistent(lp->pci_dev,
-				      sizeof(struct pcnet32_rx_head) * entries,
-				      &new_ring_dma_addr);
-	if (new_rx_ring == NULL)
+	new_rx_ring = pci_alloc_consistent(lp->pci_dev,
+					   sizeof(struct pcnet32_rx_head) *
+					   entries,
+					   &new_ring_dma_addr);
+	if (new_rx_ring == NULL) {
+		netif_err(lp, drv, dev, "Consistent memory allocation failed\n");
 		return;
+	}
+	memset(new_rx_ring, 0, sizeof(struct pcnet32_rx_head) * entries);
 
 	new_dma_addr_list = kcalloc(entries, sizeof(dma_addr_t), GFP_ATOMIC);
 	if (!new_dma_addr_list)
@@ -677,8 +686,7 @@ static void pcnet32_poll_controller(struct net_device *dev)
 }
 #endif
 
-static int pcnet32_get_link_ksettings(struct net_device *dev,
-				      struct ethtool_link_ksettings *cmd)
+static int pcnet32_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	struct pcnet32_private *lp = netdev_priv(dev);
 	unsigned long flags;
@@ -686,15 +694,14 @@ static int pcnet32_get_link_ksettings(struct net_device *dev,
 
 	if (lp->mii) {
 		spin_lock_irqsave(&lp->lock, flags);
-		mii_ethtool_get_link_ksettings(&lp->mii_if, cmd);
+		mii_ethtool_gset(&lp->mii_if, cmd);
 		spin_unlock_irqrestore(&lp->lock, flags);
 		r = 0;
 	}
 	return r;
 }
 
-static int pcnet32_set_link_ksettings(struct net_device *dev,
-				      const struct ethtool_link_ksettings *cmd)
+static int pcnet32_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	struct pcnet32_private *lp = netdev_priv(dev);
 	unsigned long flags;
@@ -702,7 +709,7 @@ static int pcnet32_set_link_ksettings(struct net_device *dev,
 
 	if (lp->mii) {
 		spin_lock_irqsave(&lp->lock, flags);
-		r = mii_ethtool_set_link_ksettings(&lp->mii_if, cmd);
+		r = mii_ethtool_sset(&lp->mii_if, cmd);
 		spin_unlock_irqrestore(&lp->lock, flags);
 	}
 	return r;
@@ -1442,6 +1449,8 @@ static void pcnet32_get_regs(struct net_device *dev, struct ethtool_regs *regs,
 }
 
 static const struct ethtool_ops pcnet32_ethtool_ops = {
+	.get_settings		= pcnet32_get_settings,
+	.set_settings		= pcnet32_set_settings,
 	.get_drvinfo		= pcnet32_get_drvinfo,
 	.get_msglevel		= pcnet32_get_msglevel,
 	.set_msglevel		= pcnet32_set_msglevel,
@@ -1455,8 +1464,6 @@ static const struct ethtool_ops pcnet32_ethtool_ops = {
 	.get_regs_len		= pcnet32_get_regs_len,
 	.get_regs		= pcnet32_get_regs,
 	.get_sset_count		= pcnet32_get_sset_count,
-	.get_link_ksettings	= pcnet32_get_link_ksettings,
-	.set_link_ksettings	= pcnet32_set_link_ksettings,
 };
 
 /* only probes for non-PCI devices, the rest are handled by
@@ -1502,11 +1509,10 @@ pcnet32_probe_pci(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return -ENODEV;
 	}
 
-	err = pci_set_dma_mask(pdev, PCNET32_DMA_MASK);
-	if (err) {
+	if (!pci_dma_supported(pdev, PCNET32_DMA_MASK)) {
 		if (pcnet32_debug & NETIF_MSG_PROBE)
 			pr_err("architecture does not support 32bit PCI busmaster DMA\n");
-		return err;
+		return -ENODEV;
 	}
 	if (!request_region(ioaddr, PCNET32_TOTAL_SIZE, "pcnet32_probe_pci")) {
 		if (pcnet32_debug & NETIF_MSG_PROBE)
@@ -1529,6 +1535,7 @@ static const struct net_device_ops pcnet32_netdev_ops = {
 	.ndo_get_stats		= pcnet32_get_stats,
 	.ndo_set_rx_mode	= pcnet32_set_multicast_list,
 	.ndo_do_ioctl		= pcnet32_ioctl,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -1545,7 +1552,7 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 {
 	struct pcnet32_private *lp;
 	int i, media;
-	int fdx, mii, fset, dxsuflo, sram;
+	int fdx, mii, fset, dxsuflo;
 	int chip_version;
 	char *chipname;
 	struct net_device *dev;
@@ -1582,7 +1589,7 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 	}
 
 	/* initialize variables */
-	fdx = mii = fset = dxsuflo = sram = 0;
+	fdx = mii = fset = dxsuflo = 0;
 	chip_version = (chip_version >> 12) & 0xffff;
 
 	switch (chip_version) {
@@ -1615,7 +1622,6 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 		chipname = "PCnet/FAST III 79C973";	/* PCI */
 		fdx = 1;
 		mii = 1;
-		sram = 1;
 		break;
 	case 0x2626:
 		chipname = "PCnet/Home 79C978";	/* PCI */
@@ -1639,7 +1645,6 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 		chipname = "PCnet/FAST III 79C975";	/* PCI */
 		fdx = 1;
 		mii = 1;
-		sram = 1;
 		break;
 	case 0x2628:
 		chipname = "PCnet/PRO 79C976";
@@ -1666,31 +1671,6 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 		a->write_csr(ioaddr, 80,
 			     (a->read_csr(ioaddr, 80) & 0x0C00) | 0x0c00);
 		dxsuflo = 1;
-	}
-
-	/*
-	 * The Am79C973/Am79C975 controllers come with 12K of SRAM
-	 * which we can use for the Tx/Rx buffers but most importantly,
-	 * the use of SRAM allow us to use the BCR18:NOUFLO bit to avoid
-	 * Tx fifo underflows.
-	 */
-	if (sram) {
-		/*
-		 * The SRAM is being configured in two steps. First we
-		 * set the SRAM size in the BCR25:SRAM_SIZE bits. According
-		 * to the datasheet, each bit corresponds to a 512-byte
-		 * page so we can have at most 24 pages. The SRAM_SIZE
-		 * holds the value of the upper 8 bits of the 16-bit SRAM size.
-		 * The low 8-bits start at 0x00 and end at 0xff. So the
-		 * address range is from 0x0000 up to 0x17ff. Therefore,
-		 * the SRAM_SIZE is set to 0x17. The next step is to set
-		 * the BCR26:SRAM_BND midway through so the Tx and Rx
-		 * buffers can share the SRAM equally.
-		 */
-		a->write_bcr(ioaddr, 25, 0x17);
-		a->write_bcr(ioaddr, 26, 0xc);
-		/* And finally enable the NOUFLO bit */
-		a->write_bcr(ioaddr, 18, a->read_bcr(ioaddr, 18) | (1 << 11));
 	}
 
 	dev = alloc_etherdev(sizeof(*lp));
@@ -1737,7 +1717,7 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 
 	/* if the ethernet address is not valid, force to 00:00:00:00:00:00 */
 	if (!is_valid_ether_addr(dev->dev_addr))
-		eth_zero_addr(dev->dev_addr);
+		memset(dev->dev_addr, 0, ETH_ALEN);
 
 	if (pcnet32_debug & NETIF_MSG_PROBE) {
 		pr_cont(" %pM", dev->dev_addr);
@@ -2427,7 +2407,7 @@ static void pcnet32_tx_timeout(struct net_device *dev)
 	}
 	pcnet32_restart(dev, CSR0_NORMAL);
 
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 
 	spin_unlock_irqrestore(&lp->lock, flags);
@@ -2835,7 +2815,7 @@ static void pcnet32_check_media(struct net_device *dev, int verbose)
 
 /*
  * Check for loss of link and link establishment.
- * Could possibly be changed to use mii_check_media instead.
+ * Can not use mii_check_media because it does nothing if mode is forced.
  */
 
 static void pcnet32_watchdog(struct net_device *dev)

@@ -52,10 +52,11 @@ static int fc0013_readreg(struct fc0013_priv *priv, u8 reg, u8 *val)
 	return 0;
 }
 
-static void fc0013_release(struct dvb_frontend *fe)
+static int fc0013_release(struct dvb_frontend *fe)
 {
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
+	return 0;
 }
 
 static int fc0013_init(struct dvb_frontend *fe)
@@ -216,6 +217,8 @@ static int fc0013_set_vhf_track(struct fc0013_priv *priv, u32 freq)
 	} else {			/* UHF and GPS */
 		ret = fc0013_writereg(priv, 0x1d, tmp | 0x1c);
 	}
+	if (ret)
+		goto error_out;
 error_out:
 	return ret;
 }

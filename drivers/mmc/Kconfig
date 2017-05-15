@@ -23,6 +23,8 @@ if MMC
 
 source "drivers/mmc/core/Kconfig"
 
+source "drivers/mmc/card/Kconfig"
+
 source "drivers/mmc/host/Kconfig"
 
 endif # MMC

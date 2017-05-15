@@ -17,6 +17,10 @@
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
 /*
@@ -127,7 +131,7 @@ static struct pci_driver nforce2_driver;
 
 /* For multiplexing support, we need a global reference to the 1st
    SMBus channel */
-#if IS_ENABLED(CONFIG_I2C_NFORCE2_S4985)
+#if defined CONFIG_I2C_NFORCE2_S4985 || defined CONFIG_I2C_NFORCE2_S4985_MODULE
 struct i2c_adapter *nforce2_smbus;
 EXPORT_SYMBOL_GPL(nforce2_smbus);
 
@@ -366,6 +370,7 @@ static int nforce2_probe_smb(struct pci_dev *dev, int bar, int alt_reg,
 
 	error = i2c_add_adapter(&smbus->adapter);
 	if (error) {
+		dev_err(&smbus->adapter.dev, "Failed to register adapter.\n");
 		release_region(smbus->base, smbus->size);
 		return error;
 	}

@@ -15,7 +15,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Authors	Mitsuru KANDA  <mk@linux-ipv6.org>
- *		YOSHIFUJI Hideaki <yoshfuji@linux-ipv6.org>
+ * 		YOSHIFUJI Hideaki <yoshfuji@linux-ipv6.org>
  *
  * Based on net/ipv4/xfrm4_tunnel.c
  *
@@ -44,7 +44,7 @@ struct xfrm6_tunnel_net {
 	u32 spi;
 };
 
-static unsigned int xfrm6_tunnel_net_id __read_mostly;
+static int xfrm6_tunnel_net_id __read_mostly;
 static inline struct xfrm6_tunnel_net *xfrm6_tunnel_pernet(struct net *net)
 {
 	return net_generic(net, xfrm6_tunnel_net_id);
@@ -110,6 +110,7 @@ __be32 xfrm6_tunnel_spi_lookup(struct net *net, const xfrm_address_t *saddr)
 	rcu_read_unlock_bh();
 	return htonl(spi);
 }
+
 EXPORT_SYMBOL(xfrm6_tunnel_spi_lookup);
 
 static int __xfrm6_tunnel_spi_check(struct net *net, u32 spi)
@@ -186,6 +187,7 @@ __be32 xfrm6_tunnel_alloc_spi(struct net *net, xfrm_address_t *saddr)
 
 	return htonl(spi);
 }
+
 EXPORT_SYMBOL(xfrm6_tunnel_alloc_spi);
 
 static void x6spi_destroy_rcu(struct rcu_head *head)
@@ -236,7 +238,7 @@ static int xfrm6_tunnel_rcv(struct sk_buff *skb)
 	__be32 spi;
 
 	spi = xfrm6_tunnel_spi_lookup(net, (const xfrm_address_t *)&iph->saddr);
-	return xfrm6_rcv_spi(skb, IPPROTO_IPV6, spi, NULL);
+	return xfrm6_rcv_spi(skb, IPPROTO_IPV6, spi);
 }
 
 static int xfrm6_tunnel_err(struct sk_buff *skb, struct inet6_skb_parm *opt,

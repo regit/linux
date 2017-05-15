@@ -364,16 +364,16 @@ static int tlv320aic23_hw_params(struct snd_pcm_substream *substream,
 
 	iface_reg = snd_soc_read(codec, TLV320AIC23_DIGT_FMT) & ~(0x03 << 2);
 
-	switch (params_width(params)) {
-	case 16:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S16_LE:
 		break;
-	case 20:
+	case SNDRV_PCM_FORMAT_S20_3LE:
 		iface_reg |= (0x01 << 2);
 		break;
-	case 24:
+	case SNDRV_PCM_FORMAT_S24_LE:
 		iface_reg |= (0x02 << 2);
 		break;
-	case 32:
+	case SNDRV_PCM_FORMAT_S32_LE:
 		iface_reg |= (0x03 << 2);
 		break;
 	}
@@ -506,6 +506,7 @@ static int tlv320aic23_set_bias_level(struct snd_soc_codec *codec,
 		snd_soc_write(codec, TLV320AIC23_PWR, 0x1ff);
 		break;
 	}
+	codec->dapm.bias_level = level;
 	return 0;
 }
 
@@ -539,11 +540,19 @@ static struct snd_soc_dai_driver tlv320aic23_dai = {
 	.ops = &tlv320aic23_dai_ops,
 };
 
+static int tlv320aic23_suspend(struct snd_soc_codec *codec)
+{
+	tlv320aic23_set_bias_level(codec, SND_SOC_BIAS_OFF);
+
+	return 0;
+}
+
 static int tlv320aic23_resume(struct snd_soc_codec *codec)
 {
 	struct aic23 *aic23 = snd_soc_codec_get_drvdata(codec);
 	regcache_mark_dirty(aic23->regmap);
 	regcache_sync(aic23->regmap);
+	tlv320aic23_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	return 0;
 }
@@ -552,6 +561,9 @@ static int tlv320aic23_codec_probe(struct snd_soc_codec *codec)
 {
 	/* Reset codec */
 	snd_soc_write(codec, TLV320AIC23_RESET, 0);
+
+	/* power on device */
+	tlv320aic23_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	snd_soc_write(codec, TLV320AIC23_DIGT, TLV320AIC23_DEEMP_44K);
 
@@ -577,20 +589,24 @@ static int tlv320aic23_codec_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
+static int tlv320aic23_remove(struct snd_soc_codec *codec)
+{
+	tlv320aic23_set_bias_level(codec, SND_SOC_BIAS_OFF);
+	return 0;
+}
+
 static struct snd_soc_codec_driver soc_codec_dev_tlv320aic23 = {
 	.probe = tlv320aic23_codec_probe,
+	.remove = tlv320aic23_remove,
+	.suspend = tlv320aic23_suspend,
 	.resume = tlv320aic23_resume,
 	.set_bias_level = tlv320aic23_set_bias_level,
-	.suspend_bias_off = true,
-
-	.component_driver = {
-		.controls		= tlv320aic23_snd_controls,
-		.num_controls		= ARRAY_SIZE(tlv320aic23_snd_controls),
-		.dapm_widgets		= tlv320aic23_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(tlv320aic23_dapm_widgets),
-		.dapm_routes		= tlv320aic23_intercon,
-		.num_dapm_routes	= ARRAY_SIZE(tlv320aic23_intercon),
-	},
+	.controls = tlv320aic23_snd_controls,
+	.num_controls = ARRAY_SIZE(tlv320aic23_snd_controls),
+	.dapm_widgets = tlv320aic23_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(tlv320aic23_dapm_widgets),
+	.dapm_routes = tlv320aic23_intercon,
+	.num_dapm_routes = ARRAY_SIZE(tlv320aic23_intercon),
 };
 
 int tlv320aic23_probe(struct device *dev, struct regmap *regmap)

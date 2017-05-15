@@ -70,7 +70,7 @@
 #include <linux/platform_device.h>
 
 #include <asm/setup.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/amigahw.h>
 #include <asm/amigaints.h>
 #include <asm/irq.h>
@@ -1864,6 +1864,7 @@ static int __exit amiga_floppy_remove(struct platform_device *pdev)
 static struct platform_driver amiga_floppy_driver = {
 	.driver   = {
 		.name	= "amiga-floppy",
+		.owner	= THIS_MODULE,
 	},
 };
 

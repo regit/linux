@@ -1,5 +1,5 @@
 /*
- * Linux network driver for QLogic BR-series Converged Network Adapter.
+ * Linux network driver for Brocade Converged Network Adapter.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License (GPL) Version 2 as
@@ -11,10 +11,9 @@
  * General Public License for more details.
  */
 /*
- * Copyright (c) 2005-2014 Brocade Communications Systems, Inc.
- * Copyright (c) 2014-2015 QLogic Corporation
+ * Copyright (c) 2005-2010 Brocade Communications Systems, Inc.
  * All rights reserved
- * www.qlogic.com
+ * www.brocade.com
  */
 
 #include "cna.h"
@@ -31,10 +30,15 @@
 #define BNAD_NUM_TXF_COUNTERS 12
 #define BNAD_NUM_RXF_COUNTERS 10
 #define BNAD_NUM_CQ_COUNTERS (3 + 5)
-#define BNAD_NUM_RXQ_COUNTERS 7
+#define BNAD_NUM_RXQ_COUNTERS 6
 #define BNAD_NUM_TXQ_COUNTERS 5
 
-static const char *bnad_net_stats_strings[] = {
+#define BNAD_ETHTOOL_STATS_NUM						\
+	(sizeof(struct rtnl_link_stats64) / sizeof(u64) +	\
+	sizeof(struct bnad_drv_stats) / sizeof(u64) +		\
+	offsetof(struct bfi_enet_stats, rxf_stats[0]) / sizeof(u64))
+
+static const char *bnad_net_stats_strings[BNAD_ETHTOOL_STATS_NUM] = {
 	"rx_packets",
 	"tx_packets",
 	"rx_bytes",
@@ -45,10 +49,22 @@ static const char *bnad_net_stats_strings[] = {
 	"tx_dropped",
 	"multicast",
 	"collisions",
+
 	"rx_length_errors",
+	"rx_over_errors",
 	"rx_crc_errors",
 	"rx_frame_errors",
+	"rx_fifo_errors",
+	"rx_missed_errors",
+
+	"tx_aborted_errors",
+	"tx_carrier_errors",
 	"tx_fifo_errors",
+	"tx_heartbeat_errors",
+	"tx_window_errors",
+
+	"rx_compressed",
+	"tx_compressed",
 
 	"netif_queue_stop",
 	"netif_queue_wakeup",
@@ -73,7 +89,6 @@ static const char *bnad_net_stats_strings[] = {
 	"tx_skb_headlen_zero",
 	"tx_skb_frag_zero",
 	"tx_skb_len_mismatch",
-	"tx_skb_map_failed",
 	"hw_stats_updates",
 	"netif_rx_dropped",
 
@@ -86,7 +101,6 @@ static const char *bnad_net_stats_strings[] = {
 	"tx_unmap_q_alloc_failed",
 	"rx_unmap_q_alloc_failed",
 	"rxbuf_alloc_failed",
-	"rxbuf_map_failed",
 
 	"mac_stats_clr_cnt",
 	"mac_frame_64",
@@ -237,49 +251,41 @@ static const char *bnad_net_stats_strings[] = {
 	"fc_tx_fid_parity_errors",
 };
 
-#define BNAD_ETHTOOL_STATS_NUM	ARRAY_SIZE(bnad_net_stats_strings)
-
 static int
-bnad_get_link_ksettings(struct net_device *netdev,
-			struct ethtool_link_ksettings *cmd)
+bnad_get_settings(struct net_device *netdev, struct ethtool_cmd *cmd)
 {
-	u32 supported, advertising;
-
-	supported = SUPPORTED_10000baseT_Full;
-	advertising = ADVERTISED_10000baseT_Full;
-	cmd->base.autoneg = AUTONEG_DISABLE;
-	supported |= SUPPORTED_FIBRE;
-	advertising |= ADVERTISED_FIBRE;
-	cmd->base.port = PORT_FIBRE;
-	cmd->base.phy_address = 0;
+	cmd->supported = SUPPORTED_10000baseT_Full;
+	cmd->advertising = ADVERTISED_10000baseT_Full;
+	cmd->autoneg = AUTONEG_DISABLE;
+	cmd->supported |= SUPPORTED_FIBRE;
+	cmd->advertising |= ADVERTISED_FIBRE;
+	cmd->port = PORT_FIBRE;
+	cmd->phy_address = 0;
 
 	if (netif_carrier_ok(netdev)) {
-		cmd->base.speed = SPEED_10000;
-		cmd->base.duplex = DUPLEX_FULL;
+		ethtool_cmd_speed_set(cmd, SPEED_10000);
+		cmd->duplex = DUPLEX_FULL;
 	} else {
-		cmd->base.speed = SPEED_UNKNOWN;
-		cmd->base.duplex = DUPLEX_UNKNOWN;
+		ethtool_cmd_speed_set(cmd, SPEED_UNKNOWN);
+		cmd->duplex = DUPLEX_UNKNOWN;
 	}
-
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported,
-						supported);
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.advertising,
-						advertising);
+	cmd->transceiver = XCVR_EXTERNAL;
+	cmd->maxtxpkt = 0;
+	cmd->maxrxpkt = 0;
 
 	return 0;
 }
 
 static int
-bnad_set_link_ksettings(struct net_device *netdev,
-			const struct ethtool_link_ksettings *cmd)
+bnad_set_settings(struct net_device *netdev, struct ethtool_cmd *cmd)
 {
 	/* 10G full duplex setting supported only */
-	if (cmd->base.autoneg == AUTONEG_ENABLE)
-		return -EOPNOTSUPP;
-
-	if ((cmd->base.speed == SPEED_10000) &&
-	    (cmd->base.duplex == DUPLEX_FULL))
-		return 0;
+	if (cmd->autoneg == AUTONEG_ENABLE)
+		return -EOPNOTSUPP; else {
+		if ((ethtool_cmd_speed(cmd) == SPEED_10000)
+		    && (cmd->duplex == DUPLEX_FULL))
+			return 0;
+	}
 
 	return -EOPNOTSUPP;
 }
@@ -438,13 +444,13 @@ bnad_set_ringparam(struct net_device *netdev,
 
 	if (ringparam->rx_pending < BNAD_MIN_Q_DEPTH ||
 	    ringparam->rx_pending > BNAD_MAX_RXQ_DEPTH ||
-	    !is_power_of_2(ringparam->rx_pending)) {
+	    !BNA_POWER_OF_2(ringparam->rx_pending)) {
 		mutex_unlock(&bnad->conf_mutex);
 		return -EINVAL;
 	}
 	if (ringparam->tx_pending < BNAD_MIN_Q_DEPTH ||
 	    ringparam->tx_pending > BNAD_MAX_TXQ_DEPTH ||
-	    !is_power_of_2(ringparam->tx_pending)) {
+	    !BNA_POWER_OF_2(ringparam->tx_pending)) {
 		mutex_unlock(&bnad->conf_mutex);
 		return -EINVAL;
 	}
@@ -526,7 +532,7 @@ bnad_set_pauseparam(struct net_device *netdev,
 		pause_config.rx_pause = pauseparam->rx_pause;
 		pause_config.tx_pause = pauseparam->tx_pause;
 		spin_lock_irqsave(&bnad->bna_lock, flags);
-		bna_enet_pause_config(&bnad->bna.enet, &pause_config);
+		bna_enet_pause_config(&bnad->bna.enet, &pause_config, NULL);
 		spin_unlock_irqrestore(&bnad->bna_lock, flags);
 	}
 	mutex_unlock(&bnad->conf_mutex);
@@ -649,8 +655,6 @@ bnad_get_strings(struct net_device *netdev, u32 stringset, u8 *string)
 				string += ETH_GSTRING_LEN;
 				sprintf(string, "rxq%d_allocbuf_failed", q_num);
 				string += ETH_GSTRING_LEN;
-				sprintf(string, "rxq%d_mapbuf_failed", q_num);
-				string += ETH_GSTRING_LEN;
 				sprintf(string, "rxq%d_producer_index", q_num);
 				string += ETH_GSTRING_LEN;
 				sprintf(string, "rxq%d_consumer_index", q_num);
@@ -670,9 +674,6 @@ bnad_get_strings(struct net_device *netdev, u32 stringset, u8 *string)
 					string += ETH_GSTRING_LEN;
 					sprintf(string, "rxq%d_allocbuf_failed",
 								q_num);
-					string += ETH_GSTRING_LEN;
-					sprintf(string, "rxq%d_mapbuf_failed",
-						q_num);
 					string += ETH_GSTRING_LEN;
 					sprintf(string, "rxq%d_producer_index",
 								q_num);
@@ -805,7 +806,6 @@ bnad_per_q_stats_fill(struct bnad *bnad, u64 *buf, int bi)
 							rx_packets_with_error;
 					buf[bi++] = rcb->rxq->
 							rxbuf_alloc_failed;
-					buf[bi++] = rcb->rxq->rxbuf_map_failed;
 					buf[bi++] = rcb->producer_index;
 					buf[bi++] = rcb->consumer_index;
 				}
@@ -820,7 +820,6 @@ bnad_per_q_stats_fill(struct bnad *bnad, u64 *buf, int bi)
 							rx_packets_with_error;
 					buf[bi++] = rcb->rxq->
 							rxbuf_alloc_failed;
-					buf[bi++] = rcb->rxq->rxbuf_map_failed;
 					buf[bi++] = rcb->producer_index;
 					buf[bi++] = rcb->consumer_index;
 				}
@@ -850,9 +849,9 @@ bnad_get_ethtool_stats(struct net_device *netdev, struct ethtool_stats *stats,
 		       u64 *buf)
 {
 	struct bnad *bnad = netdev_priv(netdev);
-	int i, j, bi = 0;
+	int i, j, bi;
 	unsigned long flags;
-	struct rtnl_link_stats64 net_stats64;
+	struct rtnl_link_stats64 *net_stats64;
 	u64 *stats64;
 	u32 bmap;
 
@@ -867,25 +866,14 @@ bnad_get_ethtool_stats(struct net_device *netdev, struct ethtool_stats *stats,
 	 * under the same lock
 	 */
 	spin_lock_irqsave(&bnad->bna_lock, flags);
+	bi = 0;
+	memset(buf, 0, stats->n_stats * sizeof(u64));
 
-	memset(&net_stats64, 0, sizeof(net_stats64));
-	bnad_netdev_qstats_fill(bnad, &net_stats64);
-	bnad_netdev_hwstats_fill(bnad, &net_stats64);
+	net_stats64 = (struct rtnl_link_stats64 *)buf;
+	bnad_netdev_qstats_fill(bnad, net_stats64);
+	bnad_netdev_hwstats_fill(bnad, net_stats64);
 
-	buf[bi++] = net_stats64.rx_packets;
-	buf[bi++] = net_stats64.tx_packets;
-	buf[bi++] = net_stats64.rx_bytes;
-	buf[bi++] = net_stats64.tx_bytes;
-	buf[bi++] = net_stats64.rx_errors;
-	buf[bi++] = net_stats64.tx_errors;
-	buf[bi++] = net_stats64.rx_dropped;
-	buf[bi++] = net_stats64.tx_dropped;
-	buf[bi++] = net_stats64.multicast;
-	buf[bi++] = net_stats64.collisions;
-	buf[bi++] = net_stats64.rx_length_errors;
-	buf[bi++] = net_stats64.rx_crc_errors;
-	buf[bi++] = net_stats64.rx_frame_errors;
-	buf[bi++] = net_stats64.tx_fifo_errors;
+	bi = sizeof(*net_stats64) / sizeof(u64);
 
 	/* Get netif_queue_stopped from stack */
 	bnad->stats.drv_stats.netif_queue_stopped = netif_queue_stopped(netdev);
@@ -1009,8 +997,10 @@ bnad_get_eeprom(struct net_device *netdev, struct ethtool_eeprom *eeprom,
 	unsigned long flags = 0;
 	int ret = 0;
 
-	/* Fill the magic value */
-	eeprom->magic = bnad->pcidev->vendor | (bnad->pcidev->device << 16);
+	/* Check if the flash read request is valid */
+	if (eeprom->magic != (bnad->pcidev->vendor |
+			     (bnad->pcidev->device << 16)))
+		return -EFAULT;
 
 	/* Query the flash partition based on the offset */
 	flash_part = bnad_get_flash_partition_by_offset(bnad,
@@ -1091,7 +1081,7 @@ bnad_flash_device(struct net_device *netdev, struct ethtool_flash *eflash)
 
 	ret = request_firmware(&fw, eflash->data, &bnad->pcidev->dev);
 	if (ret) {
-		netdev_err(netdev, "can't load firmware %s\n", eflash->data);
+		pr_err("BNA: Can't locate firmware %s\n", eflash->data);
 		goto out;
 	}
 
@@ -1104,7 +1094,7 @@ bnad_flash_device(struct net_device *netdev, struct ethtool_flash *eflash)
 				bnad->id, (u8 *)fw->data, fw->size, 0,
 				bnad_cb_completion, &fcomp);
 	if (ret != BFA_STATUS_OK) {
-		netdev_warn(netdev, "flash update failed with err=%d\n", ret);
+		pr_warn("BNA: Flash update failed with err: %d\n", ret);
 		ret = -EIO;
 		spin_unlock_irq(&bnad->bna_lock);
 		goto out;
@@ -1114,9 +1104,8 @@ bnad_flash_device(struct net_device *netdev, struct ethtool_flash *eflash)
 	wait_for_completion(&fcomp.comp);
 	if (fcomp.comp_status != BFA_STATUS_OK) {
 		ret = -EIO;
-		netdev_warn(netdev,
-			    "firmware image update failed with err=%d\n",
-			    fcomp.comp_status);
+		pr_warn("BNA: Firmware image update to flash failed with: %d\n",
+			fcomp.comp_status);
 	}
 out:
 	release_firmware(fw);
@@ -1124,6 +1113,8 @@ out:
 }
 
 static const struct ethtool_ops bnad_ethtool_ops = {
+	.get_settings = bnad_get_settings,
+	.set_settings = bnad_set_settings,
 	.get_drvinfo = bnad_get_drvinfo,
 	.get_wol = bnad_get_wol,
 	.get_link = ethtool_op_get_link,
@@ -1141,8 +1132,6 @@ static const struct ethtool_ops bnad_ethtool_ops = {
 	.set_eeprom = bnad_set_eeprom,
 	.flash_device = bnad_flash_device,
 	.get_ts_info = ethtool_op_get_ts_info,
-	.get_link_ksettings = bnad_get_link_ksettings,
-	.set_link_ksettings = bnad_set_link_ksettings,
 };
 
 void

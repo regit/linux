@@ -21,7 +21,7 @@
 #include <asm/fpswa.h>
 #include <asm/intrinsics.h>
 #include <asm/processor.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/setup.h>
 
 fpswa_interface_t *fpswa_interface;
@@ -299,7 +299,7 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 
 	if (!(current->thread.flags & IA64_THREAD_FPEMU_NOPRINT))  {
 		unsigned long count, current_jiffies = jiffies;
-		struct fpu_swa_msg *cp = this_cpu_ptr(&cpulast);
+		struct fpu_swa_msg *cp = &__get_cpu_var(cpulast);
 
 		if (unlikely(current_jiffies > cp->time))
 			cp->count = 0;
@@ -548,7 +548,6 @@ ia64_fault (unsigned long vector, unsigned long isr, unsigned long ifa,
 			return;
 		}
 		switch (vector) {
-		      default:
 		      case 29:
 			siginfo.si_code = TRAP_HWBKPT;
 #ifdef CONFIG_ITANIUM

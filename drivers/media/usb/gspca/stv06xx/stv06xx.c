@@ -412,7 +412,8 @@ static void stv06xx_pkt_scan(struct gspca_dev *gspca_dev,
 		len -= 4;
 
 		if (len < chunk_len) {
-			PERR("URB packet length is smaller than the specified chunk length");
+			PERR("URB packet length is smaller"
+				" than the specified chunk length");
 			gspca_dev->last_packet_type = DISCARD_PACKET;
 			return;
 		}
@@ -454,7 +455,8 @@ frame_data:
 				sd->to_skip = gspca_dev->pixfmt.width * 4;
 
 			if (chunk_len)
-				PERR("Chunk length is non-zero on a SOF");
+				PERR("Chunk length is "
+					      "non-zero on a SOF");
 			break;
 
 		case 0x8002:
@@ -467,7 +469,8 @@ frame_data:
 					NULL, 0);
 
 			if (chunk_len)
-				PERR("Chunk length is non-zero on a EOF");
+				PERR("Chunk length is "
+					      "non-zero on a EOF");
 			break;
 
 		case 0x0005:
@@ -502,13 +505,13 @@ static int sd_int_pkt_scan(struct gspca_dev *gspca_dev,
 {
 	int ret = -EINVAL;
 
-	if (len == 1 && (data[0] == 0x80 || data[0] == 0x10)) {
+	if (len == 1 && data[0] == 0x80) {
 		input_report_key(gspca_dev->input_dev, KEY_CAMERA, 1);
 		input_sync(gspca_dev->input_dev);
 		ret = 0;
 	}
 
-	if (len == 1 && (data[0] == 0x88 || data[0] == 0x11)) {
+	if (len == 1 && data[0] == 0x88) {
 		input_report_key(gspca_dev->input_dev, KEY_CAMERA, 0);
 		input_sync(gspca_dev->input_dev);
 		ret = 0;
@@ -579,12 +582,18 @@ static int stv06xx_config(struct gspca_dev *gspca_dev,
 
 /* -- module initialisation -- */
 static const struct usb_device_id device_table[] = {
-	{USB_DEVICE(0x046d, 0x0840), .driver_info = BRIDGE_STV600 }, 	/* QuickCam Express */
-	{USB_DEVICE(0x046d, 0x0850), .driver_info = BRIDGE_STV610 },	/* LEGO cam / QuickCam Web */
-	{USB_DEVICE(0x046d, 0x0870), .driver_info = BRIDGE_STV602 },	/* Dexxa WebCam USB */
-	{USB_DEVICE(0x046D, 0x08F0), .driver_info = BRIDGE_ST6422 },	/* QuickCam Messenger */
-	{USB_DEVICE(0x046D, 0x08F5), .driver_info = BRIDGE_ST6422 },	/* QuickCam Communicate */
-	{USB_DEVICE(0x046D, 0x08F6), .driver_info = BRIDGE_ST6422 },	/* QuickCam Messenger (new) */
+	/* QuickCam Express */
+	{USB_DEVICE(0x046d, 0x0840), .driver_info = BRIDGE_STV600 },
+	/* LEGO cam / QuickCam Web */
+	{USB_DEVICE(0x046d, 0x0850), .driver_info = BRIDGE_STV610 },
+	/* Dexxa WebCam USB */
+	{USB_DEVICE(0x046d, 0x0870), .driver_info = BRIDGE_STV602 },
+	/* QuickCam Messenger */
+	{USB_DEVICE(0x046D, 0x08F0), .driver_info = BRIDGE_ST6422 },
+	/* QuickCam Communicate */
+	{USB_DEVICE(0x046D, 0x08F5), .driver_info = BRIDGE_ST6422 },
+	/* QuickCam Messenger (new) */
+	{USB_DEVICE(0x046D, 0x08F6), .driver_info = BRIDGE_ST6422 },
 	{}
 };
 MODULE_DEVICE_TABLE(usb, device_table);

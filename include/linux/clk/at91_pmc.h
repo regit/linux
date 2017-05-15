@@ -16,6 +16,18 @@
 #ifndef AT91_PMC_H
 #define AT91_PMC_H
 
+#ifndef __ASSEMBLY__
+extern void __iomem *at91_pmc_base;
+
+#define at91_pmc_read(field) \
+	__raw_readl(at91_pmc_base + field)
+
+#define at91_pmc_write(field, value) \
+	__raw_writel(value, at91_pmc_base + field)
+#else
+.extern at91_pmc_base
+#endif
+
 #define	AT91_PMC_SCER		0x00			/* System Clock Enable Register */
 #define	AT91_PMC_SCDR		0x04			/* System Clock Disable Register */
 
@@ -113,7 +125,6 @@
 #define		AT91_PMC_PLLADIV2	(1 << 12)		/* PLLA divisor by 2 [some SAM9 only] */
 #define			AT91_PMC_PLLADIV2_OFF		(0 << 12)
 #define			AT91_PMC_PLLADIV2_ON		(1 << 12)
-#define		AT91_PMC_H32MXDIV	BIT(24)
 
 #define	AT91_PMC_USB		0x38			/* USB Clock Register [some SAM9 only] */
 #define		AT91_PMC_USBS		(0x1 <<  0)		/* USB OHCI Input clock selection */
@@ -152,7 +163,6 @@
 #define		AT91_PMC_MOSCSELS	(1 << 16)		/* Main Oscillator Selection [some SAM9] */
 #define		AT91_PMC_MOSCRCS	(1 << 17)		/* Main On-Chip RC [some SAM9] */
 #define		AT91_PMC_CFDEV		(1 << 18)		/* Clock Failure Detector Event [some SAM9] */
-#define		AT91_PMC_GCKRDY		(1 << 24)		/* Generated Clocks */
 #define	AT91_PMC_IMR		0x6c			/* Interrupt Mask Register */
 
 #define AT91_PMC_PLLICPR	0x80			/* PLL Charge Pump Current Register */
@@ -171,18 +181,13 @@
 #define AT91_PMC_PCSR1		0x108			/* Peripheral Clock Enable Register 1 */
 
 #define AT91_PMC_PCR		0x10c			/* Peripheral Control Register [some SAM9 and SAMA5] */
-#define		AT91_PMC_PCR_PID_MASK		0x3f
-#define		AT91_PMC_PCR_GCKCSS_OFFSET	8
-#define		AT91_PMC_PCR_GCKCSS_MASK	(0x7  << AT91_PMC_PCR_GCKCSS_OFFSET)
-#define		AT91_PMC_PCR_GCKCSS(n)		((n)  << AT91_PMC_PCR_GCKCSS_OFFSET)	/* GCK Clock Source Selection */
-#define		AT91_PMC_PCR_CMD		(0x1  <<  12)				/* Command (read=0, write=1) */
-#define		AT91_PMC_PCR_DIV_OFFSET		16
-#define		AT91_PMC_PCR_DIV_MASK		(0x3  << AT91_PMC_PCR_DIV_OFFSET)
-#define		AT91_PMC_PCR_DIV(n)		((n)  << AT91_PMC_PCR_DIV_OFFSET)	/* Divisor Value */
-#define		AT91_PMC_PCR_GCKDIV_OFFSET	20
-#define		AT91_PMC_PCR_GCKDIV_MASK	(0xff  << AT91_PMC_PCR_GCKDIV_OFFSET)
-#define		AT91_PMC_PCR_GCKDIV(n)		((n)  << AT91_PMC_PCR_GCKDIV_OFFSET)	/* Generated Clock Divisor Value */
-#define		AT91_PMC_PCR_EN			(0x1  <<  28)				/* Enable */
-#define		AT91_PMC_PCR_GCKEN		(0x1  <<  29)				/* GCK Enable */
+#define		AT91_PMC_PCR_PID	(0x3f  <<  0)		/* Peripheral ID */
+#define		AT91_PMC_PCR_CMD	(0x1  <<  12)		/* Command (read=0, write=1) */
+#define		AT91_PMC_PCR_DIV(n)	((n)  <<  16)		/* Divisor Value */
+#define			AT91_PMC_PCR_DIV0	0x0			/* Peripheral clock is MCK */
+#define			AT91_PMC_PCR_DIV2	0x1			/* Peripheral clock is MCK/2 */
+#define			AT91_PMC_PCR_DIV4	0x2			/* Peripheral clock is MCK/4 */
+#define			AT91_PMC_PCR_DIV8	0x3			/* Peripheral clock is MCK/8 */
+#define		AT91_PMC_PCR_EN		(0x1  <<  28)		/* Enable */
 
 #endif

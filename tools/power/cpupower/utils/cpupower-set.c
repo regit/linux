@@ -12,12 +12,13 @@
 #include <string.h>
 #include <getopt.h>
 
+#include <cpufreq.h>
 #include "helpers/helpers.h"
 #include "helpers/sysfs.h"
 #include "helpers/bitmask.h"
 
 static struct option set_opts[] = {
-	{"perf-bias", required_argument, NULL, 'b'},
+	{ .name = "perf-bias",	.has_arg = required_argument,	.flag = NULL,	.val = 'b'},
 	{ },
 };
 
@@ -77,14 +78,9 @@ int cmd_set(int argc, char **argv)
 	for (cpu = bitmask_first(cpus_chosen);
 	     cpu <= bitmask_last(cpus_chosen); cpu++) {
 
-		if (!bitmask_isbitset(cpus_chosen, cpu))
+		if (!bitmask_isbitset(cpus_chosen, cpu) ||
+		    cpufreq_cpu_exists(cpu))
 			continue;
-
-		if (sysfs_is_cpu_online(cpu) != 1){
-			fprintf(stderr, _("Cannot set values on CPU %d:"), cpu);
-			fprintf(stderr, _(" *is offline\n"));
-			continue;
-		}
 
 		if (params.perf_bias) {
 			ret = msr_intel_set_perf_bias(cpu, perf_bias);

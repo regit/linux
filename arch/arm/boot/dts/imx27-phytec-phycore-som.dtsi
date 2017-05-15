@@ -51,7 +51,7 @@
 			compatible = "usb-nop-xceiv";
 			reg = <0>;
 			vcc-supply = <&sw3_reg>;
-			clocks = <&clks IMX27_CLK_DUMMY>;
+			clocks = <&clks 0>;
 			clock-names = "main_clk";
 		};
 	};
@@ -310,6 +310,7 @@
 &ssi1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_ssi1>;
+	fsl,mode = "i2s-slave";
 	status = "okay";
 };
 

@@ -20,14 +20,11 @@
 #endif
 #else /* CONFIG_PPC64 */
 #define L1_CACHE_SHIFT		7
-#define IFETCH_ALIGN_SHIFT	4 /* POWER8,9 */
 #endif
 
 #define	L1_CACHE_BYTES		(1 << L1_CACHE_SHIFT)
 
 #define	SMP_CACHE_BYTES		L1_CACHE_BYTES
-
-#define IFETCH_ALIGN_BYTES	(1 << IFETCH_ALIGN_SHIFT)
 
 #if defined(__powerpc64__) && !defined(__ASSEMBLY__)
 struct ppc64_caches {
@@ -72,25 +69,9 @@ extern void _set_L3CR(unsigned long);
 #define _set_L3CR(val)	do { } while(0)
 #endif
 
-static inline void dcbz(void *addr)
-{
-	__asm__ __volatile__ ("dcbz 0, %0" : : "r"(addr) : "memory");
-}
+extern void cacheable_memzero(void *p, unsigned int nb);
+extern void *cacheable_memcpy(void *, const void *, unsigned int);
 
-static inline void dcbi(void *addr)
-{
-	__asm__ __volatile__ ("dcbi 0, %0" : : "r"(addr) : "memory");
-}
-
-static inline void dcbf(void *addr)
-{
-	__asm__ __volatile__ ("dcbf 0, %0" : : "r"(addr) : "memory");
-}
-
-static inline void dcbst(void *addr)
-{
-	__asm__ __volatile__ ("dcbst 0, %0" : : "r"(addr) : "memory");
-}
 #endif /* !__ASSEMBLY__ */
 #endif /* __KERNEL__ */
 #endif /* _ASM_POWERPC_CACHE_H */

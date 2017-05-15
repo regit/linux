@@ -18,33 +18,35 @@ static bool
 xt_rateest_mt(const struct sk_buff *skb, struct xt_action_param *par)
 {
 	const struct xt_rateest_match_info *info = par->matchinfo;
-	struct gnet_stats_rate_est64 sample = {0};
+	struct gnet_stats_rate_est64 *r;
 	u_int32_t bps1, bps2, pps1, pps2;
 	bool ret = true;
 
-	gen_estimator_read(&info->est1->rate_est, &sample);
-
+	spin_lock_bh(&info->est1->lock);
+	r = &info->est1->rstats;
 	if (info->flags & XT_RATEEST_MATCH_DELTA) {
-		bps1 = info->bps1 >= sample.bps ? info->bps1 - sample.bps : 0;
-		pps1 = info->pps1 >= sample.pps ? info->pps1 - sample.pps : 0;
+		bps1 = info->bps1 >= r->bps ? info->bps1 - r->bps : 0;
+		pps1 = info->pps1 >= r->pps ? info->pps1 - r->pps : 0;
 	} else {
-		bps1 = sample.bps;
-		pps1 = sample.pps;
+		bps1 = r->bps;
+		pps1 = r->pps;
 	}
+	spin_unlock_bh(&info->est1->lock);
 
 	if (info->flags & XT_RATEEST_MATCH_ABS) {
 		bps2 = info->bps2;
 		pps2 = info->pps2;
 	} else {
-		gen_estimator_read(&info->est2->rate_est, &sample);
-
+		spin_lock_bh(&info->est2->lock);
+		r = &info->est2->rstats;
 		if (info->flags & XT_RATEEST_MATCH_DELTA) {
-			bps2 = info->bps2 >= sample.bps ? info->bps2 - sample.bps : 0;
-			pps2 = info->pps2 >= sample.pps ? info->pps2 - sample.pps : 0;
+			bps2 = info->bps2 >= r->bps ? info->bps2 - r->bps : 0;
+			pps2 = info->pps2 >= r->pps ? info->pps2 - r->pps : 0;
 		} else {
-			bps2 = sample.bps;
-			pps2 = sample.pps;
+			bps2 = r->bps;
+			pps2 = r->pps;
 		}
+		spin_unlock_bh(&info->est2->lock);
 	}
 
 	switch (info->mode) {

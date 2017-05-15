@@ -14,7 +14,7 @@
 #include <linux/pci.h>
 #include <linux/pci_ids.h>
 #include <linux/edac.h>
-#include "edac_module.h"
+#include "edac_core.h"
 
 #define  I82860_REVISION " Ver: 2.0.2"
 #define EDAC_MOD_STR	"i82860_edac"
@@ -124,7 +124,7 @@ static int i82860_process_error_info(struct mem_ctl_info *mci,
 				     dimm->location[0], dimm->location[1], -1,
 				     "i82860 UE", "");
 	else
-		edac_mc_handle_error(HW_EVENT_ERR_CORRECTED, mci, 1,
+		edac_mc_handle_error(HW_EVENT_ERR_UNCORRECTED, mci, 1,
 				     info->eap, 0, info->derrsyn,
 				     dimm->location[0], dimm->location[1], -1,
 				     "i82860 CE", "");
@@ -343,15 +343,20 @@ fail1:
 	pci_unregister_driver(&i82860_driver);
 
 fail0:
-	pci_dev_put(mci_pdev);
+	if (mci_pdev != NULL)
+		pci_dev_put(mci_pdev);
+
 	return pci_rc;
 }
 
 static void __exit i82860_exit(void)
 {
 	edac_dbg(3, "\n");
+
 	pci_unregister_driver(&i82860_driver);
-	pci_dev_put(mci_pdev);
+
+	if (mci_pdev != NULL)
+		pci_dev_put(mci_pdev);
 }
 
 module_init(i82860_init);

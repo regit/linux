@@ -19,6 +19,7 @@
 #include <linux/tick.h>
 #include <linux/sched.h>
 #include <linux/math64.h>
+#include <linux/module.h>
 
 /*
  * Please note when changing the tuning values:
@@ -30,11 +31,11 @@
  * The default values do not overflow.
  */
 #define BUCKETS 12
-#define INTERVAL_SHIFT 3
-#define INTERVALS (1UL << INTERVAL_SHIFT)
+#define INTERVALS 8
 #define RESOLUTION 1024
 #define DECAY 8
 #define MAX_INTERESTING 50000
+#define STDDEV_THRESH 400
 
 
 /*
@@ -133,12 +134,15 @@ struct menu_device {
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
 
-static inline int get_loadavg(unsigned long load)
+static int get_loadavg(void)
 {
-	return LOAD_INT(load) * 10 + LOAD_FRAC(load) / 10;
+	unsigned long this = this_cpu_load();
+
+
+	return LOAD_INT(this) * 10 + LOAD_FRAC(this) / 10;
 }
 
-static inline int which_bucket(unsigned int duration, unsigned long nr_iowaiters)
+static inline int which_bucket(unsigned int duration)
 {
 	int bucket = 0;
 
@@ -148,7 +152,7 @@ static inline int which_bucket(unsigned int duration, unsigned long nr_iowaiters
 	 * This allows us to calculate
 	 * E(duration)|iowait
 	 */
-	if (nr_iowaiters)
+	if (nr_iowait_cpu(smp_processor_id()))
 		bucket = BUCKETS/2;
 
 	if (duration < 10)
@@ -171,16 +175,16 @@ static inline int which_bucket(unsigned int duration, unsigned long nr_iowaiters
  * to be, the higher this multiplier, and thus the higher
  * the barrier to go to an expensive C state.
  */
-static inline int performance_multiplier(unsigned long nr_iowaiters, unsigned long load)
+static inline int performance_multiplier(void)
 {
 	int mult = 1;
 
 	/* for higher loadavg, we are more reluctant */
 
-	mult += 2 * get_loadavg(load);
+	mult += 2 * get_loadavg();
 
 	/* for IO wait tasks (per cpu!) we add 5x each */
-	mult += 10 * nr_iowaiters;
+	mult += 10 * nr_iowait_cpu(smp_processor_id());
 
 	return mult;
 }
@@ -189,17 +193,23 @@ static DEFINE_PER_CPU(struct menu_device, menu_devices);
 
 static void menu_update(struct cpuidle_driver *drv, struct cpuidle_device *dev);
 
+/* This implements DIV_ROUND_CLOSEST but avoids 64 bit division */
+static u64 div_round64(u64 dividend, u32 divisor)
+{
+	return div_u64(dividend + (divisor / 2), divisor);
+}
+
 /*
  * Try detecting repeating patterns by keeping track of the last 8
  * intervals, and checking if the standard deviation of that set
  * of points is below a threshold. If it is... then use the
  * average of these 8 points as the estimated value.
  */
-static unsigned int get_typical_interval(struct menu_device *data)
+static void get_typical_interval(struct menu_device *data)
 {
 	int i, divisor;
-	unsigned int max, thresh, avg;
-	uint64_t sum, variance;
+	unsigned int max, thresh;
+	uint64_t avg, stddev;
 
 	thresh = UINT_MAX; /* Discard outliers above this value */
 
@@ -207,52 +217,48 @@ again:
 
 	/* First calculate the average of past intervals */
 	max = 0;
-	sum = 0;
+	avg = 0;
 	divisor = 0;
 	for (i = 0; i < INTERVALS; i++) {
 		unsigned int value = data->intervals[i];
 		if (value <= thresh) {
-			sum += value;
+			avg += value;
 			divisor++;
 			if (value > max)
 				max = value;
 		}
 	}
-	if (divisor == INTERVALS)
-		avg = sum >> INTERVAL_SHIFT;
-	else
-		avg = div_u64(sum, divisor);
+	do_div(avg, divisor);
 
-	/* Then try to determine variance */
-	variance = 0;
+	/* Then try to determine standard deviation */
+	stddev = 0;
 	for (i = 0; i < INTERVALS; i++) {
 		unsigned int value = data->intervals[i];
 		if (value <= thresh) {
-			int64_t diff = (int64_t)value - avg;
-			variance += diff * diff;
+			int64_t diff = value - avg;
+			stddev += diff * diff;
 		}
 	}
-	if (divisor == INTERVALS)
-		variance >>= INTERVAL_SHIFT;
-	else
-		do_div(variance, divisor);
-
+	do_div(stddev, divisor);
 	/*
-	 * The typical interval is obtained when standard deviation is
-	 * small (stddev <= 20 us, variance <= 400 us^2) or standard
-	 * deviation is small compared to the average interval (avg >
-	 * 6*stddev, avg^2 > 36*variance). The average is smaller than
-	 * UINT_MAX aka U32_MAX, so computing its square does not
-	 * overflow a u64. We simply reject this candidate average if
-	 * the standard deviation is greater than 715 s (which is
-	 * rather unlikely).
+	 * The typical interval is obtained when standard deviation is small
+	 * or standard deviation is small compared to the average interval.
+	 *
+	 * int_sqrt() formal parameter type is unsigned long. When the
+	 * greatest difference to an outlier exceeds ~65 ms * sqrt(divisor)
+	 * the resulting squared standard deviation exceeds the input domain
+	 * of int_sqrt on platforms where unsigned long is 32 bits in size.
+	 * In such case reject the candidate average.
 	 *
 	 * Use this result only if there is no timer to wake us up sooner.
 	 */
-	if (likely(variance <= U64_MAX/36)) {
-		if ((((u64)avg*avg > variance*36) && (divisor * 4 >= INTERVALS * 3))
-							|| variance <= 400) {
-			return avg;
+	if (likely(stddev <= ULONG_MAX)) {
+		stddev = int_sqrt(stddev);
+		if (((avg > stddev * 6) && (divisor * 4 >= INTERVALS * 3))
+							|| stddev <= 20) {
+			if (data->next_timer_us > avg)
+				data->predicted_us = avg;
+			return;
 		}
 	}
 
@@ -266,7 +272,7 @@ again:
 	 * with sporadic activity with a bunch of short pauses.
 	 */
 	if ((divisor * 4) <= INTERVALS * 3)
-		return UINT_MAX;
+		return;
 
 	thresh = max - 1;
 	goto again;
@@ -279,78 +285,65 @@ again:
  */
 static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 {
-	struct menu_device *data = this_cpu_ptr(&menu_devices);
+	struct menu_device *data = &__get_cpu_var(menu_devices);
 	int latency_req = pm_qos_request(PM_QOS_CPU_DMA_LATENCY);
 	int i;
 	unsigned int interactivity_req;
-	unsigned int expected_interval;
-	unsigned long nr_iowaiters, cpu_load;
+	struct timespec t;
 
 	if (data->needs_update) {
 		menu_update(drv, dev);
 		data->needs_update = 0;
 	}
 
+	data->last_state_idx = CPUIDLE_DRIVER_STATE_START - 1;
+
 	/* Special case when user has set very strict latency requirement */
 	if (unlikely(latency_req == 0))
 		return 0;
 
 	/* determine the expected residency time, round up */
-	data->next_timer_us = ktime_to_us(tick_nohz_get_sleep_length());
+	t = ktime_to_timespec(tick_nohz_get_sleep_length());
+	data->next_timer_us =
+		t.tv_sec * USEC_PER_SEC + t.tv_nsec / NSEC_PER_USEC;
 
-	get_iowait_load(&nr_iowaiters, &cpu_load);
-	data->bucket = which_bucket(data->next_timer_us, nr_iowaiters);
+
+	data->bucket = which_bucket(data->next_timer_us);
 
 	/*
 	 * Force the result of multiplication to be 64 bits even if both
 	 * operands are 32 bits.
 	 * Make sure to round up for half microseconds.
 	 */
-	data->predicted_us = DIV_ROUND_CLOSEST_ULL((uint64_t)data->next_timer_us *
+	data->predicted_us = div_round64((uint64_t)data->next_timer_us *
 					 data->correction_factor[data->bucket],
 					 RESOLUTION * DECAY);
 
-	expected_interval = get_typical_interval(data);
-	expected_interval = min(expected_interval, data->next_timer_us);
-
-	if (CPUIDLE_DRIVER_STATE_START > 0) {
-		struct cpuidle_state *s = &drv->states[CPUIDLE_DRIVER_STATE_START];
-		unsigned int polling_threshold;
-
-		/*
-		 * We want to default to C1 (hlt), not to busy polling
-		 * unless the timer is happening really really soon, or
-		 * C1's exit latency exceeds the user configured limit.
-		 */
-		polling_threshold = max_t(unsigned int, 20, s->target_residency);
-		if (data->next_timer_us > polling_threshold &&
-		    latency_req > s->exit_latency && !s->disabled &&
-		    !dev->states_usage[CPUIDLE_DRIVER_STATE_START].disable)
-			data->last_state_idx = CPUIDLE_DRIVER_STATE_START;
-		else
-			data->last_state_idx = CPUIDLE_DRIVER_STATE_START - 1;
-	} else {
-		data->last_state_idx = CPUIDLE_DRIVER_STATE_START;
-	}
+	get_typical_interval(data);
 
 	/*
-	 * Use the lowest expected idle interval to pick the idle state.
+	 * Performance multiplier defines a minimum predicted idle
+	 * duration / latency ratio. Adjust the latency limit if
+	 * necessary.
 	 */
-	data->predicted_us = min(data->predicted_us, expected_interval);
-
-	/*
-	 * Use the performance multiplier and the user-configurable
-	 * latency_req to determine the maximum exit latency.
-	 */
-	interactivity_req = data->predicted_us / performance_multiplier(nr_iowaiters, cpu_load);
+	interactivity_req = data->predicted_us / performance_multiplier();
 	if (latency_req > interactivity_req)
 		latency_req = interactivity_req;
+
+	/*
+	 * We want to default to C1 (hlt), not to busy polling
+	 * unless the timer is happening really really soon.
+	 */
+	if (data->next_timer_us > 5 &&
+	    !drv->states[CPUIDLE_DRIVER_STATE_START].disabled &&
+		dev->states_usage[CPUIDLE_DRIVER_STATE_START].disable == 0)
+		data->last_state_idx = CPUIDLE_DRIVER_STATE_START;
 
 	/*
 	 * Find the idle state with the lowest power while satisfying
 	 * our constraints.
 	 */
-	for (i = data->last_state_idx + 1; i < drv->state_count; i++) {
+	for (i = CPUIDLE_DRIVER_STATE_START; i < drv->state_count; i++) {
 		struct cpuidle_state *s = &drv->states[i];
 		struct cpuidle_state_usage *su = &dev->states_usage[i];
 
@@ -377,10 +370,10 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev)
  */
 static void menu_reflect(struct cpuidle_device *dev, int index)
 {
-	struct menu_device *data = this_cpu_ptr(&menu_devices);
-
+	struct menu_device *data = &__get_cpu_var(menu_devices);
 	data->last_state_idx = index;
-	data->needs_update = 1;
+	if (index >= 0)
+		data->needs_update = 1;
 }
 
 /**
@@ -390,7 +383,7 @@ static void menu_reflect(struct cpuidle_device *dev, int index)
  */
 static void menu_update(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 {
-	struct menu_device *data = this_cpu_ptr(&menu_devices);
+	struct menu_device *data = &__get_cpu_var(menu_devices);
 	int last_idx = data->last_state_idx;
 	struct cpuidle_state *target = &drv->states[last_idx];
 	unsigned int measured_us;
@@ -401,28 +394,31 @@ static void menu_update(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 	 * power state and occurrence of the wakeup event.
 	 *
 	 * If the entered idle state didn't support residency measurements,
-	 * we use them anyway if they are short, and if long,
-	 * truncate to the whole expected time.
+	 * we are basically lost in the dark how much time passed.
+	 * As a compromise, assume we slept for the whole expected time.
 	 *
 	 * Any measured amount of time will include the exit latency.
 	 * Since we are interested in when the wakeup begun, not when it
-	 * was completed, we must subtract the exit latency. However, if
+	 * was completed, we must substract the exit latency. However, if
 	 * the measured amount of time is less than the exit latency,
 	 * assume the state was never reached and the exit latency is 0.
 	 */
-
-	/* measured value */
-	measured_us = cpuidle_get_last_residency(dev);
-
-	/* Deduct exit latency */
-	if (measured_us > 2 * target->exit_latency)
-		measured_us -= target->exit_latency;
-	else
-		measured_us /= 2;
-
-	/* Make sure our coefficients do not exceed unity */
-	if (measured_us > data->next_timer_us)
+	if (unlikely(!(target->flags & CPUIDLE_FLAG_TIME_VALID))) {
+		/* Use timer value as is */
 		measured_us = data->next_timer_us;
+
+	} else {
+		/* Use measured value */
+		measured_us = cpuidle_get_last_residency(dev);
+
+		/* Deduct exit latency */
+		if (measured_us > target->exit_latency)
+			measured_us -= target->exit_latency;
+
+		/* Make sure our coefficients do not exceed unity */
+		if (measured_us > data->next_timer_us)
+			measured_us = data->next_timer_us;
+	}
 
 	/* Update our correction ratio */
 	new_factor = data->correction_factor[data->bucket];
@@ -483,6 +479,7 @@ static struct cpuidle_governor menu_governor = {
 	.enable =	menu_enable_device,
 	.select =	menu_select,
 	.reflect =	menu_reflect,
+	.owner =	THIS_MODULE,
 };
 
 /**

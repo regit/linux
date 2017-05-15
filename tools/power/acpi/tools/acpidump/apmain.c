@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,6 +43,7 @@
 
 #define _DECLARE_GLOBALS
 #include "acpidump.h"
+#include "acapps.h"
 
 /*
  * acpidump - A portable utility for obtaining system ACPI tables and dumping
@@ -71,7 +72,7 @@ static void ap_display_usage(void);
 
 static int ap_do_options(int argc, char **argv);
 
-static int ap_insert_action(char *argument, u32 to_be_done);
+static void ap_insert_action(char *argument, u32 to_be_done);
 
 /* Table for deferred actions from command line options */
 
@@ -79,7 +80,7 @@ struct ap_dump_action action_table[AP_MAX_ACTIONS];
 u32 current_action = 0;
 
 #define AP_UTILITY_NAME             "ACPI Binary Table Dump Utility"
-#define AP_SUPPORTED_OPTIONS        "?a:bc:f:hn:o:r:svxz"
+#define AP_SUPPORTED_OPTIONS        "?a:bcf:hn:o:r:svxz"
 
 /******************************************************************************
  *
@@ -95,6 +96,7 @@ static void ap_display_usage(void)
 	ACPI_USAGE_HEADER("acpidump [options]");
 
 	ACPI_OPTION("-b", "Dump tables to binary files");
+	ACPI_OPTION("-c", "Dump customized tables");
 	ACPI_OPTION("-h -?", "This help message");
 	ACPI_OPTION("-o <File>", "Redirect output to file");
 	ACPI_OPTION("-r <Address>", "Dump tables from specified RSDP");
@@ -102,18 +104,17 @@ static void ap_display_usage(void)
 	ACPI_OPTION("-v", "Display version information");
 	ACPI_OPTION("-z", "Verbose mode");
 
-	ACPI_USAGE_TEXT("\nTable Options:\n");
+	printf("\nTable Options:\n");
 
 	ACPI_OPTION("-a <Address>", "Get table via a physical address");
-	ACPI_OPTION("-c <on|off>", "Turning on/off customized table dumping");
 	ACPI_OPTION("-f <BinaryFile>", "Get table via a binary file");
 	ACPI_OPTION("-n <Signature>", "Get table via a name/signature");
 	ACPI_OPTION("-x", "Do not use but dump XSDT");
 	ACPI_OPTION("-x -x", "Do not use or dump XSDT");
 
-	ACPI_USAGE_TEXT("\n"
-			"Invocation without parameters dumps all available tables\n"
-			"Multiple mixed instances of -a, -f, and -n are supported\n\n");
+	printf("\n"
+	       "Invocation without parameters dumps all available tables\n"
+	       "Multiple mixed instances of -a, -f, and -n are supported\n\n");
 }
 
 /******************************************************************************
@@ -123,13 +124,13 @@ static void ap_display_usage(void)
  * PARAMETERS:  argument            - Pointer to the argument for this action
  *              to_be_done          - What to do to process this action
  *
- * RETURN:      Status
+ * RETURN:      None. Exits program if action table becomes full.
  *
  * DESCRIPTION: Add an action item to the action table
  *
  ******************************************************************************/
 
-static int ap_insert_action(char *argument, u32 to_be_done)
+static void ap_insert_action(char *argument, u32 to_be_done)
 {
 
 	/* Insert action and check for table overflow */
@@ -141,10 +142,8 @@ static int ap_insert_action(char *argument, u32 to_be_done)
 	if (current_action > AP_MAX_ACTIONS) {
 		fprintf(stderr, "Too many table options (max %u)\n",
 			AP_MAX_ACTIONS);
-		return (-1);
+		exit(-1);
 	}
-
-	return (0);
 }
 
 /******************************************************************************
@@ -167,8 +166,7 @@ static int ap_do_options(int argc, char **argv)
 
 	/* Command line options */
 
-	while ((j =
-		acpi_getopt(argc, argv, AP_SUPPORTED_OPTIONS)) != ACPI_OPT_END)
+	while ((j = acpi_getopt(argc, argv, AP_SUPPORTED_OPTIONS)) != EOF)
 		switch (j) {
 			/*
 			 * Global options
@@ -180,42 +178,32 @@ static int ap_do_options(int argc, char **argv)
 
 		case 'c':	/* Dump customized tables */
 
-			if (!strcmp(acpi_gbl_optarg, "on")) {
-				gbl_dump_customized_tables = TRUE;
-			} else if (!strcmp(acpi_gbl_optarg, "off")) {
-				gbl_dump_customized_tables = FALSE;
-			} else {
-				fprintf(stderr,
-					"%s: Cannot handle this switch, please use on|off\n",
-					acpi_gbl_optarg);
-				return (-1);
-			}
+			gbl_dump_customized_tables = TRUE;
 			continue;
 
 		case 'h':
 		case '?':
 
 			ap_display_usage();
-			return (1);
+			exit(0);
 
 		case 'o':	/* Redirect output to a single file */
 
 			if (ap_open_output_file(acpi_gbl_optarg)) {
-				return (-1);
+				exit(-1);
 			}
 			continue;
 
 		case 'r':	/* Dump tables from specified RSDP */
 
 			status =
-			    acpi_ut_strtoul64(acpi_gbl_optarg,
-					      ACPI_STRTOUL_64BIT,
+			    acpi_ut_strtoul64(acpi_gbl_optarg, 0,
 					      &gbl_rsdp_base);
 			if (ACPI_FAILURE(status)) {
 				fprintf(stderr,
 					"%s: Could not convert to a physical address\n",
 					acpi_gbl_optarg);
-				return (-1);
+				exit(-1);
 			}
 			continue;
 
@@ -235,8 +223,8 @@ static int ap_do_options(int argc, char **argv)
 
 		case 'v':	/* Revision/version */
 
-			acpi_os_printf(ACPI_COMMON_SIGNON(AP_UTILITY_NAME));
-			return (1);
+			printf(ACPI_COMMON_SIGNON(AP_UTILITY_NAME));
+			exit(0);
 
 		case 'z':	/* Verbose mode */
 
@@ -249,40 +237,32 @@ static int ap_do_options(int argc, char **argv)
 			 */
 		case 'a':	/* Get table by physical address */
 
-			if (ap_insert_action
-			    (acpi_gbl_optarg, AP_DUMP_TABLE_BY_ADDRESS)) {
-				return (-1);
-			}
+			ap_insert_action(acpi_gbl_optarg,
+					 AP_DUMP_TABLE_BY_ADDRESS);
 			break;
 
 		case 'f':	/* Get table from a file */
 
-			if (ap_insert_action
-			    (acpi_gbl_optarg, AP_DUMP_TABLE_BY_FILE)) {
-				return (-1);
-			}
+			ap_insert_action(acpi_gbl_optarg,
+					 AP_DUMP_TABLE_BY_FILE);
 			break;
 
 		case 'n':	/* Get table by input name (signature) */
 
-			if (ap_insert_action
-			    (acpi_gbl_optarg, AP_DUMP_TABLE_BY_NAME)) {
-				return (-1);
-			}
+			ap_insert_action(acpi_gbl_optarg,
+					 AP_DUMP_TABLE_BY_NAME);
 			break;
 
 		default:
 
 			ap_display_usage();
-			return (-1);
+			exit(-1);
 		}
 
 	/* If there are no actions, this means "get/dump all tables" */
 
 	if (current_action == 0) {
-		if (ap_insert_action(NULL, AP_DUMP_ALL_TABLES)) {
-			return (-1);
-		}
+		ap_insert_action(NULL, AP_DUMP_ALL_TABLES);
 	}
 
 	return (0);
@@ -300,11 +280,7 @@ static int ap_do_options(int argc, char **argv)
  *
  ******************************************************************************/
 
-#ifndef _GNU_EFI
 int ACPI_SYSTEM_XFACE main(int argc, char *argv[])
-#else
-int ACPI_SYSTEM_XFACE acpi_main(int argc, char *argv[])
-#endif
 {
 	int status = 0;
 	struct ap_dump_action *action;
@@ -312,18 +288,11 @@ int ACPI_SYSTEM_XFACE acpi_main(int argc, char *argv[])
 	u32 i;
 
 	ACPI_DEBUG_INITIALIZE();	/* For debug version only */
-	acpi_os_initialize();
-	gbl_output_file = ACPI_FILE_OUT;
-	acpi_gbl_integer_byte_width = 8;
 
 	/* Process command line options */
 
-	status = ap_do_options(argc, argv);
-	if (status > 0) {
-		return (0);
-	}
-	if (status < 0) {
-		return (status);
+	if (ap_do_options(argc, argv)) {
+		return (-1);
 	}
 
 	/* Get/dump ACPI table(s) as requested */
@@ -364,7 +333,7 @@ int ACPI_SYSTEM_XFACE acpi_main(int argc, char *argv[])
 		}
 	}
 
-	if (gbl_output_filename) {
+	if (gbl_output_file) {
 		if (gbl_verbose_mode) {
 
 			/* Summary for the output file */

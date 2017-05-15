@@ -12,12 +12,11 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/pinctrl/omap.h>
 
+#include "skeleton.dtsi"
+
 / {
 	compatible = "ti,omap2430", "ti,omap2420", "ti,omap2";
 	interrupt-parent = <&intc>;
-	#address-cells = <1>;
-	#size-cells = <1>;
-	chosen { };
 
 	aliases {
 		serial0 = &uart1;
@@ -76,6 +75,7 @@
 			compatible = "ti,omap2-intc";
 			interrupt-controller;
 			#interrupt-cells = <1>;
+			ti,intc-size = <96>;
 			reg = <0x480FE000 0x1000>;
 		};
 
@@ -88,8 +88,8 @@
 				     <14>,
 				     <15>;
 			#dma-cells = <1>;
-			dma-channels = <32>;
-			dma-requests = <64>;
+			#dma-channels = <32>;
+			#dma-requests = <64>;
 		};
 
 		i2c1: i2c@48070000 {

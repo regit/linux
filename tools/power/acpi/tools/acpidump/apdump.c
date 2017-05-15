@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,7 +68,7 @@ u8 ap_is_valid_header(struct acpi_table_header *table)
 
 		/* Make sure signature is all ASCII and a valid ACPI name */
 
-		if (!acpi_ut_valid_nameseg(table->signature)) {
+		if (!acpi_ut_valid_acpi_name(table->signature)) {
 			fprintf(stderr,
 				"Table signature (0x%8.8X) is invalid\n",
 				*(u32 *)table->signature);
@@ -147,7 +147,7 @@ u32 ap_get_table_length(struct acpi_table_header *table)
 
 	if (ACPI_VALIDATE_RSDP_SIG(table->signature)) {
 		rsdp = ACPI_CAST_PTR(struct acpi_table_rsdp, table);
-		return (acpi_tb_get_rsdp_length(rsdp));
+		return (rsdp->length);
 	}
 
 	/* Normal ACPI table */
@@ -196,13 +196,12 @@ ap_dump_table_buffer(struct acpi_table_header *table,
 	 * Note: simplest to just always emit a 64-bit address. acpi_xtract
 	 * utility can handle this.
 	 */
-	fprintf(gbl_output_file, "%4.4s @ 0x%8.8X%8.8X\n",
-		table->signature, ACPI_FORMAT_UINT64(address));
+	printf("%4.4s @ 0x%8.8X%8.8X\n", table->signature,
+	       ACPI_FORMAT_UINT64(address));
 
-	acpi_ut_dump_buffer_to_file(gbl_output_file,
-				    ACPI_CAST_PTR(u8, table), table_length,
-				    DB_BYTE_DISPLAY, 0);
-	fprintf(gbl_output_file, "\n");
+	acpi_ut_dump_buffer(ACPI_CAST_PTR(u8, table), table_length,
+			    DB_BYTE_DISPLAY, 0);
+	printf("\n");
 	return (0);
 }
 
@@ -253,7 +252,7 @@ int ap_dump_all_tables(void)
 		}
 
 		table_status = ap_dump_table_buffer(table, instance, address);
-		ACPI_FREE(table);
+		free(table);
 
 		if (table_status) {
 			break;
@@ -287,15 +286,14 @@ int ap_dump_table_by_address(char *ascii_address)
 
 	/* Convert argument to an integer physical address */
 
-	status = acpi_ut_strtoul64(ascii_address, ACPI_STRTOUL_64BIT,
-				   &long_address);
+	status = acpi_ut_strtoul64(ascii_address, 0, &long_address);
 	if (ACPI_FAILURE(status)) {
 		fprintf(stderr, "%s: Could not convert to a physical address\n",
 			ascii_address);
 		return (-1);
 	}
 
-	address = (acpi_physical_address)long_address;
+	address = (acpi_physical_address) long_address;
 	status = acpi_os_get_table_by_address(address, &table);
 	if (ACPI_FAILURE(status)) {
 		fprintf(stderr, "Could not get table at 0x%8.8X%8.8X, %s\n",
@@ -305,7 +303,7 @@ int ap_dump_table_by_address(char *ascii_address)
 	}
 
 	table_status = ap_dump_table_buffer(table, 0, address);
-	ACPI_FREE(table);
+	free(table);
 	return (table_status);
 }
 
@@ -371,7 +369,7 @@ int ap_dump_table_by_name(char *signature)
 		}
 
 		table_status = ap_dump_table_buffer(table, instance, address);
-		ACPI_FREE(table);
+		free(table);
 
 		if (table_status) {
 			break;
@@ -408,12 +406,6 @@ int ap_dump_table_from_file(char *pathname)
 		return (-1);
 	}
 
-	if (!acpi_ut_valid_nameseg(table->signature)) {
-		fprintf(stderr,
-			"No valid ACPI signature was found in input file %s\n",
-			pathname);
-	}
-
 	/* File must be at least as long as the table length */
 
 	if (table->length > file_size) {
@@ -432,6 +424,28 @@ int ap_dump_table_from_file(char *pathname)
 	table_status = ap_dump_table_buffer(table, 0, 0);
 
 exit:
-	ACPI_FREE(table);
+	free(table);
 	return (table_status);
+}
+
+/******************************************************************************
+ *
+ * FUNCTION:    acpi_os* print functions
+ *
+ * DESCRIPTION: Used for linkage with ACPICA modules
+ *
+ ******************************************************************************/
+
+void ACPI_INTERNAL_VAR_XFACE acpi_os_printf(const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	vfprintf(stdout, fmt, args);
+	va_end(args);
+}
+
+void acpi_os_vprintf(const char *fmt, va_list args)
+{
+	vfprintf(stdout, fmt, args);
 }

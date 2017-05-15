@@ -10,7 +10,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/interrupt.h>
 #include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
@@ -18,7 +17,7 @@
 #include <linux/vmalloc.h>
 #include <linux/fcntl.h>
 #include <linux/kobject.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/opal.h>
 
 struct elog_obj {
@@ -83,9 +82,9 @@ static ssize_t elog_ack_store(struct elog_obj *elog_obj,
 }
 
 static struct elog_attribute id_attribute =
-	__ATTR(id, S_IRUGO, elog_id_show, NULL);
+	__ATTR(id, 0666, elog_id_show, NULL);
 static struct elog_attribute type_attribute =
-	__ATTR(type, S_IRUGO, elog_type_show, NULL);
+	__ATTR(type, 0666, elog_type_show, NULL);
 static struct elog_attribute ack_attribute =
 	__ATTR(acknowledge, 0660, elog_ack_show, elog_ack_store);
 
@@ -237,7 +236,7 @@ static struct elog_obj *create_elog_obj(uint64_t id, size_t size, uint64_t type)
 	return elog;
 }
 
-static irqreturn_t elog_event(int irq, void *data)
+static void elog_work_fn(struct work_struct *work)
 {
 	__be64 size;
 	__be64 id;
@@ -247,19 +246,18 @@ static irqreturn_t elog_event(int irq, void *data)
 	uint64_t elog_type;
 	int rc;
 	char name[2+16+1];
-	struct kobject *kobj;
 
 	rc = opal_get_elog_size(&id, &size, &type);
 	if (rc != OPAL_SUCCESS) {
-		pr_err("ELOG: OPAL log info read failed\n");
-		return IRQ_HANDLED;
+		pr_err("ELOG: Opal log read failed\n");
+		return;
 	}
 
 	elog_size = be64_to_cpu(size);
 	log_id = be64_to_cpu(id);
 	elog_type = be64_to_cpu(type);
 
-	WARN_ON(elog_size > OPAL_MAX_ERRLOG_SIZE);
+	BUG_ON(elog_size > OPAL_MAX_ERRLOG_SIZE);
 
 	if (elog_size >= OPAL_MAX_ERRLOG_SIZE)
 		elog_size  =  OPAL_MAX_ERRLOG_SIZE;
@@ -270,25 +268,32 @@ static irqreturn_t elog_event(int irq, void *data)
 	 * that gracefully and not create two conflicting
 	 * entries.
 	 */
-	kobj = kset_find_obj(elog_kset, name);
-	if (kobj) {
-		/* Drop reference added by kset_find_obj() */
-		kobject_put(kobj);
-		return IRQ_HANDLED;
-	}
+	if (kset_find_obj(elog_kset, name))
+		return;
 
 	create_elog_obj(log_id, elog_size, elog_type);
-
-	return IRQ_HANDLED;
 }
+
+static DECLARE_WORK(elog_work, elog_work_fn);
+
+static int elog_event(struct notifier_block *nb,
+				unsigned long events, void *change)
+{
+	/* check for error log event */
+	if (events & OPAL_EVENT_ERROR_LOG_AVAIL)
+		schedule_work(&elog_work);
+	return 0;
+}
+
+static struct notifier_block elog_nb = {
+	.notifier_call  = elog_event,
+	.next           = NULL,
+	.priority       = 0
+};
 
 int __init opal_elog_init(void)
 {
-	int rc = 0, irq;
-
-	/* ELOG not supported by firmware */
-	if (!opal_check_token(OPAL_ELOG_READ))
-		return -1;
+	int rc = 0;
 
 	elog_kset = kset_create_and_add("elog", NULL, opal_kobj);
 	if (!elog_kset) {
@@ -296,24 +301,15 @@ int __init opal_elog_init(void)
 		return -1;
 	}
 
-	irq = opal_event_request(ilog2(OPAL_EVENT_ERROR_LOG_AVAIL));
-	if (!irq) {
-		pr_err("%s: Can't register OPAL event irq (%d)\n",
-		       __func__, irq);
-		return irq;
-	}
-
-	rc = request_threaded_irq(irq, NULL, elog_event,
-			IRQF_TRIGGER_HIGH | IRQF_ONESHOT, "opal-elog", NULL);
+	rc = opal_notifier_register(&elog_nb);
 	if (rc) {
-		pr_err("%s: Can't request OPAL event irq (%d)\n",
-		       __func__, rc);
+		pr_err("%s: Can't register OPAL event notifier (%d)\n",
+		__func__, rc);
 		return rc;
 	}
 
 	/* We are now ready to pull error logs from opal. */
-	if (opal_check_token(OPAL_ELOG_RESEND))
-		opal_resend_pending_logs();
+	opal_resend_pending_logs();
 
 	return 0;
 }

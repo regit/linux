@@ -11,12 +11,10 @@
  * publishhed by the Free Software Foundation.
  */
 
+#include "skeleton.dtsi"
 #include <dt-bindings/clock/hi3620-clock.h>
 
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
-
 	aliases {
 		serial0 = &uart0;
 		serial1 = &uart1;
@@ -35,7 +33,6 @@
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
-		enable-method = "hisilicon,hi3620-smp";
 
 		cpu@0 {
 			device_type = "cpu";
@@ -70,13 +67,13 @@
 
 		#address-cells = <1>;
 		#size-cells = <1>;
-		compatible = "simple-bus";
+		compatible = "arm,amba-bus";
 		interrupt-parent = <&gic>;
 		ranges = <0 0xfc000000 0x2000000>;
 
 		L2: l2-cache {
 			compatible = "arm,pl310-cache";
-			reg = <0x100000 0x100000>;
+			reg = <0xfc10000 0x100000>;
 			interrupts = <0 15 4>;
 			cache-unified;
 			cache-level = <2>;
@@ -539,7 +536,6 @@
 			reg = <0x803000 0x188>;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			#pinctrl-cells = <1>;
 			#gpio-range-cells = <3>;
 			ranges;
 
@@ -561,7 +557,6 @@
 			reg = <0x803800 0x2dc>;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			#pinctrl-cells = <1>;
 			ranges;
 
 			pinctrl-single,register-width = <32>;

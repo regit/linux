@@ -10,7 +10,6 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <asm/cpu.h>
-#include <asm/debug.h>
 #include <asm/mipsregs.h>
 
 static void build_segment_config(char *str, unsigned int cfg)
@@ -26,20 +25,17 @@ static void build_segment_config(char *str, unsigned int cfg)
 
 	/*
 	 * Access modes MK, MSK and MUSK are mapped segments. Therefore
-	 * there is no direct physical address mapping unless it becomes
-	 * unmapped uncached at error level due to EU.
+	 * there is no direct physical address mapping.
 	 */
-	if ((am == 0) || (am > 3) || (cfg & MIPS_SEGCFG_EU))
+	if ((am == 0) || (am > 3)) {
 		str += sprintf(str, "         %03lx",
 			((cfg & MIPS_SEGCFG_PA) >> MIPS_SEGCFG_PA_SHIFT));
-	else
-		str += sprintf(str, "         UND");
-
-	if ((am == 0) || (am > 3))
 		str += sprintf(str, "         %01ld",
 			((cfg & MIPS_SEGCFG_C) >> MIPS_SEGCFG_C_SHIFT));
-	else
+	} else {
+		str += sprintf(str, "         UND");
 		str += sprintf(str, "         U");
+	}
 
 	/* Exception configuration. */
 	str += sprintf(str, "       %01ld\n",
@@ -95,6 +91,7 @@ static const struct file_operations segments_fops = {
 
 static int __init segments_info(void)
 {
+	extern struct dentry *mips_debugfs_dir;
 	struct dentry *segments;
 
 	if (cpu_has_segments) {

@@ -55,8 +55,7 @@ xt_cluster_hash(const struct nf_conn *ct,
 		WARN_ON(1);
 		break;
 	}
-
-	return reciprocal_scale(hash, info->total_nodes);
+	return (((u64)hash * info->total_nodes) >> 32);
 }
 
 static inline bool
@@ -112,7 +111,7 @@ xt_cluster_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	 * know, matches should not alter packets, but we are doing this here
 	 * because we would need to add a PKTTYPE target for this sole purpose.
 	 */
-	if (!xt_cluster_is_multicast_addr(skb, xt_family(par)) &&
+	if (!xt_cluster_is_multicast_addr(skb, par->family) &&
 	    skb->pkt_type == PACKET_MULTICAST) {
 	    	pskb->pkt_type = PACKET_HOST;
 	}

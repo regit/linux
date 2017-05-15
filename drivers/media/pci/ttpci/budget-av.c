@@ -30,7 +30,7 @@
  * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org/ 
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -46,7 +46,7 @@
 #include "tda1004x.h"
 #include "tua6100.h"
 #include "dvb-pll.h"
-#include <media/drv-intf/saa7146_vv.h>
+#include <media/saa7146_vv.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
@@ -68,7 +68,7 @@ DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 
 struct budget_av {
 	struct budget budget;
-	struct video_device vd;
+	struct video_device *vd;
 	int cur_input;
 	int has_saa7113;
 	struct tasklet_struct ciintf_irq_tasklet;
@@ -1508,7 +1508,7 @@ static int budget_av_attach(struct saa7146_dev *dev, struct saa7146_pci_extensio
 	if (i2c_readregs(&budget_av->budget.i2c_adap, 0xa0, 0x30, mac, 6)) {
 		pr_err("KNC1-%d: Could not read MAC from KNC1 card\n",
 		       budget_av->budget.dvb_adapter.num);
-		eth_zero_addr(mac);
+		memset(mac, 0, 6);
 	} else {
 		pr_info("KNC1-%d: MAC addr = %pM\n",
 			budget_av->budget.dvb_adapter.num, mac);
@@ -1636,4 +1636,5 @@ module_exit(budget_av_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ralph Metzler, Marcus Metzler, Michael Hunold, others");
-MODULE_DESCRIPTION("driver for the SAA7146 based so-called budget PCI DVB w/ analog input and CI-module (e.g. the KNC cards)");
+MODULE_DESCRIPTION("driver for the SAA7146 based so-called "
+		   "budget PCI DVB w/ analog input and CI-module (e.g. the KNC cards)");

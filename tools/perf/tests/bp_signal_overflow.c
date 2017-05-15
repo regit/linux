@@ -24,7 +24,6 @@
 #include "tests.h"
 #include "debug.h"
 #include "perf.h"
-#include "cloexec.h"
 
 static int overflows;
 
@@ -58,7 +57,7 @@ static long long bp_count(int fd)
 #define EXECUTIONS 10000
 #define THRESHOLD  100
 
-int test__bp_signal_overflow(int subtest __maybe_unused)
+int test__bp_signal_overflow(void)
 {
 	struct perf_event_attr pe;
 	struct sigaction sa;
@@ -92,8 +91,7 @@ int test__bp_signal_overflow(int subtest __maybe_unused)
 	pe.exclude_kernel = 1;
 	pe.exclude_hv = 1;
 
-	fd = sys_perf_event_open(&pe, 0, -1, -1,
-				 perf_event_open_cloexec_flag());
+	fd = sys_perf_event_open(&pe, 0, -1, -1, 0);
 	if (fd < 0) {
 		pr_debug("failed opening event %llx\n", pe.config);
 		return TEST_FAIL;

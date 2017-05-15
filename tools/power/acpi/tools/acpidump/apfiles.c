@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,40 +42,7 @@
  */
 
 #include "acpidump.h"
-
-/* Local prototypes */
-
-static int ap_is_existing_file(char *pathname);
-
-/******************************************************************************
- *
- * FUNCTION:    ap_is_existing_file
- *
- * PARAMETERS:  pathname            - Output filename
- *
- * RETURN:      0 on success
- *
- * DESCRIPTION: Query for file overwrite if it already exists.
- *
- ******************************************************************************/
-
-static int ap_is_existing_file(char *pathname)
-{
-#ifndef _GNU_EFI
-	struct stat stat_info;
-
-	if (!stat(pathname, &stat_info)) {
-		fprintf(stderr,
-			"Target path already exists, overwrite? [y|n] ");
-
-		if (getchar() != 'y') {
-			return (-1);
-		}
-	}
-#endif
-
-	return 0;
-}
+#include "acapps.h"
 
 /******************************************************************************
  *
@@ -92,19 +59,25 @@ static int ap_is_existing_file(char *pathname)
 
 int ap_open_output_file(char *pathname)
 {
-	ACPI_FILE file;
+	struct stat stat_info;
+	FILE *file;
 
 	/* If file exists, prompt for overwrite */
 
-	if (ap_is_existing_file(pathname) != 0) {
-		return (-1);
+	if (!stat(pathname, &stat_info)) {
+		fprintf(stderr,
+			"Target path already exists, overwrite? [y|n] ");
+
+		if (getchar() != 'y') {
+			return (-1);
+		}
 	}
 
 	/* Point stdout to the file */
 
-	file = fopen(pathname, "w");
+	file = freopen(pathname, "w", stdout);
 	if (!file) {
-		fprintf(stderr, "Could not open output file: %s\n", pathname);
+		perror("Could not open output file");
 		return (-1);
 	}
 
@@ -133,8 +106,8 @@ int ap_write_to_binary_file(struct acpi_table_header *table, u32 instance)
 {
 	char filename[ACPI_NAME_SIZE + 16];
 	char instance_str[16];
-	ACPI_FILE file;
-	acpi_size actual;
+	FILE *file;
+	size_t actual;
 	u32 table_length;
 
 	/* Obtain table length */
@@ -148,21 +121,20 @@ int ap_write_to_binary_file(struct acpi_table_header *table, u32 instance)
 	} else {
 		ACPI_MOVE_NAME(filename, table->signature);
 	}
-
-	filename[0] = (char)tolower((int)filename[0]);
-	filename[1] = (char)tolower((int)filename[1]);
-	filename[2] = (char)tolower((int)filename[2]);
-	filename[3] = (char)tolower((int)filename[3]);
+	filename[0] = (char)ACPI_TOLOWER(filename[0]);
+	filename[1] = (char)ACPI_TOLOWER(filename[1]);
+	filename[2] = (char)ACPI_TOLOWER(filename[2]);
+	filename[3] = (char)ACPI_TOLOWER(filename[3]);
 	filename[ACPI_NAME_SIZE] = 0;
 
 	/* Handle multiple SSDts - create different filenames for each */
 
 	if (instance > 0) {
-		snprintf(instance_str, sizeof(instance_str), "%u", instance);
+		sprintf(instance_str, "%u", instance);
 		strcat(filename, instance_str);
 	}
 
-	strcat(filename, FILE_SUFFIX_BINARY_TABLE);
+	strcat(filename, ACPI_TABLE_FILE_SUFFIX);
 
 	if (gbl_verbose_mode) {
 		fprintf(stderr,
@@ -175,14 +147,13 @@ int ap_write_to_binary_file(struct acpi_table_header *table, u32 instance)
 
 	file = fopen(filename, "wb");
 	if (!file) {
-		fprintf(stderr, "Could not open output file: %s\n", filename);
+		perror("Could not open output file");
 		return (-1);
 	}
 
 	actual = fwrite(table, 1, table_length, file);
 	if (actual != table_length) {
-		fprintf(stderr, "Error writing binary output file: %s\n",
-			filename);
+		perror("Error writing binary output file");
 		fclose(file);
 		return (-1);
 	}
@@ -208,15 +179,15 @@ struct acpi_table_header *ap_get_table_from_file(char *pathname,
 						 u32 *out_file_size)
 {
 	struct acpi_table_header *buffer = NULL;
-	ACPI_FILE file;
+	FILE *file;
 	u32 file_size;
-	acpi_size actual;
+	size_t actual;
 
 	/* Must use binary mode */
 
 	file = fopen(pathname, "rb");
 	if (!file) {
-		fprintf(stderr, "Could not open input file: %s\n", pathname);
+		perror("Could not open input file");
 		return (NULL);
 	}
 
@@ -231,7 +202,7 @@ struct acpi_table_header *ap_get_table_from_file(char *pathname,
 
 	/* Allocate a buffer for the entire file */
 
-	buffer = ACPI_ALLOCATE_ZEROED(file_size);
+	buffer = calloc(1, file_size);
 	if (!buffer) {
 		fprintf(stderr,
 			"Could not allocate file buffer of size: %u\n",
@@ -244,7 +215,7 @@ struct acpi_table_header *ap_get_table_from_file(char *pathname,
 	actual = fread(buffer, 1, file_size, file);
 	if (actual != file_size) {
 		fprintf(stderr, "Could not read input file: %s\n", pathname);
-		ACPI_FREE(buffer);
+		free(buffer);
 		buffer = NULL;
 		goto cleanup;
 	}

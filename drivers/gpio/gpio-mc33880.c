@@ -71,7 +71,7 @@ static int __mc33880_set(struct mc33880 *mc, unsigned offset, int value)
 
 static void mc33880_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct mc33880 *mc = gpiochip_get_data(chip);
+	struct mc33880 *mc = container_of(chip, struct mc33880, chip);
 
 	mutex_lock(&mc->lock);
 
@@ -116,7 +116,7 @@ static int mc33880_probe(struct spi_device *spi)
 	mc->chip.base = pdata->base;
 	mc->chip.ngpio = PIN_NUMBER;
 	mc->chip.can_sleep = true;
-	mc->chip.parent = &spi->dev;
+	mc->chip.dev = &spi->dev;
 	mc->chip.owner = THIS_MODULE;
 
 	mc->port_config = 0x00;
@@ -135,7 +135,7 @@ static int mc33880_probe(struct spi_device *spi)
 		goto exit_destroy;
 	}
 
-	ret = gpiochip_add_data(&mc->chip, mc);
+	ret = gpiochip_add(&mc->chip);
 	if (ret)
 		goto exit_destroy;
 
@@ -149,20 +149,26 @@ exit_destroy:
 static int mc33880_remove(struct spi_device *spi)
 {
 	struct mc33880 *mc;
+	int ret;
 
 	mc = spi_get_drvdata(spi);
-	if (!mc)
+	if (mc == NULL)
 		return -ENODEV;
 
-	gpiochip_remove(&mc->chip);
-	mutex_destroy(&mc->lock);
+	ret = gpiochip_remove(&mc->chip);
+	if (!ret)
+		mutex_destroy(&mc->lock);
+	else
+		dev_err(&spi->dev, "Failed to remove the GPIO controller: %d\n",
+			ret);
 
-	return 0;
+	return ret;
 }
 
 static struct spi_driver mc33880_driver = {
 	.driver = {
 		.name		= DRIVER_NAME,
+		.owner		= THIS_MODULE,
 	},
 	.probe		= mc33880_probe,
 	.remove		= mc33880_remove,

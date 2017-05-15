@@ -123,8 +123,7 @@ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
 				break;
 
 			do_each_thread(g, p) {
-				if (!uid_eq(task_uid(p), uid) ||
-				    !task_pid_vnr(p))
+				if (!uid_eq(task_uid(p), uid))
 					continue;
 				ret = set_task_ioprio(p, ioprio);
 				if (ret)
@@ -150,26 +149,22 @@ static int get_task_ioprio(struct task_struct *p)
 	if (ret)
 		goto out;
 	ret = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, IOPRIO_NORM);
-	task_lock(p);
 	if (p->io_context)
 		ret = p->io_context->ioprio;
-	task_unlock(p);
 out:
 	return ret;
 }
 
 int ioprio_best(unsigned short aprio, unsigned short bprio)
 {
-	unsigned short aclass;
-	unsigned short bclass;
+	unsigned short aclass = IOPRIO_PRIO_CLASS(aprio);
+	unsigned short bclass = IOPRIO_PRIO_CLASS(bprio);
 
-	if (!ioprio_valid(aprio))
-		aprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, IOPRIO_NORM);
-	if (!ioprio_valid(bprio))
-		bprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, IOPRIO_NORM);
+	if (aclass == IOPRIO_CLASS_NONE)
+		aclass = IOPRIO_CLASS_BE;
+	if (bclass == IOPRIO_CLASS_NONE)
+		bclass = IOPRIO_CLASS_BE;
 
-	aclass = IOPRIO_PRIO_CLASS(aprio);
-	bclass = IOPRIO_PRIO_CLASS(bprio);
 	if (aclass == bclass)
 		return min(aprio, bprio);
 	if (aclass > bclass)
@@ -223,8 +218,7 @@ SYSCALL_DEFINE2(ioprio_get, int, which, int, who)
 				break;
 
 			do_each_thread(g, p) {
-				if (!uid_eq(task_uid(p), user->uid) ||
-				    !task_pid_vnr(p))
+				if (!uid_eq(task_uid(p), user->uid))
 					continue;
 				tmpio = get_task_ioprio(p);
 				if (tmpio < 0)

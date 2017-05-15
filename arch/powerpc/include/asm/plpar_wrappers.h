@@ -93,6 +93,38 @@ static inline long register_dtl(unsigned long cpu, unsigned long vpa)
 	return vpa_call(H_VPA_REG_DTL, cpu, vpa);
 }
 
+static inline long plpar_page_set_loaned(unsigned long vpa)
+{
+	unsigned long cmo_page_sz = cmo_get_page_size();
+	long rc = 0;
+	int i;
+
+	for (i = 0; !rc && i < PAGE_SIZE; i += cmo_page_sz)
+		rc = plpar_hcall_norets(H_PAGE_INIT, H_PAGE_SET_LOANED, vpa + i, 0);
+
+	for (i -= cmo_page_sz; rc && i != 0; i -= cmo_page_sz)
+		plpar_hcall_norets(H_PAGE_INIT, H_PAGE_SET_ACTIVE,
+				   vpa + i - cmo_page_sz, 0);
+
+	return rc;
+}
+
+static inline long plpar_page_set_active(unsigned long vpa)
+{
+	unsigned long cmo_page_sz = cmo_get_page_size();
+	long rc = 0;
+	int i;
+
+	for (i = 0; !rc && i < PAGE_SIZE; i += cmo_page_sz)
+		rc = plpar_hcall_norets(H_PAGE_INIT, H_PAGE_SET_ACTIVE, vpa + i, 0);
+
+	for (i -= cmo_page_sz; rc && i != 0; i -= cmo_page_sz)
+		plpar_hcall_norets(H_PAGE_INIT, H_PAGE_SET_LOANED,
+				   vpa + i - cmo_page_sz, 0);
+
+	return rc;
+}
+
 extern void vpa_init(int cpu);
 
 static inline long plpar_pte_enter(unsigned long flags,
@@ -170,23 +202,6 @@ static inline long plpar_pte_read_raw(unsigned long flags, unsigned long ptex,
 }
 
 /*
- * ptes must be 8*sizeof(unsigned long)
- */
-static inline long plpar_pte_read_4(unsigned long flags, unsigned long ptex,
-				    unsigned long *ptes)
-
-{
-	long rc;
-	unsigned long retbuf[PLPAR_HCALL9_BUFSIZE];
-
-	rc = plpar_hcall9(H_READ, retbuf, flags | H_READ_4, ptex);
-
-	memcpy(ptes, retbuf, 8*sizeof(unsigned long));
-
-	return rc;
-}
-
-/*
  * plpar_pte_read_4_raw can be called in real mode.
  * ptes must be 8*sizeof(unsigned long)
  */
@@ -258,7 +273,7 @@ static inline long plpar_set_mode(unsigned long mflags, unsigned long resource,
 static inline long enable_reloc_on_exceptions(void)
 {
 	/* mflags = 3: Exceptions at 0xC000000000004000 */
-	return plpar_set_mode(3, H_SET_MODE_RESOURCE_ADDR_TRANS_MODE, 0, 0);
+	return plpar_set_mode(3, 3, 0, 0);
 }
 
 /*
@@ -269,7 +284,7 @@ static inline long enable_reloc_on_exceptions(void)
  * returns H_SUCCESS.
  */
 static inline long disable_reloc_on_exceptions(void) {
-	return plpar_set_mode(0, H_SET_MODE_RESOURCE_ADDR_TRANS_MODE, 0, 0);
+	return plpar_set_mode(0, 3, 0, 0);
 }
 
 /*
@@ -282,7 +297,7 @@ static inline long disable_reloc_on_exceptions(void) {
 static inline long enable_big_endian_exceptions(void)
 {
 	/* mflags = 0: big endian exceptions */
-	return plpar_set_mode(0, H_SET_MODE_RESOURCE_LE, 0, 0);
+	return plpar_set_mode(0, 4, 0, 0);
 }
 
 /*
@@ -295,22 +310,17 @@ static inline long enable_big_endian_exceptions(void)
 static inline long enable_little_endian_exceptions(void)
 {
 	/* mflags = 1: little endian exceptions */
-	return plpar_set_mode(1, H_SET_MODE_RESOURCE_LE, 0, 0);
+	return plpar_set_mode(1, 4, 0, 0);
 }
 
 static inline long plapr_set_ciabr(unsigned long ciabr)
 {
-	return plpar_set_mode(0, H_SET_MODE_RESOURCE_SET_CIABR, ciabr, 0);
+	return plpar_set_mode(0, 1, ciabr, 0);
 }
 
 static inline long plapr_set_watchpoint0(unsigned long dawr0, unsigned long dawrx0)
 {
-	return plpar_set_mode(0, H_SET_MODE_RESOURCE_SET_DAWR, dawr0, dawrx0);
-}
-
-static inline long plapr_signal_sys_reset(long cpu)
-{
-	return plpar_hcall_norets(H_SIGNAL_SYS_RESET, cpu);
+	return plpar_set_mode(0, 2, dawr0, dawrx0);
 }
 
 #endif /* _ASM_POWERPC_PLPAR_WRAPPERS_H */

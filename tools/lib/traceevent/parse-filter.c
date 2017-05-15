@@ -28,14 +28,9 @@
 #include "event-utils.h"
 
 #define COMM "COMM"
-#define CPU "CPU"
 
 static struct format_field comm = {
 	.name = "COMM",
-};
-
-static struct format_field cpu = {
-	.name = "CPU",
 };
 
 struct event_list {
@@ -387,17 +382,14 @@ create_arg_item(struct event_format *event, const char *token,
 		/* Consider this a field */
 		field = pevent_find_any_field(event, token);
 		if (!field) {
-			/* If token is 'COMM' or 'CPU' then it is special */
-			if (strcmp(token, COMM) == 0) {
-				field = &comm;
-			} else if (strcmp(token, CPU) == 0) {
-				field = &cpu;
-			} else {
+			if (strcmp(token, COMM) != 0) {
 				/* not a field, Make it false */
 				arg->type = FILTER_ARG_BOOLEAN;
 				arg->boolean.value = FILTER_FALSE;
 				break;
 			}
+			/* If token is 'COMM' then it is special */
+			field = &comm;
 		}
 		arg->type = FILTER_ARG_FIELD;
 		arg->field.field = field;
@@ -1066,7 +1058,6 @@ process_filter(struct event_format *event, struct filter_arg **parg,
 					*parg = current_op;
 				else
 					*parg = current_exp;
-				free(token);
 				return PEVENT_ERRNO__UNBALANCED_PAREN;
 			}
 			break;
@@ -1172,12 +1163,11 @@ process_filter(struct event_format *event, struct filter_arg **parg,
 		current_op = current_exp;
 
 	ret = collapse_tree(current_op, parg, error_str);
-	/* collapse_tree() may free current_op, and updates parg accordingly */
-	current_op = NULL;
 	if (ret < 0)
 		goto fail;
 
-	free(token);
+	*parg = current_op;
+
 	return 0;
 
  fail_alloc:
@@ -1725,10 +1715,6 @@ get_value(struct event_format *event,
 		name = get_comm(event, record);
 		return (unsigned long)name;
 	}
-
-	/* Handle our dummy "cpu" field */
-	if (field == &cpu)
-		return record->cpu;
 
 	pevent_read_number_field(field, record->data, &val);
 

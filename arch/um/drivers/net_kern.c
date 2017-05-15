@@ -223,7 +223,7 @@ static int uml_net_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (len == skb->len) {
 		dev->stats.tx_packets++;
 		dev->stats.tx_bytes += skb->len;
-		netif_trans_update(dev);
+		dev->trans_start = jiffies;
 		netif_start_queue(dev);
 
 		/* this is normally done in the interrupt when tx finishes */
@@ -252,8 +252,15 @@ static void uml_net_set_multicast_list(struct net_device *dev)
 
 static void uml_net_tx_timeout(struct net_device *dev)
 {
-	netif_trans_update(dev);
+	dev->trans_start = jiffies;
 	netif_wake_queue(dev);
+}
+
+static int uml_net_change_mtu(struct net_device *dev, int new_mtu)
+{
+	dev->mtu = new_mtu;
+
+	return 0;
 }
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -367,6 +374,7 @@ static const struct net_device_ops uml_netdev_ops = {
 	.ndo_set_rx_mode	= uml_net_set_multicast_list,
 	.ndo_tx_timeout 	= uml_net_tx_timeout,
 	.ndo_set_mac_address	= eth_mac_addr,
+	.ndo_change_mtu 	= uml_net_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = uml_net_poll_controller,
@@ -380,7 +388,7 @@ static const struct net_device_ops uml_netdev_ops = {
 static int driver_registered;
 
 static void eth_configure(int n, void *init, char *mac,
-			  struct transport *transport, gfp_t gfp_mask)
+			  struct transport *transport)
 {
 	struct uml_net *device;
 	struct net_device *dev;
@@ -389,7 +397,7 @@ static void eth_configure(int n, void *init, char *mac,
 
 	size = transport->private_size + sizeof(struct uml_net_private);
 
-	device = kzalloc(sizeof(*device), gfp_mask);
+	device = kzalloc(sizeof(*device), GFP_KERNEL);
 	if (device == NULL) {
 		printk(KERN_ERR "eth_configure failed to allocate struct "
 		       "uml_net\n");
@@ -560,7 +568,7 @@ static LIST_HEAD(transports);
 static LIST_HEAD(eth_cmd_line);
 
 static int check_transport(struct transport *transport, char *eth, int n,
-			   void **init_out, char **mac_out, gfp_t gfp_mask)
+			   void **init_out, char **mac_out)
 {
 	int len;
 
@@ -574,7 +582,7 @@ static int check_transport(struct transport *transport, char *eth, int n,
 	else if (*eth != '\0')
 		return 0;
 
-	*init_out = kmalloc(transport->setup_size, gfp_mask);
+	*init_out = kmalloc(transport->setup_size, GFP_KERNEL);
 	if (*init_out == NULL)
 		return 1;
 
@@ -601,11 +609,11 @@ void register_transport(struct transport *new)
 	list_for_each_safe(ele, next, &eth_cmd_line) {
 		eth = list_entry(ele, struct eth_init, list);
 		match = check_transport(new, eth->init, eth->index, &init,
-					&mac, GFP_KERNEL);
+					&mac);
 		if (!match)
 			continue;
 		else if (init != NULL) {
-			eth_configure(eth->index, init, mac, new, GFP_KERNEL);
+			eth_configure(eth->index, init, mac, new);
 			kfree(init);
 		}
 		list_del(&eth->list);
@@ -623,11 +631,10 @@ static int eth_setup_common(char *str, int index)
 	spin_lock(&transports_lock);
 	list_for_each(ele, &transports) {
 		transport = list_entry(ele, struct transport, list);
-	        if (!check_transport(transport, str, index, &init,
-					&mac, GFP_ATOMIC))
+	        if (!check_transport(transport, str, index, &init, &mac))
 			continue;
 		if (init != NULL) {
-			eth_configure(index, init, mac, transport, GFP_ATOMIC);
+			eth_configure(index, init, mac, transport);
 			kfree(init);
 		}
 		found = 1;
@@ -652,6 +659,10 @@ static int __init eth_setup(char *str)
 	}
 
 	new = alloc_bootmem(sizeof(*new));
+	if (new == NULL) {
+		printk(KERN_ERR "eth_init : alloc_bootmem failed\n");
+		return 1;
+	}
 
 	INIT_LIST_HEAD(&new->list);
 	new->index = n;

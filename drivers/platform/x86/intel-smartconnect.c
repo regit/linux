@@ -29,7 +29,7 @@ static int smartconnect_acpi_init(struct acpi_device *acpi)
 	acpi_status status;
 
 	status = acpi_evaluate_integer(acpi->handle, "GAOS", NULL, &value);
-	if (ACPI_FAILURE(status))
+	if (!ACPI_SUCCESS(status))
 		return -EINVAL;
 
 	if (value & 0x1) {

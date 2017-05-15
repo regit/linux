@@ -11,6 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 #ifndef __USB_OPS_LINUX_H__
 #define __USB_OPS_LINUX_H__
@@ -23,16 +28,6 @@
 #define MAX_USBCTRL_VENDORREQ_TIMES	10
 
 #define RTW_USB_BULKOUT_TIME	5000/* ms */
-
-#define REALTEK_USB_VENQT_READ		0xC0
-#define REALTEK_USB_VENQT_WRITE		0x40
-
-#define ALIGNMENT_UNIT			16
-#define MAX_VENDOR_REQ_CMD_SIZE	254	/* 8188cu SIE Support */
-#define MAX_USB_IO_CTL_SIZE	(MAX_VENDOR_REQ_CMD_SIZE + ALIGNMENT_UNIT)
-
-#define USB_HIGH_SPEED_BULK_SIZE	512
-#define USB_FULL_SPEED_BULK_SIZE	64
 
 #define _usbctrl_vendorreq_async_callback(urb, regs)	\
 	_usbctrl_vendorreq_async_callback(urb)
@@ -49,18 +44,12 @@
 
 unsigned int ffaddr2pipehdl(struct dvobj_priv *pdvobj, u32 addr);
 
-u8 usb_read8(struct adapter *adapter, u32 addr);
-u16 usb_read16(struct adapter *adapter, u32 addr);
-u32 usb_read32(struct adapter *adapter, u32 addr);
+void usb_read_mem(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *rmem);
+void usb_write_mem(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem);
 
-u32 usb_read_port(struct adapter *adapter, u32 addr, struct recv_buf *precvbuf);
-void usb_read_port_cancel(struct adapter *adapter);
+void usb_read_port_cancel(struct intf_hdl *pintfhdl);
 
-int usb_write8(struct adapter *adapter, u32 addr, u8 val);
-int usb_write16(struct adapter *adapter, u32 addr, u16 val);
-int usb_write32(struct adapter *adapter, u32 addr, u32 val);
-
-u32 usb_write_port(struct adapter *adapter, u32 addr, u32 cnt, struct xmit_buf *pmem);
-void usb_write_port_cancel(struct adapter *adapter);
+u32 usb_write_port(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem);
+void usb_write_port_cancel(struct intf_hdl *pintfhdl);
 
 #endif

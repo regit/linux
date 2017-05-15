@@ -14,12 +14,12 @@
 #include <linux/errno.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
+#include <linux/kconfig.h>
 #include <linux/moduleloader.h>
 #include <linux/netdevice.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <asm/asm.h>
 #include <asm/bitops.h>
 #include <asm/cacheflush.h>
 #include <asm/cpu-features.h>
@@ -28,14 +28,14 @@
 #include "bpf_jit.h"
 
 /* ABI
- * r_skb_hl	SKB header length
- * r_data	SKB data pointer
- * r_off	Offset
- * r_A		BPF register A
- * r_X		BPF register X
- * r_skb	*skb
- * r_M		*scratch memory
- * r_skb_len	SKB length
+ *
+ * s0	1st scratch register
+ * s1	2nd scratch register
+ * s2	offset register
+ * s3	BPF register A
+ * s4	BPF register X
+ * s5	*skb
+ * s6	*scratch memory
  *
  * On entry (*bpf_func)(*skb, *filter)
  * a0 = MIPS_R_A0 = skb;
@@ -63,7 +63,43 @@
  * ----------------------------------------------------
  */
 
+#define RSIZE	(sizeof(unsigned long))
 #define ptr typeof(unsigned long)
+
+/* ABI specific return values */
+#ifdef CONFIG_32BIT /* O32 */
+#ifdef CONFIG_CPU_LITTLE_ENDIAN
+#define r_err	MIPS_R_V1
+#define r_val	MIPS_R_V0
+#else /* CONFIG_CPU_LITTLE_ENDIAN */
+#define r_err	MIPS_R_V0
+#define r_val	MIPS_R_V1
+#endif
+#else /* N64 */
+#define r_err	MIPS_R_V0
+#define r_val	MIPS_R_V0
+#endif
+
+#define r_ret	MIPS_R_V0
+
+/*
+ * Use 2 scratch registers to avoid pipeline interlocks.
+ * There is no overhead during epilogue and prologue since
+ * any of the $s0-$s6 registers will only be preserved if
+ * they are going to actually be used.
+ */
+#define r_s0		MIPS_R_S0 /* scratch reg 1 */
+#define r_s1		MIPS_R_S1 /* scratch reg 2 */
+#define r_off		MIPS_R_S2
+#define r_A		MIPS_R_S3
+#define r_X		MIPS_R_S4
+#define r_skb		MIPS_R_S5
+#define r_M		MIPS_R_S6
+#define r_tmp_imm	MIPS_R_T6 /* No need to preserve this */
+#define r_tmp		MIPS_R_T7 /* No need to preserve this */
+#define r_zero		MIPS_R_ZERO
+#define r_sp		MIPS_R_SP
+#define r_ra		MIPS_R_RA
 
 #define SCRATCH_OFF(k)		(4 * (k))
 
@@ -72,13 +108,13 @@
 #define SEEN_SREG_SFT		(BPF_MEMWORDS + 1)
 #define SEEN_SREG_BASE		(1 << SEEN_SREG_SFT)
 #define SEEN_SREG(x)		(SEEN_SREG_BASE << (x))
+#define SEEN_S0			SEEN_SREG(0)
+#define SEEN_S1			SEEN_SREG(1)
 #define SEEN_OFF		SEEN_SREG(2)
 #define SEEN_A			SEEN_SREG(3)
 #define SEEN_X			SEEN_SREG(4)
 #define SEEN_SKB		SEEN_SREG(5)
 #define SEEN_MEM		SEEN_SREG(6)
-/* SEEN_SK_DATA also implies skb_hl an skb_len */
-#define SEEN_SKB_DATA		(SEEN_SREG(7) | SEEN_SREG(1) | SEEN_SREG(0))
 
 /* Arguments used by JIT */
 #define ARGS_USED_BY_JIT	2 /* only applicable to 64-bit */
@@ -95,7 +131,7 @@
  * @target:		Memory location for the compiled filter
  */
 struct jit_ctx {
-	const struct bpf_prog *skf;
+	const struct sk_filter *skf;
 	unsigned int prologue_bytes;
 	u32 idx;
 	u32 flags;
@@ -123,19 +159,6 @@ do {							\
 	if ((ctx)->target != NULL) {			\
 		u32 *p = &(ctx)->target[ctx->idx];	\
 		uasm_i_##func(&p, ##__VA_ARGS__);	\
-	}						\
-	(ctx)->idx++;					\
-} while (0)
-
-/*
- * Similar to emit_instr but it must be used when we need to emit
- * 32-bit or 64-bit instructions
- */
-#define emit_long_instr(ctx, func, ...)			\
-do {							\
-	if ((ctx)->target != NULL) {			\
-		u32 *p = &(ctx)->target[ctx->idx];	\
-		UASM_i_##func(&p, ##__VA_ARGS__);	\
 	}						\
 	(ctx)->idx++;					\
 } while (0)
@@ -193,6 +216,13 @@ static inline void emit_ori(unsigned int dst, unsigned src, u32 imm,
 	} else {
 		emit_instr(ctx, ori, dst, src, imm);
 	}
+}
+
+
+static inline void emit_daddu(unsigned int dst, unsigned int src1,
+			      unsigned int src2, struct jit_ctx *ctx)
+{
+	emit_instr(ctx, daddu, dst, src1, src2);
 }
 
 static inline void emit_daddiu(unsigned int dst, unsigned int src,
@@ -253,7 +283,11 @@ static inline void emit_xori(ptr dst, ptr src, u32 imm, struct jit_ctx *ctx)
 
 static inline void emit_stack_offset(int offset, struct jit_ctx *ctx)
 {
-	emit_long_instr(ctx, ADDIU, r_sp, r_sp, offset);
+	if (config_enabled(CONFIG_64BIT))
+		emit_instr(ctx, daddiu, r_sp, r_sp, offset);
+	else
+		emit_instr(ctx, addiu, r_sp, r_sp, offset);
+
 }
 
 static inline void emit_subu(unsigned int dst, unsigned int src1,
@@ -331,7 +365,10 @@ static inline void emit_store_stack_reg(ptr reg, ptr base,
 					unsigned int offset,
 					struct jit_ctx *ctx)
 {
-	emit_long_instr(ctx, SW, reg, offset, base);
+	if (config_enabled(CONFIG_64BIT))
+		emit_instr(ctx, sd, reg, offset, base);
+	else
+		emit_instr(ctx, sw, reg, offset, base);
 }
 
 static inline void emit_store(ptr reg, ptr base, unsigned int offset,
@@ -344,7 +381,10 @@ static inline void emit_load_stack_reg(ptr reg, ptr base,
 				       unsigned int offset,
 				       struct jit_ctx *ctx)
 {
-	emit_long_instr(ctx, LW, reg, offset, base);
+	if (config_enabled(CONFIG_64BIT))
+		emit_instr(ctx, ld, reg, offset, base);
+	else
+		emit_instr(ctx, lw, reg, offset, base);
 }
 
 static inline void emit_load(unsigned int reg, unsigned int base,
@@ -390,7 +430,7 @@ static inline void emit_mod(unsigned int dst, unsigned int src,
 		u32 *p = &ctx->target[ctx->idx];
 		uasm_i_divu(&p, dst, src);
 		p = &ctx->target[ctx->idx + 1];
-		uasm_i_mfhi(&p, dst);
+		uasm_i_mflo(&p, dst);
 	}
 	ctx->idx += 2; /* 2 insts */
 }
@@ -418,14 +458,17 @@ static inline void emit_load_ptr(unsigned int dst, unsigned int src,
 				     int imm, struct jit_ctx *ctx)
 {
 	/* src contains the base addr of the 32/64-pointer */
-	emit_long_instr(ctx, LW, dst, imm, src);
+	if (config_enabled(CONFIG_64BIT))
+		emit_instr(ctx, ld, dst, imm, src);
+	else
+		emit_instr(ctx, lw, dst, imm, src);
 }
 
 /* load a function pointer to register */
 static inline void emit_load_func(unsigned int reg, ptr imm,
 				  struct jit_ctx *ctx)
 {
-	if (IS_ENABLED(CONFIG_64BIT)) {
+	if (config_enabled(CONFIG_64BIT)) {
 		/* At this point imm is always 64-bit */
 		emit_load_imm(r_tmp, (u64)imm >> 32, ctx);
 		emit_dsll(r_tmp_imm, r_tmp, 16, ctx); /* left shift by 16 */
@@ -440,7 +483,10 @@ static inline void emit_load_func(unsigned int reg, ptr imm,
 /* Move to real MIPS register */
 static inline void emit_reg_move(ptr dst, ptr src, struct jit_ctx *ctx)
 {
-	emit_long_instr(ctx, ADDU, dst, src, r_zero);
+	if (config_enabled(CONFIG_64BIT))
+		emit_daddu(dst, src, r_zero, ctx);
+	else
+		emit_addu(dst, src, r_zero, ctx);
 }
 
 /* Move to JIT (32-bit) register */
@@ -515,9 +561,22 @@ static inline void emit_jr(unsigned int reg, struct jit_ctx *ctx)
 static inline u16 align_sp(unsigned int num)
 {
 	/* Double word alignment for 32-bit, quadword for 64-bit */
-	unsigned int align = IS_ENABLED(CONFIG_64BIT) ? 16 : 8;
+	unsigned int align = config_enabled(CONFIG_64BIT) ? 16 : 8;
 	num = (num + (align - 1)) & -align;
 	return num;
+}
+
+static bool is_load_to_a(u16 inst)
+{
+	switch (inst) {
+	case BPF_LD | BPF_W | BPF_LEN:
+	case BPF_LD | BPF_W | BPF_ABS:
+	case BPF_LD | BPF_H | BPF_ABS:
+	case BPF_LD | BPF_B | BPF_ABS:
+		return true;
+	default:
+		return false;
+	}
 }
 
 static void save_bpf_jit_regs(struct jit_ctx *ctx, unsigned offset)
@@ -528,13 +587,27 @@ static void save_bpf_jit_regs(struct jit_ctx *ctx, unsigned offset)
 	/* Adjust the stack pointer */
 	emit_stack_offset(-align_sp(offset), ctx);
 
+	if (ctx->flags & SEEN_CALL) {
+		/* Argument save area */
+		if (config_enabled(CONFIG_64BIT))
+			/* Bottom of current frame */
+			real_off = align_sp(offset) - RSIZE;
+		else
+			/* Top of previous frame */
+			real_off = align_sp(offset) + RSIZE;
+		emit_store_stack_reg(MIPS_R_A0, r_sp, real_off, ctx);
+		emit_store_stack_reg(MIPS_R_A1, r_sp, real_off + RSIZE, ctx);
+
+		real_off = 0;
+	}
+
 	tmp_flags = sflags = ctx->flags >> SEEN_SREG_SFT;
 	/* sflags is essentially a bitmap */
 	while (tmp_flags) {
 		if ((sflags >> i) & 0x1) {
 			emit_store_stack_reg(MIPS_R_S0 + i, r_sp, real_off,
 					     ctx);
-			real_off += SZREG;
+			real_off += RSIZE;
 		}
 		i++;
 		tmp_flags >>= 1;
@@ -543,14 +616,17 @@ static void save_bpf_jit_regs(struct jit_ctx *ctx, unsigned offset)
 	/* save return address */
 	if (ctx->flags & SEEN_CALL) {
 		emit_store_stack_reg(r_ra, r_sp, real_off, ctx);
-		real_off += SZREG;
+		real_off += RSIZE;
 	}
 
 	/* Setup r_M leaving the alignment gap if necessary */
 	if (ctx->flags & SEEN_MEM) {
-		if (real_off % (SZREG * 2))
-			real_off += SZREG;
-		emit_long_instr(ctx, ADDIU, r_M, r_sp, real_off);
+		if (real_off % (RSIZE * 2))
+			real_off += RSIZE;
+		if (config_enabled(CONFIG_64BIT))
+			emit_daddiu(r_M, r_sp, real_off, ctx);
+		else
+			emit_addiu(r_M, r_sp, real_off, ctx);
 	}
 }
 
@@ -560,6 +636,19 @@ static void restore_bpf_jit_regs(struct jit_ctx *ctx,
 	int i, real_off = 0;
 	u32 sflags, tmp_flags;
 
+	if (ctx->flags & SEEN_CALL) {
+		if (config_enabled(CONFIG_64BIT))
+			/* Bottom of current frame */
+			real_off = align_sp(offset) - RSIZE;
+		else
+			/* Top of previous frame */
+			real_off = align_sp(offset) + RSIZE;
+		emit_load_stack_reg(MIPS_R_A0, r_sp, real_off, ctx);
+		emit_load_stack_reg(MIPS_R_A1, r_sp, real_off + RSIZE, ctx);
+
+		real_off = 0;
+	}
+
 	tmp_flags = sflags = ctx->flags >> SEEN_SREG_SFT;
 	/* sflags is a bitmap */
 	i = 0;
@@ -567,7 +656,7 @@ static void restore_bpf_jit_regs(struct jit_ctx *ctx,
 		if ((sflags >> i) & 0x1) {
 			emit_load_stack_reg(MIPS_R_S0 + i, r_sp, real_off,
 					    ctx);
-			real_off += SZREG;
+			real_off += RSIZE;
 		}
 		i++;
 		tmp_flags >>= 1;
@@ -587,19 +676,34 @@ static unsigned int get_stack_depth(struct jit_ctx *ctx)
 
 
 	/* How may s* regs do we need to preserved? */
-	sp_off += hweight32(ctx->flags >> SEEN_SREG_SFT) * SZREG;
+	sp_off += hweight32(ctx->flags >> SEEN_SREG_SFT) * RSIZE;
 
 	if (ctx->flags & SEEN_MEM)
 		sp_off += 4 * BPF_MEMWORDS; /* BPF_MEMWORDS are 32-bit */
 
 	if (ctx->flags & SEEN_CALL)
-		sp_off += SZREG; /* Space for our ra register */
+		/*
+		 * The JIT code make calls to external functions using 2
+		 * arguments. Therefore, for o32 we don't need to allocate
+		 * space because we don't care if the argumetns are lost
+		 * across calls. We do need however to preserve incoming
+		 * arguments but the space is already allocated for us by
+		 * the caller. On the other hand, for n64, we need to allocate
+		 * this space ourselves. We need to preserve $ra as well.
+		 */
+		sp_off += config_enabled(CONFIG_64BIT) ?
+			(ARGS_USED_BY_JIT + 1) * RSIZE : RSIZE;
 
-	return sp_off;
+	/*
+	 * Subtract the bytes for the last registers since we only care about
+	 * the location on the stack pointer.
+	 */
+	return sp_off - RSIZE;
 }
 
 static void build_prologue(struct jit_ctx *ctx)
 {
+	u16 first_inst = ctx->skf->insns[0].code;
 	int sp_off;
 
 	/* Calculate the total offset for the stack pointer */
@@ -609,24 +713,11 @@ static void build_prologue(struct jit_ctx *ctx)
 	if (ctx->flags & SEEN_SKB)
 		emit_reg_move(r_skb, MIPS_R_A0, ctx);
 
-	if (ctx->flags & SEEN_SKB_DATA) {
-		/* Load packet length */
-		emit_load(r_skb_len, r_skb, offsetof(struct sk_buff, len),
-			  ctx);
-		emit_load(r_tmp, r_skb, offsetof(struct sk_buff, data_len),
-			  ctx);
-		/* Load the data pointer */
-		emit_load_ptr(r_skb_data, r_skb,
-			      offsetof(struct sk_buff, data), ctx);
-		/* Load the header length */
-		emit_subu(r_skb_hl, r_skb_len, r_tmp, ctx);
-	}
-
 	if (ctx->flags & SEEN_X)
 		emit_jit_reg_move(r_X, r_zero, ctx);
 
 	/* Do not leak kernel data to userspace */
-	if (bpf_needs_clear_a(&ctx->skf->insns[0]))
+	if ((first_inst != (BPF_RET | BPF_K)) && !(is_load_to_a(first_inst)))
 		emit_jit_reg_move(r_A, r_zero, ctx);
 }
 
@@ -644,17 +735,64 @@ static void build_epilogue(struct jit_ctx *ctx)
 	emit_nop(ctx);
 }
 
-#define CHOOSE_LOAD_FUNC(K, func) \
-	((int)K < 0 ? ((int)K >= SKF_LL_OFF ? func##_negative : func) : \
-	 func##_positive)
+static u64 jit_get_skb_b(struct sk_buff *skb, unsigned offset)
+{
+	u8 ret;
+	int err;
+
+	err = skb_copy_bits(skb, offset, &ret, 1);
+
+	return (u64)err << 32 | ret;
+}
+
+static u64 jit_get_skb_h(struct sk_buff *skb, unsigned offset)
+{
+	u16 ret;
+	int err;
+
+	err = skb_copy_bits(skb, offset, &ret, 2);
+
+	return (u64)err << 32 | ntohs(ret);
+}
+
+static u64 jit_get_skb_w(struct sk_buff *skb, unsigned offset)
+{
+	u32 ret;
+	int err;
+
+	err = skb_copy_bits(skb, offset, &ret, 4);
+
+	return (u64)err << 32 | ntohl(ret);
+}
+
+#ifdef __BIG_ENDIAN_BITFIELD
+#define PKT_TYPE_MAX	(7 << 5)
+#else
+#define PKT_TYPE_MAX	7
+#endif
+static int pkt_type_offset(void)
+{
+	struct sk_buff skb_probe = {
+		.pkt_type = ~0,
+	};
+	u8 *ct = (u8 *)&skb_probe;
+	unsigned int off;
+
+	for (off = 0; off < sizeof(struct sk_buff); off++) {
+		if (ct[off] == PKT_TYPE_MAX)
+			return off;
+	}
+	pr_err_once("Please fix pkt_type_offset(), as pkt_type couldn't be found\n");
+	return -1;
+}
 
 static int build_body(struct jit_ctx *ctx)
 {
-	const struct bpf_prog *prog = ctx->skf;
+	void *load_func[] = {jit_get_skb_b, jit_get_skb_h, jit_get_skb_w};
+	const struct sk_filter *prog = ctx->skf;
 	const struct sock_filter *inst;
-	unsigned int i, off, condt;
+	unsigned int i, off, load_order, condt;
 	u32 k, b_off __maybe_unused;
-	u8 (*sk_load_func)(unsigned long *skb, int offset);
 
 	for (i = 0; i < prog->len; i++) {
 		u16 code;
@@ -688,46 +826,71 @@ static int build_body(struct jit_ctx *ctx)
 			break;
 		case BPF_LD | BPF_W | BPF_ABS:
 			/* A <- P[k:4] */
-			sk_load_func = CHOOSE_LOAD_FUNC(k, sk_load_word);
+			load_order = 2;
 			goto load;
 		case BPF_LD | BPF_H | BPF_ABS:
 			/* A <- P[k:2] */
-			sk_load_func = CHOOSE_LOAD_FUNC(k, sk_load_half);
+			load_order = 1;
 			goto load;
 		case BPF_LD | BPF_B | BPF_ABS:
 			/* A <- P[k:1] */
-			sk_load_func = CHOOSE_LOAD_FUNC(k, sk_load_byte);
+			load_order = 0;
 load:
+			/* the interpreter will deal with the negative K */
+			if ((int)k < 0)
+				return -ENOTSUPP;
+
 			emit_load_imm(r_off, k, ctx);
 load_common:
-			ctx->flags |= SEEN_CALL | SEEN_OFF |
-				SEEN_SKB | SEEN_A | SEEN_SKB_DATA;
+			/*
+			 * We may got here from the indirect loads so
+			 * return if offset is negative.
+			 */
+			emit_slt(r_s0, r_off, r_zero, ctx);
+			emit_bcond(MIPS_COND_NE, r_s0, r_zero,
+				   b_imm(prog->len, ctx), ctx);
+			emit_reg_move(r_ret, r_zero, ctx);
 
-			emit_load_func(r_s0, (ptr)sk_load_func, ctx);
+			ctx->flags |= SEEN_CALL | SEEN_OFF | SEEN_S0 |
+				SEEN_SKB | SEEN_A;
+
+			emit_load_func(r_s0, (ptr)load_func[load_order],
+				      ctx);
 			emit_reg_move(MIPS_R_A0, r_skb, ctx);
 			emit_jalr(MIPS_R_RA, r_s0, ctx);
 			/* Load second argument to delay slot */
 			emit_reg_move(MIPS_R_A1, r_off, ctx);
 			/* Check the error value */
-			emit_bcond(MIPS_COND_EQ, r_ret, 0, b_imm(i + 1, ctx),
-				   ctx);
-			/* Load return register on DS for failures */
-			emit_reg_move(r_ret, r_zero, ctx);
+			if (config_enabled(CONFIG_64BIT)) {
+				/* Get error code from the top 32-bits */
+				emit_dsrl32(r_s0, r_val, 0, ctx);
+				/* Branch to 3 instructions ahead */
+				emit_bcond(MIPS_COND_NE, r_s0, r_zero, 3 << 2,
+					   ctx);
+			} else {
+				/* Branch to 3 instructions ahead */
+				emit_bcond(MIPS_COND_NE, r_err, r_zero, 3 << 2,
+					   ctx);
+			}
+			emit_nop(ctx);
+			/* We are good */
+			emit_b(b_imm(i + 1, ctx), ctx);
+			emit_jit_reg_move(r_A, r_val, ctx);
 			/* Return with error */
 			emit_b(b_imm(prog->len, ctx), ctx);
-			emit_nop(ctx);
+			emit_reg_move(r_ret, r_zero, ctx);
 			break;
 		case BPF_LD | BPF_W | BPF_IND:
 			/* A <- P[X + k:4] */
-			sk_load_func = sk_load_word;
+			load_order = 2;
 			goto load_ind;
 		case BPF_LD | BPF_H | BPF_IND:
 			/* A <- P[X + k:2] */
-			sk_load_func = sk_load_half;
+			load_order = 1;
 			goto load_ind;
 		case BPF_LD | BPF_B | BPF_IND:
 			/* A <- P[X + k:1] */
-			sk_load_func = sk_load_byte;
+			load_order = 0;
 load_ind:
 			ctx->flags |= SEEN_OFF | SEEN_X;
 			emit_addiu(r_off, r_X, k, ctx);
@@ -749,10 +912,14 @@ load_ind:
 			emit_load(r_X, r_skb, off, ctx);
 			break;
 		case BPF_LDX | BPF_B | BPF_MSH:
+			/* the interpreter will deal with the negative K */
+			if ((int)k < 0)
+				return -ENOTSUPP;
+
 			/* X <- 4 * (P[k:1] & 0xf) */
-			ctx->flags |= SEEN_X | SEEN_CALL | SEEN_SKB;
+			ctx->flags |= SEEN_X | SEEN_CALL | SEEN_S0 | SEEN_SKB;
 			/* Load offset to a1 */
-			emit_load_func(r_s0, (ptr)sk_load_byte, ctx);
+			emit_load_func(r_s0, (ptr)jit_get_skb_b, ctx);
 			/*
 			 * This may emit two instructions so it may not fit
 			 * in the delay slot. So use a0 in the delay slot.
@@ -761,15 +928,25 @@ load_ind:
 			emit_jalr(MIPS_R_RA, r_s0, ctx);
 			emit_reg_move(MIPS_R_A0, r_skb, ctx); /* delay slot */
 			/* Check the error value */
-			emit_bcond(MIPS_COND_NE, r_ret, 0,
-				   b_imm(prog->len, ctx), ctx);
-			emit_reg_move(r_ret, r_zero, ctx);
+			if (config_enabled(CONFIG_64BIT)) {
+				/* Top 32-bits of $v0 on 64-bit */
+				emit_dsrl32(r_s0, r_val, 0, ctx);
+				emit_bcond(MIPS_COND_NE, r_s0, r_zero,
+					   3 << 2, ctx);
+			} else {
+				emit_bcond(MIPS_COND_NE, r_err, r_zero,
+					   3 << 2, ctx);
+			}
+			/* No need for delay slot */
 			/* We are good */
 			/* X <- P[1:K] & 0xf */
-			emit_andi(r_X, r_A, 0xf, ctx);
+			emit_andi(r_X, r_val, 0xf, ctx);
 			/* X << 2 */
 			emit_b(b_imm(i + 1, ctx), ctx);
 			emit_sll(r_X, r_X, 2, ctx); /* delay slot */
+			/* Return with error */
+			emit_b(b_imm(prog->len, ctx), ctx);
+			emit_load_imm(r_ret, 0, ctx); /* delay slot */
 			break;
 		case BPF_ST:
 			/* M[k] <- A */
@@ -804,7 +981,7 @@ load_ind:
 		case BPF_ALU | BPF_MUL | BPF_K:
 			/* A *= K */
 			/* Load K to scratch register before MUL */
-			ctx->flags |= SEEN_A;
+			ctx->flags |= SEEN_A | SEEN_S0;
 			emit_load_imm(r_s0, k, ctx);
 			emit_mul(r_A, r_A, r_s0, ctx);
 			break;
@@ -822,17 +999,17 @@ load_ind:
 				emit_srl(r_A, r_A, k, ctx);
 				break;
 			}
-			ctx->flags |= SEEN_A;
+			ctx->flags |= SEEN_A | SEEN_S0;
 			emit_load_imm(r_s0, k, ctx);
 			emit_div(r_A, r_s0, ctx);
 			break;
 		case BPF_ALU | BPF_MOD | BPF_K:
 			/* A %= k */
-			if (k == 1) {
+			if (k == 1 || optimize_div(&k)) {
 				ctx->flags |= SEEN_A;
 				emit_jit_reg_move(r_A, r_zero, ctx);
 			} else {
-				ctx->flags |= SEEN_A;
+				ctx->flags |= SEEN_A | SEEN_S0;
 				emit_load_imm(r_s0, k, ctx);
 				emit_mod(r_A, r_s0, ctx);
 			}
@@ -843,7 +1020,7 @@ load_ind:
 			/* Check if r_X is zero */
 			emit_bcond(MIPS_COND_EQ, r_X, r_zero,
 				   b_imm(prog->len, ctx), ctx);
-			emit_load_imm(r_ret, 0, ctx); /* delay slot */
+			emit_load_imm(r_val, 0, ctx); /* delay slot */
 			emit_div(r_A, r_X, ctx);
 			break;
 		case BPF_ALU | BPF_MOD | BPF_X:
@@ -852,7 +1029,7 @@ load_ind:
 			/* Check if r_X is zero */
 			emit_bcond(MIPS_COND_EQ, r_X, r_zero,
 				   b_imm(prog->len, ctx), ctx);
-			emit_load_imm(r_ret, 0, ctx); /* delay slot */
+			emit_load_imm(r_val, 0, ctx); /* delay slot */
 			emit_mod(r_A, r_X, ctx);
 			break;
 		case BPF_ALU | BPF_OR | BPF_K:
@@ -946,10 +1123,10 @@ jmp_cmp:
 			if ((condt & MIPS_COND_GE) ||
 			    (condt & MIPS_COND_GT)) {
 				if (condt & MIPS_COND_K) { /* K */
-					ctx->flags |= SEEN_A;
+					ctx->flags |= SEEN_S0 | SEEN_A;
 					emit_sltiu(r_s0, r_A, k, ctx);
 				} else { /* X */
-					ctx->flags |= SEEN_A |
+					ctx->flags |= SEEN_S0 | SEEN_A |
 						SEEN_X;
 					emit_sltu(r_s0, r_A, r_X, ctx);
 				}
@@ -961,7 +1138,7 @@ jmp_cmp:
 				/* A > (K|X) ? scratch = 0 */
 				if (condt & MIPS_COND_GT) {
 					/* Checking for equality */
-					ctx->flags |= SEEN_A | SEEN_X;
+					ctx->flags |= SEEN_S0 | SEEN_A | SEEN_X;
 					if (condt & MIPS_COND_K)
 						emit_load_imm(r_s0, k, ctx);
 					else
@@ -984,7 +1161,7 @@ jmp_cmp:
 			} else {
 				/* A == K|X */
 				if (condt & MIPS_COND_K) { /* K */
-					ctx->flags |= SEEN_A;
+					ctx->flags |= SEEN_S0 | SEEN_A;
 					emit_load_imm(r_s0, k, ctx);
 					/* jump true */
 					b_off = b_imm(i + inst->jt + 1, ctx);
@@ -1014,7 +1191,7 @@ jmp_cmp:
 			}
 			break;
 		case BPF_JMP | BPF_JSET | BPF_K:
-			ctx->flags |= SEEN_A;
+			ctx->flags |= SEEN_S0 | SEEN_S1 | SEEN_A;
 			/* pc += (A & K) ? pc -> jt : pc -> jf */
 			emit_load_imm(r_s1, k, ctx);
 			emit_and(r_s0, r_A, r_s1, ctx);
@@ -1028,7 +1205,7 @@ jmp_cmp:
 			emit_nop(ctx);
 			break;
 		case BPF_JMP | BPF_JSET | BPF_X:
-			ctx->flags |= SEEN_X | SEEN_A;
+			ctx->flags |= SEEN_S0 | SEEN_X | SEEN_A;
 			/* pc += (A & X) ? pc -> jt : pc -> jf */
 			emit_and(r_s0, r_A, r_X, ctx);
 			/* jump true */
@@ -1085,7 +1262,7 @@ jmp_cmp:
 			emit_half_load(r_A, r_skb, off, ctx);
 #ifdef CONFIG_CPU_LITTLE_ENDIAN
 			/* This needs little endian fixup */
-			if (cpu_has_wsbh) {
+			if (cpu_has_mips_r2) {
 				/* R2 and later have the wsbh instruction */
 				emit_wsbh(r_A, r_A, ctx);
 			} else {
@@ -1112,7 +1289,7 @@ jmp_cmp:
 			break;
 		case BPF_ANC | SKF_AD_IFINDEX:
 			/* A = skb->dev->ifindex */
-			ctx->flags |= SEEN_SKB | SEEN_A;
+			ctx->flags |= SEEN_SKB | SEEN_A | SEEN_S0;
 			off = offsetof(struct sk_buff, dev);
 			/* Load *dev pointer */
 			emit_load_ptr(r_s0, r_skb, off, ctx);
@@ -1139,7 +1316,7 @@ jmp_cmp:
 			break;
 		case BPF_ANC | SKF_AD_VLAN_TAG:
 		case BPF_ANC | SKF_AD_VLAN_TAG_PRESENT:
-			ctx->flags |= SEEN_SKB | SEEN_A;
+			ctx->flags |= SEEN_SKB | SEEN_S0 | SEEN_A;
 			BUILD_BUG_ON(FIELD_SIZEOF(struct sk_buff,
 						  vlan_tci) != 2);
 			off = offsetof(struct sk_buff, vlan_tci);
@@ -1155,7 +1332,11 @@ jmp_cmp:
 		case BPF_ANC | SKF_AD_PKTTYPE:
 			ctx->flags |= SEEN_SKB;
 
-			emit_load_byte(r_tmp, r_skb, PKT_TYPE_OFFSET(), ctx);
+			off = pkt_type_offset();
+
+			if (off < 0)
+				return -1;
+			emit_load_byte(r_tmp, r_skb, off, ctx);
 			/* Keep only the last 3 bits */
 			emit_andi(r_A, r_tmp, PKT_TYPE_MAX, ctx);
 #ifdef __BIG_ENDIAN_BITFIELD
@@ -1188,7 +1369,7 @@ jmp_cmp:
 
 int bpf_jit_enable __read_mostly;
 
-void bpf_jit_compile(struct bpf_prog *fp)
+void bpf_jit_compile(struct sk_filter *fp)
 {
 	struct jit_ctx ctx;
 	unsigned int alloc_size, tmp_idx;
@@ -1198,7 +1379,7 @@ void bpf_jit_compile(struct bpf_prog *fp)
 
 	memset(&ctx, 0, sizeof(ctx));
 
-	ctx.offsets = kcalloc(fp->len + 1, sizeof(*ctx.offsets), GFP_KERNEL);
+	ctx.offsets = kcalloc(fp->len, sizeof(*ctx.offsets), GFP_KERNEL);
 	if (ctx.offsets == NULL)
 		return;
 
@@ -1242,10 +1423,9 @@ out:
 	kfree(ctx.offsets);
 }
 
-void bpf_jit_free(struct bpf_prog *fp)
+void bpf_jit_free(struct sk_filter *fp)
 {
 	if (fp->jited)
-		module_memfree(fp->bpf_func);
-
-	bpf_prog_unlock_free(fp);
+		module_free(NULL, fp->bpf_func);
+	kfree(fp);
 }

@@ -10,11 +10,14 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/init.h>
 #include <linux/linkage.h>
-#include <linux/threads.h>
-#include <asm/assembler.h>
+#include <linux/init.h>
 #include <asm/memory.h>
+
+ENTRY(shmobile_invalidate_start)
+	bl	v7_invalidate_l1
+	b	secondary_startup
+ENDPROC(shmobile_invalidate_start)
 
 /*
  * Reset vector for secondary CPUs.
@@ -24,6 +27,7 @@
 	.arm
 	.align  12
 ENTRY(shmobile_boot_vector)
+	ldr     r0, 2f
 	ldr     r1, 1f
 	bx	r1
 
@@ -33,6 +37,9 @@ ENDPROC(shmobile_boot_vector)
 	.globl	shmobile_boot_fn
 shmobile_boot_fn:
 1:	.space	4
+	.globl	shmobile_boot_arg
+shmobile_boot_arg:
+2:	.space	4
 	.globl	shmobile_boot_size
 shmobile_boot_size:
 	.long	. - shmobile_boot_vector
@@ -42,15 +49,13 @@ shmobile_boot_size:
  */
 
 ENTRY(shmobile_smp_boot)
+						@ r0 = MPIDR_HWID_BITMASK
 	mrc	p15, 0, r1, c0, c0, 5		@ r1 = MPIDR
-	and	r0, r1, #0xffffff		@ MPIDR_HWID_BITMASK
-						@ r0 = cpu_logical_map() value
+	and	r0, r1, r0			@ r0 = cpu_logical_map() value
 	mov	r1, #0				@ r1 = CPU index
-	adr	r2, 1f
-	ldmia	r2, {r5, r6, r7}
-	add	r5, r5, r2			@ array of per-cpu mpidr values
-	add	r6, r6, r2			@ array of per-cpu functions
-	add	r7, r7, r2			@ array of per-cpu arguments
+	adr	r5, 1f				@ array of per-cpu mpidr values
+	adr	r6, 2f				@ array of per-cpu functions
+	adr	r7, 3f				@ array of per-cpu arguments
 
 shmobile_smp_boot_find_mpidr:
 	ldr	r8, [r5, r1, lsl #2]
@@ -63,14 +68,14 @@ shmobile_smp_boot_find_mpidr:
 
 shmobile_smp_boot_next:
 	add	r1, r1, #1
-	cmp	r1, #NR_CPUS
+	cmp	r1, #CONFIG_NR_CPUS
 	blo	shmobile_smp_boot_find_mpidr
 
 	b	shmobile_smp_sleep
 
 shmobile_smp_boot_found:
 	ldr	r0, [r7, r1, lsl #2]
-	ret	r9
+	mov	pc, r9
 ENDPROC(shmobile_smp_boot)
 
 ENTRY(shmobile_smp_sleep)
@@ -78,18 +83,12 @@ ENTRY(shmobile_smp_sleep)
 	b	shmobile_smp_boot
 ENDPROC(shmobile_smp_sleep)
 
-	.align	2
-1:	.long	shmobile_smp_mpidr - .
-	.long	shmobile_smp_fn - 1b
-	.long	shmobile_smp_arg - 1b
-
-	.bss
 	.globl	shmobile_smp_mpidr
 shmobile_smp_mpidr:
-	.space	NR_CPUS * 4
+1:	.space	CONFIG_NR_CPUS * 4
 	.globl	shmobile_smp_fn
 shmobile_smp_fn:
-	.space	NR_CPUS * 4
+2:	.space	CONFIG_NR_CPUS * 4
 	.globl	shmobile_smp_arg
 shmobile_smp_arg:
-	.space	NR_CPUS * 4
+3:	.space	CONFIG_NR_CPUS * 4

@@ -48,6 +48,7 @@
 #include <linux/mtd/partitions.h>
 
 #include <plat/gpio-cfg.h>
+#include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/cpu.h>
 #include <plat/pm.h>
@@ -232,7 +233,6 @@ static struct s3c2410_platform_nand __initdata jive_nand_info = {
 	.twrph1		= 40,
 	.sets		= jive_nand_sets,
 	.nr_sets	= ARRAY_SIZE(jive_nand_sets),
-	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 static int __init jive_mtdset(char *options)
@@ -243,7 +243,7 @@ static int __init jive_mtdset(char *options)
 	if (options == NULL || options[0] == '\0')
 		return 0;
 
-	if (kstrtoul(options, 10, &set)) {
+	if (strict_strtoul(options, 10, &set)) {
 		printk(KERN_ERR "failed to parse mtdset=%s\n", options);
 		return 0;
 	}
@@ -671,4 +671,5 @@ MACHINE_START(JIVE, "JIVE")
 	.map_io		= jive_map_io,
 	.init_machine	= jive_machine_init,
 	.init_time	= jive_init_time,
+	.restart	= s3c2412_restart,
 MACHINE_END

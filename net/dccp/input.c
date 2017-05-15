@@ -359,7 +359,7 @@ send_sync:
 		goto discard;
 	}
 
-	DCCP_INC_STATS(DCCP_MIB_INERRS);
+	DCCP_INC_STATS_BH(DCCP_MIB_INERRS);
 discard:
 	__kfree_skb(skb);
 	return 0;
@@ -537,7 +537,7 @@ static int dccp_rcv_respond_partopen_state_process(struct sock *sk,
 	case DCCP_PKT_DATAACK:
 	case DCCP_PKT_ACK:
 		/*
-		 * FIXME: we should be resetting the PARTOPEN (DELACK) timer
+		 * FIXME: we should be reseting the PARTOPEN (DELACK) timer
 		 * here but only if we haven't used the DELACK timer for
 		 * something else, like sending a delayed ack for a TIMESTAMP
 		 * echo, etc, for now were not clearing it, sending an extra

@@ -17,7 +17,6 @@
 #include <linux/bitops.h>
 #include <linux/err.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
@@ -79,6 +78,11 @@ static int arizona_ldo1_hc_set_voltage_sel(struct regulator_dev *rdev,
 	if (ret != 0)
 		return ret;
 
+	ret = regmap_update_bits(regmap, ARIZONA_DYNAMIC_FREQUENCY_SCALING_1,
+				 ARIZONA_SUBSYS_MAX_FREQ, val);
+	if (ret != 0)
+		return ret;
+
 	if (val)
 		return 0;
 
@@ -130,7 +134,6 @@ static const struct regulator_desc arizona_ldo1_hc = {
 	.uV_step = 50000,
 	.n_voltages = 8,
 	.enable_time = 1500,
-	.ramp_delay = 24000,
 
 	.owner = THIS_MODULE,
 };
@@ -140,6 +143,8 @@ static struct regulator_ops arizona_ldo1_ops = {
 	.map_voltage = regulator_map_voltage_linear,
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
 	.set_voltage_sel = regulator_set_voltage_sel_regmap,
+	.get_bypass = regulator_get_bypass_regmap,
+	.set_bypass = regulator_set_bypass_regmap,
 };
 
 static const struct regulator_desc arizona_ldo1 = {
@@ -154,7 +159,6 @@ static const struct regulator_desc arizona_ldo1 = {
 	.uV_step = 25000,
 	.n_voltages = 13,
 	.enable_time = 500,
-	.ramp_delay = 24000,
 
 	.owner = THIS_MODULE,
 };
@@ -176,44 +180,23 @@ static const struct regulator_init_data arizona_ldo1_default = {
 	.num_consumer_supplies = 1,
 };
 
-static const struct regulator_init_data arizona_ldo1_wm5110 = {
-	.constraints = {
-		.min_uV = 1175000,
-		.max_uV = 1200000,
-		.valid_ops_mask = REGULATOR_CHANGE_STATUS |
-				  REGULATOR_CHANGE_VOLTAGE,
-	},
-	.num_consumer_supplies = 1,
-};
-
 static int arizona_ldo1_of_get_pdata(struct arizona *arizona,
-				     struct regulator_config *config,
-				     const struct regulator_desc *desc)
+				     struct regulator_config *config)
 {
 	struct arizona_pdata *pdata = &arizona->pdata;
 	struct arizona_ldo1 *ldo1 = config->driver_data;
-	struct device_node *np = arizona->dev->of_node;
 	struct device_node *init_node, *dcvdd_node;
 	struct regulator_init_data *init_data;
 
-	pdata->ldoena = of_get_named_gpio(np, "wlf,ldoena", 0);
-	if (pdata->ldoena < 0) {
-		dev_warn(arizona->dev,
-			 "LDOENA GPIO property missing/malformed: %d\n",
-			 pdata->ldoena);
-		pdata->ldoena = 0;
-	} else {
-		config->ena_gpio_initialized = true;
-	}
+	pdata->ldoena = arizona_of_get_named_gpio(arizona, "wlf,ldoena", true);
 
-	init_node = of_get_child_by_name(np, "ldo1");
-	dcvdd_node = of_parse_phandle(np, "DCVDD-supply", 0);
+	init_node = of_get_child_by_name(arizona->dev->of_node, "ldo1");
+	dcvdd_node = of_parse_phandle(arizona->dev->of_node, "DCVDD-supply", 0);
 
 	if (init_node) {
 		config->of_node = init_node;
 
-		init_data = of_get_regulator_init_data(arizona->dev, init_node,
-						       desc);
+		init_data = of_get_regulator_init_data(arizona->dev, init_node);
 
 		if (init_data) {
 			init_data->consumer_supplies = &ldo1->supply;
@@ -257,15 +240,8 @@ static int arizona_ldo1_probe(struct platform_device *pdev)
 	switch (arizona->type) {
 	case WM5102:
 	case WM8997:
-	case WM8998:
-	case WM1814:
 		desc = &arizona_ldo1_hc;
 		ldo1->init_data = arizona_ldo1_dvfs;
-		break;
-	case WM5110:
-	case WM8280:
-		desc = &arizona_ldo1;
-		ldo1->init_data = arizona_ldo1_wm5110;
 		break;
 	default:
 		desc = &arizona_ldo1;
@@ -283,7 +259,7 @@ static int arizona_ldo1_probe(struct platform_device *pdev)
 
 	if (IS_ENABLED(CONFIG_OF)) {
 		if (!dev_get_platdata(arizona->dev)) {
-			ret = arizona_ldo1_of_get_pdata(arizona, &config, desc);
+			ret = arizona_ldo1_of_get_pdata(arizona, &config);
 			if (ret < 0)
 				return ret;
 		}
@@ -304,15 +280,14 @@ static int arizona_ldo1_probe(struct platform_device *pdev)
 		arizona->external_dcvdd = true;
 
 	ldo1->regulator = devm_regulator_register(&pdev->dev, desc, &config);
-
-	of_node_put(config.of_node);
-
 	if (IS_ERR(ldo1->regulator)) {
 		ret = PTR_ERR(ldo1->regulator);
 		dev_err(arizona->dev, "Failed to register LDO1 supply: %d\n",
 			ret);
 		return ret;
 	}
+
+	of_node_put(config.of_node);
 
 	platform_set_drvdata(pdev, ldo1);
 
@@ -323,6 +298,7 @@ static struct platform_driver arizona_ldo1_driver = {
 	.probe = arizona_ldo1_probe,
 	.driver		= {
 		.name	= "arizona-ldo1",
+		.owner	= THIS_MODULE,
 	},
 };
 

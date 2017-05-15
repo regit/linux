@@ -8,7 +8,7 @@
 #include <linux/stat.h>
 #include <linux/utime.h>
 #include <linux/syscalls.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/unistd.h>
 
 #ifdef __ARCH_WANT_SYS_UTIME
@@ -48,7 +48,7 @@ static bool nsec_valid(long nsec)
 	return nsec >= 0 && nsec <= 999999999;
 }
 
-static int utimes_common(const struct path *path, struct timespec *times)
+static int utimes_common(struct path *path, struct timespec *times)
 {
 	int error;
 	struct iattr newattrs;
@@ -81,24 +81,38 @@ static int utimes_common(const struct path *path, struct timespec *times)
 			newattrs.ia_valid |= ATTR_MTIME_SET;
 		}
 		/*
-		 * Tell setattr_prepare(), that this is an explicit time
+		 * Tell inode_change_ok(), that this is an explicit time
 		 * update, even if neither ATTR_ATIME_SET nor ATTR_MTIME_SET
 		 * were used.
 		 */
 		newattrs.ia_valid |= ATTR_TIMES_SET;
 	} else {
-		newattrs.ia_valid |= ATTR_TOUCH;
+		/*
+		 * If times is NULL (or both times are UTIME_NOW),
+		 * then we need to check permissions, because
+		 * inode_change_ok() won't do it.
+		 */
+		error = -EACCES;
+                if (IS_IMMUTABLE(inode))
+			goto mnt_drop_write_and_out;
+
+		if (!inode_owner_or_capable(inode)) {
+			error = inode_permission(inode, MAY_WRITE);
+			if (error)
+				goto mnt_drop_write_and_out;
+		}
 	}
 retry_deleg:
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 	error = notify_change(path->dentry, &newattrs, &delegated_inode);
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 	if (delegated_inode) {
 		error = break_deleg_wait(&delegated_inode);
 		if (!error)
 			goto retry_deleg;
 	}
 
+mnt_drop_write_and_out:
 	mnt_drop_write(path->mnt);
 out:
 	return error;

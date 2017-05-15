@@ -34,7 +34,7 @@
 #include <media/v4l2-fh.h>
 #include <linux/mutex.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/m32r.h>
 #include <asm/io.h>
 #include <asm/dma.h>
@@ -773,6 +773,7 @@ static int __init ar_init(void)
 	ar->vdev.fops = &ar_fops;
 	ar->vdev.ioctl_ops = &ar_ioctl_ops;
 	ar->vdev.release = video_device_release_empty;
+	set_bit(V4L2_FL_USE_FH_PRIO, &ar->vdev.flags);
 	video_set_drvdata(&ar->vdev, ar);
 
 	if (vga) {

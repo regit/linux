@@ -15,7 +15,6 @@
 
 
 #include <linux/list.h>
-#include <sound/asoc.h>
 
 struct snd_pcm_substream;
 struct snd_soc_dapm_widget;
@@ -27,13 +26,13 @@ struct snd_compr_stream;
  * Describes the physical PCM data formating and clocking. Add new formats
  * to the end.
  */
-#define SND_SOC_DAIFMT_I2S		SND_SOC_DAI_FORMAT_I2S
-#define SND_SOC_DAIFMT_RIGHT_J		SND_SOC_DAI_FORMAT_RIGHT_J
-#define SND_SOC_DAIFMT_LEFT_J		SND_SOC_DAI_FORMAT_LEFT_J
-#define SND_SOC_DAIFMT_DSP_A		SND_SOC_DAI_FORMAT_DSP_A
-#define SND_SOC_DAIFMT_DSP_B		SND_SOC_DAI_FORMAT_DSP_B
-#define SND_SOC_DAIFMT_AC97		SND_SOC_DAI_FORMAT_AC97
-#define SND_SOC_DAIFMT_PDM		SND_SOC_DAI_FORMAT_PDM
+#define SND_SOC_DAIFMT_I2S		1 /* I2S mode */
+#define SND_SOC_DAIFMT_RIGHT_J		2 /* Right Justified mode */
+#define SND_SOC_DAIFMT_LEFT_J		3 /* Left Justified mode */
+#define SND_SOC_DAIFMT_DSP_A		4 /* L data MSB after FRM LRC */
+#define SND_SOC_DAIFMT_DSP_B		5 /* L data MSB during FRM LRC */
+#define SND_SOC_DAIFMT_AC97		6 /* AC97 */
+#define SND_SOC_DAIFMT_PDM		7 /* Pulse density modulation */
 
 /* left and right justified also known as MSB and LSB respectively */
 #define SND_SOC_DAIFMT_MSB		SND_SOC_DAIFMT_LEFT_J
@@ -49,25 +48,10 @@ struct snd_compr_stream;
 #define SND_SOC_DAIFMT_GATED		(0 << 4) /* clock is gated */
 
 /*
- * DAI hardware signal polarity.
+ * DAI hardware signal inversions.
  *
  * Specifies whether the DAI can also support inverted clocks for the specified
  * format.
- *
- * BCLK:
- * - "normal" polarity means signal is available at rising edge of BCLK
- * - "inverted" polarity means signal is available at falling edge of BCLK
- *
- * FSYNC "normal" polarity depends on the frame format:
- * - I2S: frame consists of left then right channel data. Left channel starts
- *      with falling FSYNC edge, right channel starts with rising FSYNC edge.
- * - Left/Right Justified: frame consists of left then right channel data.
- *      Left channel starts with rising FSYNC edge, right channel starts with
- *      falling FSYNC edge.
- * - DSP A/B: Frame starts with rising FSYNC edge.
- * - AC97: Frame starts with rising FSYNC edge.
- *
- * "Negative" FSYNC polarity is the one opposite of "normal" polarity.
  */
 #define SND_SOC_DAIFMT_NB_NF		(0 << 8) /* normal bit clock + frame */
 #define SND_SOC_DAIFMT_NB_IF		(2 << 8) /* normal BCLK + inv FRM */
@@ -208,30 +192,6 @@ struct snd_soc_dai_ops {
 		struct snd_soc_dai *);
 };
 
-struct snd_soc_cdai_ops {
-	/*
-	 * for compress ops
-	 */
-	int (*startup)(struct snd_compr_stream *,
-			struct snd_soc_dai *);
-	int (*shutdown)(struct snd_compr_stream *,
-			struct snd_soc_dai *);
-	int (*set_params)(struct snd_compr_stream *,
-			struct snd_compr_params *, struct snd_soc_dai *);
-	int (*get_params)(struct snd_compr_stream *,
-			struct snd_codec *, struct snd_soc_dai *);
-	int (*set_metadata)(struct snd_compr_stream *,
-			struct snd_compr_metadata *, struct snd_soc_dai *);
-	int (*get_metadata)(struct snd_compr_stream *,
-			struct snd_compr_metadata *, struct snd_soc_dai *);
-	int (*trigger)(struct snd_compr_stream *, int,
-			struct snd_soc_dai *);
-	int (*pointer)(struct snd_compr_stream *,
-			struct snd_compr_tstamp *, struct snd_soc_dai *);
-	int (*ack)(struct snd_compr_stream *, size_t,
-			struct snd_soc_dai *);
-};
-
 /*
  * Digital Audio Interface Driver.
  *
@@ -246,8 +206,8 @@ struct snd_soc_dai_driver {
 	/* DAI description */
 	const char *name;
 	unsigned int id;
+	int ac97_control;
 	unsigned int base;
-	struct snd_soc_dobj dobj;
 
 	/* DAI driver callbacks */
 	int (*probe)(struct snd_soc_dai *dai);
@@ -255,13 +215,10 @@ struct snd_soc_dai_driver {
 	int (*suspend)(struct snd_soc_dai *dai);
 	int (*resume)(struct snd_soc_dai *dai);
 	/* compress dai */
-	int (*compress_new)(struct snd_soc_pcm_runtime *rtd, int num);
-	/* DAI is also used for the control bus */
-	bool bus_control;
+	bool compress_dai;
 
 	/* ops */
 	const struct snd_soc_dai_ops *ops;
-	const struct snd_soc_cdai_ops *cops;
 
 	/* DAI capabilities */
 	struct snd_soc_pcm_stream capture;
@@ -284,6 +241,7 @@ struct snd_soc_dai {
 	const char *name;
 	int id;
 	struct device *dev;
+	void *ac97_pdata;	/* platform_data for the ac97 codec */
 
 	/* driver ops */
 	struct snd_soc_dai_driver *driver;
@@ -294,12 +252,12 @@ struct snd_soc_dai {
 	unsigned int symmetric_rates:1;
 	unsigned int symmetric_channels:1;
 	unsigned int symmetric_samplebits:1;
-	unsigned int probed:1;
-
 	unsigned int active;
+	unsigned char probed:1;
 
 	struct snd_soc_dapm_widget *playback_widget;
 	struct snd_soc_dapm_widget *capture_widget;
+	struct snd_soc_dapm_context dapm;
 
 	/* DAI DMA data */
 	void *playback_dma_data;
@@ -311,12 +269,11 @@ struct snd_soc_dai {
 	unsigned int sample_bits;
 
 	/* parent platform/codec */
+	struct snd_soc_platform *platform;
 	struct snd_soc_codec *codec;
 	struct snd_soc_component *component;
 
-	/* CODEC TDM slot masks and params (for fixup) */
-	unsigned int tx_mask;
-	unsigned int rx_mask;
+	struct snd_soc_card *card;
 
 	struct list_head list;
 };

@@ -42,7 +42,7 @@ static int panic_on_timeout;
  */
 atomic_t nmi_active = ATOMIC_INIT(0);		/* oprofile uses this */
 EXPORT_SYMBOL(nmi_active);
-static int nmi_init_done;
+
 static unsigned int nmi_hz = HZ;
 static DEFINE_PER_CPU(short, wd_enabled);
 static int endflag __initdata;
@@ -100,20 +100,20 @@ notrace __kprobes void perfctr_irq(int irq, struct pt_regs *regs)
 		pcr_ops->write_pcr(0, pcr_ops->pcr_nmi_disable);
 
 	sum = local_cpu_data().irq0_irqs;
-	if (__this_cpu_read(nmi_touch)) {
-		__this_cpu_write(nmi_touch, 0);
+	if (__get_cpu_var(nmi_touch)) {
+		__get_cpu_var(nmi_touch) = 0;
 		touched = 1;
 	}
-	if (!touched && __this_cpu_read(last_irq_sum) == sum) {
+	if (!touched && __get_cpu_var(last_irq_sum) == sum) {
 		__this_cpu_inc(alert_counter);
 		if (__this_cpu_read(alert_counter) == 30 * nmi_hz)
 			die_nmi("BUG: NMI Watchdog detected LOCKUP",
 				regs, panic_on_timeout);
 	} else {
-		__this_cpu_write(last_irq_sum, sum);
+		__get_cpu_var(last_irq_sum) = sum;
 		__this_cpu_write(alert_counter, 0);
 	}
-	if (__this_cpu_read(wd_enabled)) {
+	if (__get_cpu_var(wd_enabled)) {
 		pcr_ops->write_pic(0, pcr_ops->nmi_picl_value(nmi_hz));
 		pcr_ops->write_pcr(0, pcr_ops->pcr_nmi_enable);
 	}
@@ -130,6 +130,7 @@ static inline unsigned int get_nmi_count(int cpu)
 
 static __init void nmi_cpu_busy(void *data)
 {
+	local_irq_enable_in_hardirq();
 	while (endflag == 0)
 		mb();
 }
@@ -153,10 +154,8 @@ static void report_broken_nmi(int cpu, int *prev_nmi_count)
 
 void stop_nmi_watchdog(void *unused)
 {
-	if (!__this_cpu_read(wd_enabled))
-		return;
 	pcr_ops->write_pcr(0, pcr_ops->pcr_nmi_disable);
-	__this_cpu_write(wd_enabled, 0);
+	__get_cpu_var(wd_enabled) = 0;
 	atomic_dec(&nmi_active);
 }
 
@@ -209,10 +208,7 @@ error:
 
 void start_nmi_watchdog(void *unused)
 {
-	if (__this_cpu_read(wd_enabled))
-		return;
-
-	__this_cpu_write(wd_enabled, 1);
+	__get_cpu_var(wd_enabled) = 1;
 	atomic_inc(&nmi_active);
 
 	pcr_ops->write_pcr(0, pcr_ops->pcr_nmi_disable);
@@ -223,7 +219,7 @@ void start_nmi_watchdog(void *unused)
 
 static void nmi_adjust_hz_one(void *unused)
 {
-	if (!__this_cpu_read(wd_enabled))
+	if (!__get_cpu_var(wd_enabled))
 		return;
 
 	pcr_ops->write_pcr(0, pcr_ops->pcr_nmi_disable);
@@ -264,8 +260,6 @@ int __init nmi_init(void)
 		}
 	}
 
-	nmi_init_done = 1;
-
 	return err;
 }
 
@@ -277,38 +271,3 @@ static int __init setup_nmi_watchdog(char *str)
 	return 0;
 }
 __setup("nmi_watchdog=", setup_nmi_watchdog);
-
-/*
- * sparc specific NMI watchdog enable function.
- * Enables watchdog if it is not enabled already.
- */
-int watchdog_nmi_enable(unsigned int cpu)
-{
-	if (atomic_read(&nmi_active) == -1) {
-		pr_warn("NMI watchdog cannot be enabled or disabled\n");
-		return -1;
-	}
-
-	/*
-	 * watchdog thread could start even before nmi_init is called.
-	 * Just Return in that case. Let nmi_init finish the init
-	 * process first.
-	 */
-	if (!nmi_init_done)
-		return 0;
-
-	smp_call_function_single(cpu, start_nmi_watchdog, NULL, 1);
-
-	return 0;
-}
-/*
- * sparc specific NMI watchdog disable function.
- * Disables watchdog if it is not disabled already.
- */
-void watchdog_nmi_disable(unsigned int cpu)
-{
-	if (atomic_read(&nmi_active) == -1)
-		pr_warn_once("NMI watchdog cannot be enabled or disabled\n");
-	else
-		smp_call_function_single(cpu, stop_nmi_watchdog, NULL, 1);
-}

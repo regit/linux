@@ -35,6 +35,7 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 
 	if (wdev->wext.keys) {
 		wdev->wext.keys->def = wdev->wext.default_key;
+		wdev->wext.keys->defmgmt = wdev->wext.default_mgmt_key;
 		if (wdev->wext.default_key != -1)
 			wdev->wext.connect.privacy = true;
 	}
@@ -42,11 +43,11 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 	if (!wdev->wext.connect.ssid_len)
 		return 0;
 
-	if (wdev->wext.keys && wdev->wext.keys->def != -1) {
+	if (wdev->wext.keys) {
 		ck = kmemdup(wdev->wext.keys, sizeof(*ck), GFP_KERNEL);
 		if (!ck)
 			return -ENOMEM;
-		for (i = 0; i < CFG80211_MAX_WEP_KEYS; i++)
+		for (i = 0; i < 6; i++)
 			ck->params[i].key = ck->data[i];
 	}
 
@@ -56,7 +57,7 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 	err = cfg80211_connect(rdev, wdev->netdev,
 			       &wdev->wext.connect, ck, prev_bssid);
 	if (err)
-		kzfree(ck);
+		kfree(ck);
 
 	return err;
 }
@@ -321,7 +322,7 @@ int cfg80211_mgd_wext_giwap(struct net_device *dev,
 	if (wdev->current_bss)
 		memcpy(ap_addr->sa_data, wdev->current_bss->pub.bssid, ETH_ALEN);
 	else
-		eth_zero_addr(ap_addr->sa_data);
+		memset(ap_addr->sa_data, 0, ETH_ALEN);
 	wdev_unlock(wdev);
 
 	return 0;

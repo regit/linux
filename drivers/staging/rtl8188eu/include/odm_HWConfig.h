@@ -11,6 +11,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
  *
  ******************************************************************************/
 
@@ -65,7 +69,7 @@ struct phy_rx_agc_info {
 };
 
 struct phy_status_rpt {
-	struct phy_rx_agc_info path_agc[RF_PATH_MAX];
+	struct phy_rx_agc_info path_agc[3];
 	u8	ch_corr[2];
 	u8	cck_sig_qual_ofdm_pwdb_all;
 	u8	cck_agc_rpt_ofdm_cfosho_a;
@@ -115,5 +119,14 @@ void ODM_MacStatusQuery(struct odm_dm_struct *pDM_Odm,
 			bool	bPacketMatchBSSID,
 			bool	bPacketToSelf,
 			bool	bPacketBeacon);
+
+enum HAL_STATUS ODM_ConfigRFWithHeaderFile(struct odm_dm_struct *pDM_Odm,
+					   enum rf_radio_path Content,
+					   enum rf_radio_path eRFPath);
+
+enum HAL_STATUS ODM_ConfigBBWithHeaderFile(struct odm_dm_struct *pDM_Odm,
+					   enum odm_bb_config_type ConfigType);
+
+enum HAL_STATUS ODM_ConfigMACWithHeaderFile(struct odm_dm_struct *pDM_Odm);
 
 #endif

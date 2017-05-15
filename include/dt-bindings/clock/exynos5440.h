@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
- * Author: Andrzej Hajda <a.hajda@samsung.com>
+ * Author: Andrzej Haja <a.hajda-Sze3O3UU22JBDgjK7y7TUQ@public.gmane.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -14,8 +14,6 @@
 
 #define CLK_XTAL		1
 #define CLK_ARM_CLK		2
-#define CLK_CPLLA		3
-#define CLK_CPLLB		4
 #define CLK_SPI_BAUD		16
 #define CLK_PB0_250		17
 #define CLK_PR0_250		18

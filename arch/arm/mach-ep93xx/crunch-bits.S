@@ -198,7 +198,7 @@ crunch_load:
 	get_thread_info r10
 #endif
 2:	dec_preempt_count r10, r3
-	ret	lr
+	mov	pc, lr
 
 /*
  * Back up crunch regs to save area and disable access to them
@@ -277,7 +277,7 @@ ENTRY(crunch_task_copy)
 	mov	r3, lr				@ preserve return address
 	bl	crunch_save
 	msr	cpsr_c, ip			@ restore interrupt mode
-	ret	r3
+	mov	pc, r3
 
 /*
  * Restore crunch state from given memory address
@@ -310,4 +310,4 @@ ENTRY(crunch_task_restore)
 	mov	r3, lr				@ preserve return address
 	bl	crunch_load
 	msr	cpsr_c, ip			@ restore interrupt mode
-	ret	r3
+	mov	pc, r3

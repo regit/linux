@@ -33,20 +33,6 @@ static void wusbhc_gtk_rekey_work(struct work_struct *work);
 
 int wusbhc_sec_create(struct wusbhc *wusbhc)
 {
-	/*
-	 * WQ is singlethread because we need to serialize rekey operations.
-	 * Use a separate workqueue for security operations instead of the
-	 * wusbd workqueue because security operations may need to communicate
-	 * directly with downstream wireless devices using synchronous URBs.
-	 * If a device is not responding, this could block other host
-	 * controller operations.
-	 */
-	wusbhc->wq_security = create_singlethread_workqueue("wusbd_security");
-	if (wusbhc->wq_security == NULL) {
-		pr_err("WUSB-core: Cannot create wusbd_security workqueue\n");
-		return -ENOMEM;
-	}
-
 	wusbhc->gtk.descr.bLength = sizeof(wusbhc->gtk.descr) +
 		sizeof(wusbhc->gtk.data);
 	wusbhc->gtk.descr.bDescriptorType = USB_DT_KEY;
@@ -62,7 +48,6 @@ int wusbhc_sec_create(struct wusbhc *wusbhc)
 /* Called when the HC is destroyed */
 void wusbhc_sec_destroy(struct wusbhc *wusbhc)
 {
-	destroy_workqueue(wusbhc->wq_security);
 }
 
 
@@ -240,7 +225,6 @@ int wusb_dev_sec_add(struct wusbhc *wusbhc,
 	if (new_secd == NULL) {
 		dev_err(dev,
 			"Can't allocate space for security descriptors\n");
-		result = -ENOMEM;
 		goto out;
 	}
 	secd = new_secd;
@@ -375,8 +359,10 @@ int wusb_dev_4way_handshake(struct wusbhc *wusbhc, struct wusb_dev *wusb_dev,
 	struct wusb_keydvt_out keydvt_out;
 
 	hs = kcalloc(3, sizeof(hs[0]), GFP_KERNEL);
-	if (!hs)
+	if (hs == NULL) {
+		dev_err(dev, "can't allocate handshake data\n");
 		goto error_kzalloc;
+	}
 
 	/* We need to turn encryption before beginning the 4way
 	 * hshake (WUSB1.0[.3.2.2]) */
@@ -521,10 +507,10 @@ error_hs3:
 error_hs2:
 error_hs1:
 	memset(hs, 0, 3*sizeof(hs[0]));
-	memzero_explicit(&keydvt_out, sizeof(keydvt_out));
-	memzero_explicit(&keydvt_in, sizeof(keydvt_in));
-	memzero_explicit(&ccm_n, sizeof(ccm_n));
-	memzero_explicit(mic, sizeof(mic));
+	memset(&keydvt_out, 0, sizeof(keydvt_out));
+	memset(&keydvt_in, 0, sizeof(keydvt_in));
+	memset(&ccm_n, 0, sizeof(ccm_n));
+	memset(mic, 0, sizeof(mic));
 	if (result < 0)
 		wusb_dev_set_encryption(usb_dev, 0);
 error_dev_set_encryption:
@@ -610,5 +596,5 @@ void wusbhc_gtk_rekey(struct wusbhc *wusbhc)
 	 * and will cause a deadlock.  Instead, queue a work item to do
 	 * it when the lock is not held
 	 */
-	queue_work(wusbhc->wq_security, &wusbhc->gtk_rekey_work);
+	queue_work(wusbd, &wusbhc->gtk_rekey_work);
 }

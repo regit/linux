@@ -21,6 +21,7 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/slab.h>
 
 #include "denali.h"
 
@@ -109,7 +110,7 @@ static int denali_dt_remove(struct platform_device *ofdev)
 	struct denali_dt *dt = platform_get_drvdata(ofdev);
 
 	denali_remove(&dt->denali);
-	clk_disable_unprepare(dt->clk);
+	clk_disable(dt->clk);
 
 	return 0;
 }
@@ -119,6 +120,7 @@ static struct platform_driver denali_dt_driver = {
 	.remove		= denali_dt_remove,
 	.driver		= {
 		.name	= "denali-nand-dt",
+		.owner	= THIS_MODULE,
 		.of_match_table	= denali_nand_dt_ids,
 	},
 };

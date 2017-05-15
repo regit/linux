@@ -54,7 +54,7 @@
 
 #include "umem.h"
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 
 #define MM_MAXCARDS 4
@@ -344,6 +344,7 @@ static int add_bio(struct cardinfo *card)
 	int offset;
 	struct bio *bio;
 	struct bio_vec vec;
+	int rw;
 
 	bio = card->currentbio;
 	if (!bio && card->bio) {
@@ -358,6 +359,7 @@ static int add_bio(struct cardinfo *card)
 	if (!bio)
 		return 0;
 
+	rw = bio_rw(bio);
 	if (card->mm_pages[card->Ready].cnt >= DESC_PER_PAGE)
 		return 0;
 
@@ -367,7 +369,7 @@ static int add_bio(struct cardinfo *card)
 				  vec.bv_page,
 				  vec.bv_offset,
 				  vec.bv_len,
-				  bio_op(bio) == REQ_OP_READ ?
+				  (rw == READ) ?
 				  PCI_DMA_FROMDEVICE : PCI_DMA_TODEVICE);
 
 	p = &card->mm_pages[card->Ready];
@@ -396,7 +398,7 @@ static int add_bio(struct cardinfo *card)
 					 DMASCR_CHAIN_EN |
 					 DMASCR_SEM_EN |
 					 pci_cmds);
-	if (bio_op(bio) == REQ_OP_WRITE)
+	if (rw == WRITE)
 		desc->control_bits |= cpu_to_le32(DMASCR_TRANSFER_READ);
 	desc->sem_control_bits = desc->control_bits;
 
@@ -454,13 +456,13 @@ static void process_page(unsigned long data)
 				PCI_DMA_TODEVICE : PCI_DMA_FROMDEVICE);
 		if (control & DMASCR_HARD_ERROR) {
 			/* error */
-			bio->bi_error = -EIO;
+			clear_bit(BIO_UPTODATE, &bio->bi_flags);
 			dev_printk(KERN_WARNING, &card->dev->dev,
 				"I/O error on sector %d/%d\n",
 				le32_to_cpu(desc->local_addr)>>9,
 				le32_to_cpu(desc->transfer_size));
 			dump_dmastat(card, control);
-		} else if (op_is_write(bio_op(bio)) &&
+		} else if ((bio->bi_rw & REQ_WRITE) &&
 			   le32_to_cpu(desc->local_addr) >> 9 ==
 				card->init_size) {
 			card->init_size += le32_to_cpu(desc->transfer_size) >> 9;
@@ -503,7 +505,7 @@ static void process_page(unsigned long data)
 
 		return_bio = bio->bi_next;
 		bio->bi_next = NULL;
-		bio_endio(bio);
+		bio_endio(bio, 0);
 	}
 }
 
@@ -522,24 +524,22 @@ static int mm_check_plugged(struct cardinfo *card)
 	return !!blk_check_plugged(mm_unplug, card, sizeof(struct blk_plug_cb));
 }
 
-static blk_qc_t mm_make_request(struct request_queue *q, struct bio *bio)
+static void mm_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct cardinfo *card = q->queuedata;
 	pr_debug("mm_make_request %llu %u\n",
 		 (unsigned long long)bio->bi_iter.bi_sector,
 		 bio->bi_iter.bi_size);
 
-	blk_queue_split(q, &bio, q->bio_split);
-
 	spin_lock_irq(&card->lock);
 	*card->biotail = bio;
 	bio->bi_next = NULL;
 	card->biotail = &bio->bi_next;
-	if (op_is_sync(bio->bi_opf) || !mm_check_plugged(card))
+	if (bio->bi_rw & REQ_SYNC || !mm_check_plugged(card))
 		activate(card);
 	spin_unlock_irq(&card->lock);
 
-	return BLK_QC_T_NONE;
+	return;
 }
 
 static irqreturn_t mm_interrupt(int irq, void *__card)

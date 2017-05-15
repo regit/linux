@@ -14,7 +14,6 @@
  */
 
 #include <linux/cgroup.h>
-#include <linux/page_counter.h>
 #include <linux/slab.h>
 #include <linux/hugetlb.h>
 #include <linux/hugetlb_cgroup.h>
@@ -24,7 +23,7 @@ struct hugetlb_cgroup {
 	/*
 	 * the counter to account for hugepages from hugetlb.
 	 */
-	struct page_counter hugepage[HUGE_MAX_HSTATE];
+	struct res_counter hugepage[HUGE_MAX_HSTATE];
 };
 
 #define MEMFILE_PRIVATE(x, val)	(((x) << 16) | (val))
@@ -61,32 +60,10 @@ static inline bool hugetlb_cgroup_have_usage(struct hugetlb_cgroup *h_cg)
 	int idx;
 
 	for (idx = 0; idx < hugetlb_max_hstate; idx++) {
-		if (page_counter_read(&h_cg->hugepage[idx]))
+		if ((res_counter_read_u64(&h_cg->hugepage[idx], RES_USAGE)) > 0)
 			return true;
 	}
 	return false;
-}
-
-static void hugetlb_cgroup_init(struct hugetlb_cgroup *h_cgroup,
-				struct hugetlb_cgroup *parent_h_cgroup)
-{
-	int idx;
-
-	for (idx = 0; idx < HUGE_MAX_HSTATE; idx++) {
-		struct page_counter *counter = &h_cgroup->hugepage[idx];
-		struct page_counter *parent = NULL;
-		unsigned long limit;
-		int ret;
-
-		if (parent_h_cgroup)
-			parent = &parent_h_cgroup->hugepage[idx];
-		page_counter_init(counter, parent);
-
-		limit = round_down(PAGE_COUNTER_MAX,
-				   1 << huge_page_order(&hstates[idx]));
-		ret = page_counter_limit(counter, limit);
-		VM_BUG_ON(ret);
-	}
 }
 
 static struct cgroup_subsys_state *
@@ -94,15 +71,21 @@ hugetlb_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 {
 	struct hugetlb_cgroup *parent_h_cgroup = hugetlb_cgroup_from_css(parent_css);
 	struct hugetlb_cgroup *h_cgroup;
+	int idx;
 
 	h_cgroup = kzalloc(sizeof(*h_cgroup), GFP_KERNEL);
 	if (!h_cgroup)
 		return ERR_PTR(-ENOMEM);
 
-	if (!parent_h_cgroup)
+	if (parent_h_cgroup) {
+		for (idx = 0; idx < HUGE_MAX_HSTATE; idx++)
+			res_counter_init(&h_cgroup->hugepage[idx],
+					 &parent_h_cgroup->hugepage[idx]);
+	} else {
 		root_h_cgroup = h_cgroup;
-
-	hugetlb_cgroup_init(h_cgroup, parent_h_cgroup);
+		for (idx = 0; idx < HUGE_MAX_HSTATE; idx++)
+			res_counter_init(&h_cgroup->hugepage[idx], NULL);
+	}
 	return &h_cgroup->css;
 }
 
@@ -125,8 +108,9 @@ static void hugetlb_cgroup_css_free(struct cgroup_subsys_state *css)
 static void hugetlb_cgroup_move_parent(int idx, struct hugetlb_cgroup *h_cg,
 				       struct page *page)
 {
-	unsigned int nr_pages;
-	struct page_counter *counter;
+	int csize;
+	struct res_counter *counter;
+	struct res_counter *fail_res;
 	struct hugetlb_cgroup *page_hcg;
 	struct hugetlb_cgroup *parent = parent_hugetlb_cgroup(h_cg);
 
@@ -139,15 +123,15 @@ static void hugetlb_cgroup_move_parent(int idx, struct hugetlb_cgroup *h_cg,
 	if (!page_hcg || page_hcg != h_cg)
 		goto out;
 
-	nr_pages = 1 << compound_order(page);
+	csize = PAGE_SIZE << compound_order(page);
 	if (!parent) {
 		parent = root_h_cgroup;
 		/* root has no limit */
-		page_counter_charge(&parent->hugepage[idx], nr_pages);
+		res_counter_charge_nofail(&parent->hugepage[idx],
+					  csize, &fail_res);
 	}
 	counter = &h_cg->hugepage[idx];
-	/* Take the pages off the local counter */
-	page_counter_cancel(counter, nr_pages);
+	res_counter_uncharge_until(counter, counter->parent, csize);
 
 	set_hugetlb_cgroup(page, parent);
 out:
@@ -182,8 +166,9 @@ int hugetlb_cgroup_charge_cgroup(int idx, unsigned long nr_pages,
 				 struct hugetlb_cgroup **ptr)
 {
 	int ret = 0;
-	struct page_counter *counter;
+	struct res_counter *fail_res;
 	struct hugetlb_cgroup *h_cg = NULL;
+	unsigned long csize = nr_pages * PAGE_SIZE;
 
 	if (hugetlb_cgroup_disabled())
 		goto done;
@@ -202,8 +187,7 @@ again:
 	}
 	rcu_read_unlock();
 
-	if (!page_counter_try_charge(&h_cg->hugepage[idx], nr_pages, &counter))
-		ret = -ENOMEM;
+	ret = res_counter_charge(&h_cg->hugepage[idx], csize, &fail_res);
 	css_put(&h_cg->css);
 done:
 	*ptr = h_cg;
@@ -229,85 +213,69 @@ void hugetlb_cgroup_uncharge_page(int idx, unsigned long nr_pages,
 				  struct page *page)
 {
 	struct hugetlb_cgroup *h_cg;
+	unsigned long csize = nr_pages * PAGE_SIZE;
 
 	if (hugetlb_cgroup_disabled())
 		return;
-	lockdep_assert_held(&hugetlb_lock);
+	VM_BUG_ON(!spin_is_locked(&hugetlb_lock));
 	h_cg = hugetlb_cgroup_from_page(page);
 	if (unlikely(!h_cg))
 		return;
 	set_hugetlb_cgroup(page, NULL);
-	page_counter_uncharge(&h_cg->hugepage[idx], nr_pages);
+	res_counter_uncharge(&h_cg->hugepage[idx], csize);
 	return;
 }
 
 void hugetlb_cgroup_uncharge_cgroup(int idx, unsigned long nr_pages,
 				    struct hugetlb_cgroup *h_cg)
 {
+	unsigned long csize = nr_pages * PAGE_SIZE;
+
 	if (hugetlb_cgroup_disabled() || !h_cg)
 		return;
 
 	if (huge_page_order(&hstates[idx]) < HUGETLB_CGROUP_MIN_ORDER)
 		return;
 
-	page_counter_uncharge(&h_cg->hugepage[idx], nr_pages);
+	res_counter_uncharge(&h_cg->hugepage[idx], csize);
 	return;
 }
-
-enum {
-	RES_USAGE,
-	RES_LIMIT,
-	RES_MAX_USAGE,
-	RES_FAILCNT,
-};
 
 static u64 hugetlb_cgroup_read_u64(struct cgroup_subsys_state *css,
 				   struct cftype *cft)
 {
-	struct page_counter *counter;
+	int idx, name;
 	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(css);
 
-	counter = &h_cg->hugepage[MEMFILE_IDX(cft->private)];
+	idx = MEMFILE_IDX(cft->private);
+	name = MEMFILE_ATTR(cft->private);
 
-	switch (MEMFILE_ATTR(cft->private)) {
-	case RES_USAGE:
-		return (u64)page_counter_read(counter) * PAGE_SIZE;
-	case RES_LIMIT:
-		return (u64)counter->limit * PAGE_SIZE;
-	case RES_MAX_USAGE:
-		return (u64)counter->watermark * PAGE_SIZE;
-	case RES_FAILCNT:
-		return counter->failcnt;
-	default:
-		BUG();
-	}
+	return res_counter_read_u64(&h_cg->hugepage[idx], name);
 }
-
-static DEFINE_MUTEX(hugetlb_limit_mutex);
 
 static ssize_t hugetlb_cgroup_write(struct kernfs_open_file *of,
 				    char *buf, size_t nbytes, loff_t off)
 {
-	int ret, idx;
-	unsigned long nr_pages;
+	int idx, name, ret;
+	unsigned long long val;
 	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(of_css(of));
 
-	if (hugetlb_cgroup_is_root(h_cg)) /* Can't set limit on root */
-		return -EINVAL;
-
 	buf = strstrip(buf);
-	ret = page_counter_memparse(buf, "-1", &nr_pages);
-	if (ret)
-		return ret;
-
 	idx = MEMFILE_IDX(of_cft(of)->private);
-	nr_pages = round_down(nr_pages, 1 << huge_page_order(&hstates[idx]));
+	name = MEMFILE_ATTR(of_cft(of)->private);
 
-	switch (MEMFILE_ATTR(of_cft(of)->private)) {
+	switch (name) {
 	case RES_LIMIT:
-		mutex_lock(&hugetlb_limit_mutex);
-		ret = page_counter_limit(&h_cg->hugepage[idx], nr_pages);
-		mutex_unlock(&hugetlb_limit_mutex);
+		if (hugetlb_cgroup_is_root(h_cg)) {
+			/* Can't set limit on root */
+			ret = -EINVAL;
+			break;
+		}
+		/* This function does all necessary parse...reuse it */
+		ret = res_counter_memparse_write_strategy(buf, &val);
+		if (ret)
+			break;
+		ret = res_counter_set_limit(&h_cg->hugepage[idx], val);
 		break;
 	default:
 		ret = -EINVAL;
@@ -319,18 +287,18 @@ static ssize_t hugetlb_cgroup_write(struct kernfs_open_file *of,
 static ssize_t hugetlb_cgroup_reset(struct kernfs_open_file *of,
 				    char *buf, size_t nbytes, loff_t off)
 {
-	int ret = 0;
-	struct page_counter *counter;
+	int idx, name, ret = 0;
 	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(of_css(of));
 
-	counter = &h_cg->hugepage[MEMFILE_IDX(of_cft(of)->private)];
+	idx = MEMFILE_IDX(of_cft(of)->private);
+	name = MEMFILE_ATTR(of_cft(of)->private);
 
-	switch (MEMFILE_ATTR(of_cft(of)->private)) {
+	switch (name) {
 	case RES_MAX_USAGE:
-		page_counter_reset_watermark(counter);
+		res_counter_reset_max(&h_cg->hugepage[idx]);
 		break;
 	case RES_FAILCNT:
-		counter->failcnt = 0;
+		res_counter_reset_failcnt(&h_cg->hugepage[idx]);
 		break;
 	default:
 		ret = -EINVAL;
@@ -390,8 +358,9 @@ static void __init __hugetlb_cgroup_file_init(int idx)
 	cft = &h->cgroup_files[4];
 	memset(cft, 0, sizeof(*cft));
 
-	WARN_ON(cgroup_add_legacy_cftypes(&hugetlb_cgrp_subsys,
-					  h->cgroup_files));
+	WARN_ON(cgroup_add_cftypes(&hugetlb_cgrp_subsys, h->cgroup_files));
+
+	return;
 }
 
 void __init hugetlb_cgroup_file_init(void)
@@ -402,7 +371,7 @@ void __init hugetlb_cgroup_file_init(void)
 		/*
 		 * Add cgroup control files only if the huge page consists
 		 * of more than two normal pages. This is because we use
-		 * page[2].private for storing cgroup details.
+		 * page[2].lru.next for storing cgroup details.
 		 */
 		if (huge_page_order(h) >= HUGETLB_CGROUP_MIN_ORDER)
 			__hugetlb_cgroup_file_init(hstate_index(h));

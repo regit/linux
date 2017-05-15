@@ -37,10 +37,6 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* CBM - Flash disk */
 	{ USB_DEVICE(0x0204, 0x6025), .driver_info = USB_QUIRK_RESET_RESUME },
 
-	/* WORLDE easy key (easykey.25) MIDI controller  */
-	{ USB_DEVICE(0x0218, 0x0401), .driver_info =
-			USB_QUIRK_CONFIG_INTF_STRINGS },
-
 	/* HP 5300/5370C scanner */
 	{ USB_DEVICE(0x03f0, 0x0701), .driver_info =
 			USB_QUIRK_STRING_FETCH_255 },
@@ -48,25 +44,12 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* Creative SB Audigy 2 NX */
 	{ USB_DEVICE(0x041e, 0x3020), .driver_info = USB_QUIRK_RESET_RESUME },
 
-	/* USB3503 */
-	{ USB_DEVICE(0x0424, 0x3503), .driver_info = USB_QUIRK_RESET_RESUME },
-
-	/* Microsoft Wireless Laser Mouse 6000 Receiver */
-	{ USB_DEVICE(0x045e, 0x00e1), .driver_info = USB_QUIRK_RESET_RESUME },
-
 	/* Microsoft LifeCam-VX700 v2.0 */
 	{ USB_DEVICE(0x045e, 0x0770), .driver_info = USB_QUIRK_RESET_RESUME },
 
 	/* Logitech HD Pro Webcams C920 and C930e */
 	{ USB_DEVICE(0x046d, 0x082d), .driver_info = USB_QUIRK_DELAY_INIT },
 	{ USB_DEVICE(0x046d, 0x0843), .driver_info = USB_QUIRK_DELAY_INIT },
-
-	/* Logitech ConferenceCam CC3000e */
-	{ USB_DEVICE(0x046d, 0x0847), .driver_info = USB_QUIRK_DELAY_INIT },
-	{ USB_DEVICE(0x046d, 0x0848), .driver_info = USB_QUIRK_DELAY_INIT },
-
-	/* Logitech PTZ Pro Camera */
-	{ USB_DEVICE(0x046d, 0x0853), .driver_info = USB_QUIRK_DELAY_INIT },
 
 	/* Logitech Quickcam Fusion */
 	{ USB_DEVICE(0x046d, 0x08c1), .driver_info = USB_QUIRK_RESET_RESUME },
@@ -92,12 +75,6 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* Philips PSC805 audio device */
 	{ USB_DEVICE(0x0471, 0x0155), .driver_info = USB_QUIRK_RESET_RESUME },
 
-	/* Plantronic Audio 655 DSP */
-	{ USB_DEVICE(0x047f, 0xc008), .driver_info = USB_QUIRK_RESET_RESUME },
-
-	/* Plantronic Audio 648 USB */
-	{ USB_DEVICE(0x047f, 0xc013), .driver_info = USB_QUIRK_RESET_RESUME },
-
 	/* Artisman Watchdog Dongle */
 	{ USB_DEVICE(0x04b4, 0x0526), .driver_info =
 			USB_QUIRK_CONFIG_INTF_STRINGS },
@@ -115,28 +92,6 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* Samsung Android phone modem - ID conflict with SPH-I500 */
 	{ USB_DEVICE(0x04e8, 0x6601), .driver_info =
 			USB_QUIRK_CONFIG_INTF_STRINGS },
-
-	/* Elan Touchscreen */
-	{ USB_DEVICE(0x04f3, 0x0089), .driver_info =
-			USB_QUIRK_DEVICE_QUALIFIER },
-
-	{ USB_DEVICE(0x04f3, 0x009b), .driver_info =
-			USB_QUIRK_DEVICE_QUALIFIER },
-
-	{ USB_DEVICE(0x04f3, 0x010c), .driver_info =
-			USB_QUIRK_DEVICE_QUALIFIER },
-
-	{ USB_DEVICE(0x04f3, 0x0125), .driver_info =
-			USB_QUIRK_DEVICE_QUALIFIER },
-
-	{ USB_DEVICE(0x04f3, 0x016f), .driver_info =
-			USB_QUIRK_DEVICE_QUALIFIER },
-
-	{ USB_DEVICE(0x04f3, 0x0381), .driver_info =
-			USB_QUIRK_NO_LPM },
-
-	{ USB_DEVICE(0x04f3, 0x21b8), .driver_info =
-			USB_QUIRK_DEVICE_QUALIFIER },
 
 	/* Roland SC-8820 */
 	{ USB_DEVICE(0x0582, 0x0007), .driver_info = USB_QUIRK_RESET_RESUME },
@@ -183,10 +138,6 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* MAYA44USB sound device */
 	{ USB_DEVICE(0x0a92, 0x0091), .driver_info = USB_QUIRK_RESET_RESUME },
 
-	/* ASUS Base Station(T100) */
-	{ USB_DEVICE(0x0b05, 0x17e0), .driver_info =
-			USB_QUIRK_IGNORE_REMOTE_WAKEUP },
-
 	/* Action Semiconductor flash disk */
 	{ USB_DEVICE(0x10d6, 0x2200), .driver_info =
 			USB_QUIRK_STRING_FETCH_255 },
@@ -194,26 +145,9 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* SKYMEDI USB_DRIVE */
 	{ USB_DEVICE(0x1516, 0x8628), .driver_info = USB_QUIRK_RESET_RESUME },
 
-	/* Razer - Razer Blade Keyboard */
-	{ USB_DEVICE(0x1532, 0x0116), .driver_info =
-			USB_QUIRK_LINEAR_UFRAME_INTR_BINTERVAL },
-
 	/* BUILDWIN Photo Frame */
 	{ USB_DEVICE(0x1908, 0x1315), .driver_info =
 			USB_QUIRK_HONOR_BNUMINTERFACES },
-
-	/* Protocol and OTG Electrical Test Device */
-	{ USB_DEVICE(0x1a0a, 0x0200), .driver_info =
-			USB_QUIRK_LINEAR_UFRAME_INTR_BINTERVAL },
-
-	/* Acer C120 LED Projector */
-	{ USB_DEVICE(0x1de1, 0xc102), .driver_info = USB_QUIRK_NO_LPM },
-
-	/* Blackmagic Design Intensity Shuttle */
-	{ USB_DEVICE(0x1edb, 0xbd3b), .driver_info = USB_QUIRK_NO_LPM },
-
-	/* Blackmagic Design UltraStudio SDI */
-	{ USB_DEVICE(0x1edb, 0xbd4f), .driver_info = USB_QUIRK_NO_LPM },
 
 	/* INTEL VALUE SSD */
 	{ USB_DEVICE(0x8086, 0xf1a5), .driver_info = USB_QUIRK_RESET_RESUME },

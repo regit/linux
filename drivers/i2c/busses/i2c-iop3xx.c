@@ -50,7 +50,10 @@ iic_cook_addr(struct i2c_msg *msg)
 {
 	unsigned char addr;
 
-	addr = i2c_8bit_addr_from_msg(msg);
+	addr = (msg->addr << 1);
+
+	if (msg->flags & I2C_M_RD)
+		addr |= 1;
 
 	return addr;
 }
@@ -513,6 +516,7 @@ static struct platform_driver iop3xx_i2c_driver = {
 	.probe		= iop3xx_i2c_probe,
 	.remove		= iop3xx_i2c_remove,
 	.driver		= {
+		.owner	= THIS_MODULE,
 		.name	= "IOP3xx-I2C",
 	},
 };

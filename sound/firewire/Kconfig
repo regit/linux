@@ -13,36 +13,28 @@ config SND_FIREWIRE_LIB
 	select SND_RAWMIDI
 
 config SND_DICE
-	tristate "DICE-based DACs support"
+	tristate "DICE-based DACs (EXPERIMENTAL)"
 	select SND_HWDEP
 	select SND_FIREWIRE_LIB
 	help
 	  Say Y here to include support for many DACs based on the DICE
-	  chip family (DICE-II/Jr/Mini) which TC Applied Technologies produces.
+	  chip family (DICE-II/Jr/Mini) from TC Applied Technologies.
+
+	  At the moment, this driver supports playback only.  If you
+	  want to use devices that support capturing, use FFADO instead.
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called snd-dice.
 
-config SND_OXFW
-	tristate "Oxford Semiconductor FW970/971 chipset support"
+config SND_FIREWIRE_SPEAKERS
+	tristate "FireWire speakers"
 	select SND_FIREWIRE_LIB
-	select SND_HWDEP
 	help
-	  Say Y here to include support for FireWire devices based on
-	  Oxford Semiconductor FW970/971 chipset.
-	   * Griffin Firewave
-	   * LaCie Firewire Speakers
-	   * Behringer F-Control Audio 202
-	   * Mackie(Loud) Onyx-i series (former models)
-	   * Mackie(Loud) Onyx Satellite
-	   * Mackie(Loud) Tapco Link.Firewire
-	   * Mackie(Loud) d.2 pro/d.4 pro
-	   * Mackie(Loud) U.420/U.420d
-	   * TASCAM FireOne
-	   * Stanton Controllers & Systems 1 Deck/Mixer
+	  Say Y here to include support for the Griffin FireWave Surround
+	  and the LaCie FireWire Speakers.
 
 	  To compile this driver as a module, choose M here: the module
-	  will be called snd-oxfw.
+	  will be called snd-firewire-speakers.
 
 config SND_ISIGHT
 	tristate "Apple iSight microphone"
@@ -53,6 +45,17 @@ config SND_ISIGHT
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called snd-isight.
+
+config SND_SCS1X
+	tristate "Stanton Control System 1 MIDI"
+	select SND_FIREWIRE_LIB
+	help
+	  Say Y here to include support for the MIDI ports of the Stanton
+	  SCS.1d/SCS.1m DJ controllers.  (SCS.1m audio is still handled
+	  by FFADO.)
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-scs1x.
 
 config SND_FIREWORKS
 	tristate "Echo Fireworks board module support"
@@ -80,17 +83,16 @@ config SND_BEBOB
 	  * Edirol FA-66/FA-101
 	  * PreSonus FIREBOX/FIREPOD/FP10/Inspire1394
 	  * BridgeCo RDAudio1/Audio5
-	  * Mackie Onyx 1220/1620/1640 (FireWire I/O Card)
-	  * Mackie d.2 (FireWire Option)
+	  * Mackie Onyx 1220/1620/1640 (Firewire I/O Card)
+	  * Mackie d.2 (Firewire Option)
 	  * Stanton FinalScratch 2 (ScratchAmp)
 	  * Tascam IF-FW/DM
 	  * Behringer XENIX UFX 1204/1604
 	  * Behringer Digital Mixer X32 series (X-UF Card)
-	  * Behringer FCA610/1616
 	  * Apogee Rosetta 200/400 (X-FireWire card)
 	  * Apogee DA/AD/DD-16X (X-FireWire card)
 	  * Apogee Ensemble
-	  * ESI QuataFire 610
+	  * ESI Quotafire610
 	  * AcousticReality eARMasterOne
 	  * CME MatrixKFW
 	  * Phonic Helix Board 12 MkII/18 MkII/24 MkII
@@ -99,44 +101,15 @@ config SND_BEBOB
 	  * ICON FireXon
 	  * PrismSound Orpheus/ADA-8XR
 	  * TerraTec PHASE 24 FW/PHASE X24 FW/PHASE 88 Rack FW
-	  * TerraTec EWS MIC2/EWS MIC8
-	  * TerraTec Aureon 7.1 FireWire
+	  * Terratec EWS MIC2/EWS MIC4
+	  * Terratec Aureon 7.1 Firewire
 	  * Yamaha GO44/GO46
 	  * Focusrite Saffire/Saffire LE/SaffirePro10 IO/SaffirePro26 IO
-	  * M-Audio FireWire410/AudioPhile/Solo
+	  * M-Audio Firewire410/AudioPhile/Solo
 	  * M-Audio Ozonic/NRV10/ProfireLightBridge
-	  * M-Audio FireWire 1814/ProjectMix IO
-	  * Digidesign Mbox 2 Pro
+	  * M-Audio Firewire 1814/ProjectMix IO
 
           To compile this driver as a module, choose M here: the module
           will be called snd-bebob.
-
-config SND_FIREWIRE_DIGI00X
-	tristate "Digidesign Digi 002/003 family support"
-	select SND_FIREWIRE_LIB
-	select SND_HWDEP
-	help
-	 Say Y here to include support for Digidesign Digi 002/003 family.
-	  * Digi 002 Console
-	  * Digi 002 Rack
-	  * Digi 003 Console
-	  * Digi 003 Rack
-	  * Digi 003 Rack+
-
-	 To compile this driver as a module, choose M here: the module
-	 will be called snd-firewire-digi00x.
-
-config SND_FIREWIRE_TASCAM
-	tristate "TASCAM FireWire series support"
-	select SND_FIREWIRE_LIB
-	select SND_HWDEP
-	help
-	 Say Y here to include support for TASCAM.
-	  * FW-1884
-	  * FW-1082
-	  * FW-1804
-
-	 To compile this driver as a module, choose M here: the module
-	 will be called snd-firewire-tascam.
 
 endif # SND_FIREWIRE

@@ -40,7 +40,7 @@
 #ifdef CONFIG_PROC_FS
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #endif
 
 #include "videocodec.h"
@@ -116,9 +116,8 @@ videocodec_attach (struct videocodec_master *master)
 				goto out_module_put;
 			}
 
-			res = strlen(codec->name);
-			snprintf(codec->name + res, sizeof(codec->name) - res,
-				 "[%d]", h->attached);
+			snprintf(codec->name, sizeof(codec->name),
+				 "%s[%d]", codec->name, h->attached);
 			codec->master_data = master;
 			res = codec->setup(codec);
 			if (res == 0) {

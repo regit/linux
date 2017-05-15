@@ -260,7 +260,7 @@ static int iscsi_check_tmf_restrictions(struct iscsi_task *task, int opcode)
 {
 	struct iscsi_conn *conn = task->conn;
 	struct iscsi_tm *tmf = &conn->tmhdr;
-	u64 hdr_lun;
+	unsigned int hdr_lun;
 
 	if (conn->tmf_state == TMF_INITIAL)
 		return 0;
@@ -717,20 +717,10 @@ __iscsi_conn_send_pdu(struct iscsi_conn *conn, struct iscsi_hdr *hdr,
 			return NULL;
 		}
 
-		if (data_size > ISCSI_DEF_MAX_RECV_SEG_LEN) {
-			iscsi_conn_printk(KERN_ERR, conn, "Invalid buffer len of %u for login task. Max len is %u\n", data_size, ISCSI_DEF_MAX_RECV_SEG_LEN);
-			return NULL;
-		}
-
 		task = conn->login_task;
 	} else {
 		if (session->state != ISCSI_STATE_LOGGED_IN)
 			return NULL;
-
-		if (data_size != 0) {
-			iscsi_conn_printk(KERN_ERR, conn, "Can not send data buffer of len %u for op 0x%x\n", data_size, opcode);
-			return NULL;
-		}
 
 		BUG_ON(conn->c_stage == ISCSI_CONN_INITIAL_STAGE);
 		BUG_ON(conn->c_stage == ISCSI_CONN_STOPPED);
@@ -791,9 +781,9 @@ __iscsi_conn_send_pdu(struct iscsi_conn *conn, struct iscsi_hdr *hdr,
 
 free_task:
 	/* regular RX path uses back_lock */
-	spin_lock(&session->back_lock);
+	spin_lock_bh(&session->back_lock);
 	__iscsi_put_task(task);
-	spin_unlock(&session->back_lock);
+	spin_unlock_bh(&session->back_lock);
 	return NULL;
 }
 
@@ -853,9 +843,12 @@ static void iscsi_scsi_cmd_rsp(struct iscsi_conn *conn, struct iscsi_hdr *hdr,
 				     SAM_STAT_CHECK_CONDITION;
 			scsi_build_sense_buffer(1, sc->sense_buffer,
 						ILLEGAL_REQUEST, 0x10, ascq);
-			scsi_set_sense_information(sc->sense_buffer,
-						   SCSI_SENSE_BUFFERSIZE,
-						   sector);
+			sc->sense_buffer[7] = 0xc; /* Additional sense length */
+			sc->sense_buffer[8] = 0;   /* Information desc type */
+			sc->sense_buffer[9] = 0xa; /* Additional desc length */
+			sc->sense_buffer[10] = 0x80; /* Validity bit */
+
+			put_unaligned_be64(sector, &sc->sense_buffer[12]);
 			goto out;
 		}
 	}
@@ -976,13 +969,13 @@ static void iscsi_tmf_rsp(struct iscsi_conn *conn, struct iscsi_hdr *hdr)
 	wake_up(&conn->ehwait);
 }
 
-static int iscsi_send_nopout(struct iscsi_conn *conn, struct iscsi_nopin *rhdr)
+static void iscsi_send_nopout(struct iscsi_conn *conn, struct iscsi_nopin *rhdr)
 {
         struct iscsi_nopout hdr;
 	struct iscsi_task *task;
 
 	if (!rhdr && conn->ping_task)
-		return -EINVAL;
+		return;
 
 	memset(&hdr, 0, sizeof(struct iscsi_nopout));
 	hdr.opcode = ISCSI_OP_NOOP_OUT | ISCSI_OP_IMMEDIATE;
@@ -996,16 +989,13 @@ static int iscsi_send_nopout(struct iscsi_conn *conn, struct iscsi_nopin *rhdr)
 		hdr.ttt = RESERVED_ITT;
 
 	task = __iscsi_conn_send_pdu(conn, (struct iscsi_hdr *)&hdr, NULL, 0);
-	if (!task) {
+	if (!task)
 		iscsi_conn_printk(KERN_ERR, conn, "Could not send nopout\n");
-		return -EIO;
-	} else if (!rhdr) {
+	else if (!rhdr) {
 		/* only track our nops */
 		conn->ping_task = task;
 		conn->last_ping = jiffies;
 	}
-
-	return 0;
 }
 
 static int iscsi_nop_out_rsp(struct iscsi_task *task,
@@ -1771,6 +1761,25 @@ fault:
 }
 EXPORT_SYMBOL_GPL(iscsi_queuecommand);
 
+int iscsi_change_queue_depth(struct scsi_device *sdev, int depth, int reason)
+{
+	switch (reason) {
+	case SCSI_QDEPTH_DEFAULT:
+		scsi_adjust_queue_depth(sdev, scsi_get_tag_type(sdev), depth);
+		break;
+	case SCSI_QDEPTH_QFULL:
+		scsi_track_queue_full(sdev, depth);
+		break;
+	case SCSI_QDEPTH_RAMP_UP:
+		scsi_adjust_queue_depth(sdev, scsi_get_tag_type(sdev), depth);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+	return sdev->queue_depth;
+}
+EXPORT_SYMBOL_GPL(iscsi_change_queue_depth);
+
 int iscsi_target_alloc(struct scsi_target *starget)
 {
 	struct iscsi_cls_session *cls_session = starget_to_session(starget);
@@ -1850,7 +1859,8 @@ static int iscsi_exec_task_mgmt_fn(struct iscsi_conn *conn,
  * Fail commands. session lock held and recv side suspended and xmit
  * thread flushed
  */
-static void fail_scsi_tasks(struct iscsi_conn *conn, u64 lun, int error)
+static void fail_scsi_tasks(struct iscsi_conn *conn, unsigned lun,
+			    int error)
 {
 	struct iscsi_task *task;
 	int i;
@@ -2088,17 +2098,15 @@ static void iscsi_check_transport_timeouts(unsigned long data)
 				  conn->ping_timeout, conn->recv_timeout,
 				  last_recv, conn->last_ping, jiffies);
 		spin_unlock(&session->frwd_lock);
-		iscsi_conn_failure(conn, ISCSI_ERR_NOP_TIMEDOUT);
+		iscsi_conn_failure(conn, ISCSI_ERR_CONN_FAILED);
 		return;
 	}
 
 	if (time_before_eq(last_recv + recv_timeout, jiffies)) {
 		/* send a ping to try to provoke some traffic */
 		ISCSI_DBG_CONN(conn, "Sending nopout as ping\n");
-		if (iscsi_send_nopout(conn, NULL))
-			next_timeout = jiffies + (1 * HZ);
-		else
-			next_timeout = conn->last_ping + (conn->ping_timeout * HZ);
+		iscsi_send_nopout(conn, NULL);
+		next_timeout = conn->last_ping + (conn->ping_timeout * HZ);
 	} else
 		next_timeout = last_recv + recv_timeout;
 
@@ -2127,7 +2135,7 @@ int iscsi_eh_abort(struct scsi_cmnd *sc)
 	struct iscsi_conn *conn;
 	struct iscsi_task *task;
 	struct iscsi_tm *hdr;
-	int age;
+	int rc, age;
 
 	cls_session = starget_to_session(scsi_target(sc->device));
 	session = cls_session->dd_data;
@@ -2188,8 +2196,10 @@ int iscsi_eh_abort(struct scsi_cmnd *sc)
 	hdr = &conn->tmhdr;
 	iscsi_prep_abort_task_pdu(task, hdr);
 
-	if (iscsi_exec_task_mgmt_fn(conn, hdr, age, session->abort_timeout))
+	if (iscsi_exec_task_mgmt_fn(conn, hdr, age, session->abort_timeout)) {
+		rc = FAILED;
 		goto failed;
+	}
 
 	switch (conn->tmf_state) {
 	case TMF_SUCCESS:
@@ -2269,8 +2279,7 @@ int iscsi_eh_device_reset(struct scsi_cmnd *sc)
 	cls_session = starget_to_session(scsi_target(sc->device));
 	session = cls_session->dd_data;
 
-	ISCSI_DBG_EH(session, "LU Reset [sc %p lun %llu]\n", sc,
-		     sc->device->lun);
+	ISCSI_DBG_EH(session, "LU Reset [sc %p lun %u]\n", sc, sc->device->lun);
 
 	mutex_lock(&session->eh_mutex);
 	spin_lock_bh(&session->frwd_lock);
@@ -2421,7 +2430,7 @@ static void iscsi_prep_tgt_reset_pdu(struct scsi_cmnd *sc, struct iscsi_tm *hdr)
  *
  * This will attempt to send a warm target reset.
  */
-static int iscsi_eh_target_reset(struct scsi_cmnd *sc)
+int iscsi_eh_target_reset(struct scsi_cmnd *sc)
 {
 	struct iscsi_cls_session *cls_session;
 	struct iscsi_session *session;
@@ -2493,6 +2502,7 @@ done:
 	mutex_unlock(&session->eh_mutex);
 	return rc;
 }
+EXPORT_SYMBOL_GPL(iscsi_eh_target_reset);
 
 /**
  * iscsi_eh_recover_target - reset target and possibly the session
@@ -2940,10 +2950,10 @@ void iscsi_conn_teardown(struct iscsi_cls_conn *cls_conn)
 {
 	struct iscsi_conn *conn = cls_conn->dd_data;
 	struct iscsi_session *session = conn->session;
+	unsigned long flags;
 
 	del_timer_sync(&conn->transport_timer);
 
-	mutex_lock(&session->eh_mutex);
 	spin_lock_bh(&session->frwd_lock);
 	conn->c_stage = ISCSI_CONN_CLEANUP_WAIT;
 	if (session->leadconn == conn) {
@@ -2954,6 +2964,28 @@ void iscsi_conn_teardown(struct iscsi_cls_conn *cls_conn)
 		wake_up(&conn->ehwait);
 	}
 	spin_unlock_bh(&session->frwd_lock);
+
+	/*
+	 * Block until all in-progress commands for this connection
+	 * time out or fail.
+	 */
+	for (;;) {
+		spin_lock_irqsave(session->host->host_lock, flags);
+		if (!session->host->host_busy) { /* OK for ERL == 0 */
+			spin_unlock_irqrestore(session->host->host_lock, flags);
+			break;
+		}
+		spin_unlock_irqrestore(session->host->host_lock, flags);
+		msleep_interruptible(500);
+		iscsi_conn_printk(KERN_INFO, conn, "iscsi conn_destroy(): "
+				  "host_busy %d host_failed %d\n",
+				  session->host->host_busy,
+				  session->host->host_failed);
+		/*
+		 * force eh_abort() to unblock
+		 */
+		wake_up(&conn->ehwait);
+	}
 
 	/* flush queued up work because we free the connection below */
 	iscsi_suspend_tx(conn);
@@ -2971,7 +3003,6 @@ void iscsi_conn_teardown(struct iscsi_cls_conn *cls_conn)
 	if (session->leadconn == conn)
 		session->leadconn = NULL;
 	spin_unlock_bh(&session->frwd_lock);
-	mutex_unlock(&session->eh_mutex);
 
 	iscsi_destroy_conn(cls_conn);
 }
@@ -3464,7 +3495,6 @@ int iscsi_conn_get_addr_param(struct sockaddr_storage *addr,
 			len = sprintf(buf, "%pI6\n", &sin6->sin6_addr);
 		break;
 	case ISCSI_PARAM_CONN_PORT:
-	case ISCSI_PARAM_LOCAL_PORT:
 		if (sin)
 			len = sprintf(buf, "%hu\n", be16_to_cpu(sin->sin_port));
 		else

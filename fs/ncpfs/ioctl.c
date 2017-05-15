@@ -20,7 +20,7 @@
 #include <linux/vmalloc.h>
 #include <linux/sched.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "ncp_fs.h"
 
@@ -376,7 +376,7 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 				struct dentry* dentry = inode->i_sb->s_root;
 
 				if (dentry) {
-					struct inode* s_inode = d_inode(dentry);
+					struct inode* s_inode = dentry->d_inode;
 
 					if (s_inode) {
 						sr.volNumber = NCP_FINFO(s_inode)->volNumber;
@@ -384,7 +384,7 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 						sr.namespace = server->name_space[sr.volNumber];
 						result = 0;
 					} else
-						ncp_dbg(1, "d_inode(s_root)==NULL\n");
+						ncp_dbg(1, "s_root->d_inode==NULL\n");
 				} else
 					ncp_dbg(1, "s_root==NULL\n");
 			} else {
@@ -431,7 +431,7 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 				if (result == 0) {
 					dentry = inode->i_sb->s_root;
 					if (dentry) {
-						struct inode* s_inode = d_inode(dentry);
+						struct inode* s_inode = dentry->d_inode;
 
 						if (s_inode) {
 							NCP_FINFO(s_inode)->volNumber = vnum;
@@ -439,7 +439,7 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 							NCP_FINFO(s_inode)->DosDirNum = dosde;
 							server->root_setuped = 1;
 						} else {
-							ncp_dbg(1, "d_inode(s_root)==NULL\n");
+							ncp_dbg(1, "s_root->d_inode==NULL\n");
 							result = -EIO;
 						}
 					} else {
@@ -447,6 +447,7 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 						result = -EIO;
 					}
 				}
+				result = 0;
 			}
 			mutex_unlock(&server->root_setup_lock);
 
@@ -525,8 +526,6 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 			switch (rqdata.cmd) {
 				case NCP_LOCK_EX:
 				case NCP_LOCK_SH:
-						if (rqdata.timeout < 0)
-							return -EINVAL;
 						if (rqdata.timeout == 0)
 							rqdata.timeout = NCP_LOCK_DEFAULT_TIMEOUT;
 						else if (rqdata.timeout > NCP_LOCK_MAX_TIMEOUT)

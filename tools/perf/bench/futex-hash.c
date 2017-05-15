@@ -8,30 +8,24 @@
  * many threads and futexes as possible.
  */
 
-/* For the CLR_() macros */
-#include <pthread.h>
-
-#include <errno.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <linux/compiler.h>
-#include <linux/kernel.h>
-#include <sys/time.h>
-
+#include "../perf.h"
+#include "../util/util.h"
 #include "../util/stat.h"
-#include <subcmd/parse-options.h>
+#include "../util/parse-options.h"
+#include "../util/header.h"
 #include "bench.h"
 #include "futex.h"
 
 #include <err.h>
+#include <stdlib.h>
 #include <sys/time.h>
+#include <pthread.h>
 
 static unsigned int nthreads = 0;
 static unsigned int nsecs    = 10;
 /* amount of futexes per thread */
 static unsigned int nfutexes = 1024;
 static bool fshared = false, done = false, silent = false;
-static int futex_flag = 0;
 
 struct timeval start, end, runtime;
 static pthread_mutex_t thread_lock;
@@ -63,9 +57,8 @@ static const char * const bench_futex_hash_usage[] = {
 static void *workerfn(void *arg)
 {
 	int ret;
-	struct worker *w = (struct worker *) arg;
 	unsigned int i;
-	unsigned long ops = w->ops; /* avoid cacheline bouncing */
+	struct worker *w = (struct worker *) arg;
 
 	pthread_mutex_lock(&thread_lock);
 	threads_starting--;
@@ -75,21 +68,21 @@ static void *workerfn(void *arg)
 	pthread_mutex_unlock(&thread_lock);
 
 	do {
-		for (i = 0; i < nfutexes; i++, ops++) {
+		for (i = 0; i < nfutexes; i++, w->ops++) {
 			/*
 			 * We want the futex calls to fail in order to stress
 			 * the hashing of uaddr and not measure other steps,
 			 * such as internal waitqueue handling, thus enlarging
 			 * the critical region protected by hb->lock.
 			 */
-			ret = futex_wait(&w->futex[i], 1234, NULL, futex_flag);
+			ret = futex_wait(&w->futex[i], 1234, NULL,
+					 fshared ? 0 : FUTEX_PRIVATE_FLAG);
 			if (!silent &&
 			    (!ret || errno != EAGAIN || errno != EWOULDBLOCK))
 				warn("Non-expected futex return call");
 		}
 	}  while (!done);
 
-	w->ops = ops;
 	return NULL;
 }
 
@@ -130,8 +123,6 @@ int bench_futex_hash(int argc, const char **argv,
 	}
 
 	ncpus = sysconf(_SC_NPROCESSORS_ONLN);
-	nsecs = futexbench_sanitize_numeric(nsecs);
-	nfutexes = futexbench_sanitize_numeric(nfutexes);
 
 	sigfillset(&act.sa_mask);
 	act.sa_sigaction = toggle_done;
@@ -139,15 +130,10 @@ int bench_futex_hash(int argc, const char **argv,
 
 	if (!nthreads) /* default to the number of CPUs */
 		nthreads = ncpus;
-	else
-		nthreads = futexbench_sanitize_numeric(nthreads);
 
 	worker = calloc(nthreads, sizeof(*worker));
 	if (!worker)
 		goto errmem;
-
-	if (!fshared)
-		futex_flag = FUTEX_PRIVATE_FLAG;
 
 	printf("Run summary [PID %d]: %d threads, each operating on %d [%s] futexes for %d secs.\n\n",
 	       getpid(), nthreads, nfutexes, fshared ? "shared":"private", nsecs);

@@ -1,15 +1,13 @@
-/* cnic.c: QLogic CNIC core network driver.
+/* cnic.c: Broadcom CNIC core network driver.
  *
  * Copyright (c) 2006-2014 Broadcom Corporation
- * Copyright (c) 2014-2015 QLogic Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation.
  *
  * Original skeleton written by: John(Zongxi) Chen (zongxi@broadcom.com)
- * Previously modified and maintained by: Michael Chan <mchan@broadcom.com>
- * Maintained By: Dept-HSGLinuxNICDev@qlogic.com
+ * Modified and maintained by: Michael Chan <mchan@broadcom.com>
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -31,7 +29,7 @@
 #include <linux/if_vlan.h>
 #include <linux/prefetch.h>
 #include <linux/random.h>
-#if IS_ENABLED(CONFIG_VLAN_8021Q)
+#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
 #define BCM_VLAN 1
 #endif
 #include <net/ip.h>
@@ -58,11 +56,11 @@
 #define CNIC_MODULE_NAME	"cnic"
 
 static char version[] =
-	"QLogic " CNIC_MODULE_NAME "Driver v" CNIC_MODULE_VERSION " (" CNIC_MODULE_RELDATE ")\n";
+	"Broadcom NetXtreme II CNIC Driver " CNIC_MODULE_NAME " v" CNIC_MODULE_VERSION " (" CNIC_MODULE_RELDATE ")\n";
 
 MODULE_AUTHOR("Michael Chan <mchan@broadcom.com> and John(Zongxi) "
 	      "Chen (zongxi@broadcom.com");
-MODULE_DESCRIPTION("QLogic cnic Driver");
+MODULE_DESCRIPTION("Broadcom NetXtreme II CNIC Driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(CNIC_MODULE_VERSION);
 
@@ -192,7 +190,6 @@ static void cnic_ctx_wr(struct cnic_dev *dev, u32 cid_addr, u32 off, u32 val)
 	struct drv_ctl_info info;
 	struct drv_ctl_io *io = &info.data.io;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	info.cmd = DRV_CTL_CTX_WR_CMD;
 	io->cid_addr = cid_addr;
 	io->offset = off;
@@ -207,7 +204,6 @@ static void cnic_ctx_tbl_wr(struct cnic_dev *dev, u32 off, dma_addr_t addr)
 	struct drv_ctl_info info;
 	struct drv_ctl_io *io = &info.data.io;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	info.cmd = DRV_CTL_CTXTBL_WR_CMD;
 	io->offset = off;
 	io->dma_addr = addr;
@@ -221,7 +217,6 @@ static void cnic_ring_ctl(struct cnic_dev *dev, u32 cid, u32 cl_id, int start)
 	struct drv_ctl_info info;
 	struct drv_ctl_l2_ring *ring = &info.data.ring;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	if (start)
 		info.cmd = DRV_CTL_START_L2_CMD;
 	else
@@ -239,7 +234,6 @@ static void cnic_reg_wr_ind(struct cnic_dev *dev, u32 off, u32 val)
 	struct drv_ctl_info info;
 	struct drv_ctl_io *io = &info.data.io;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	info.cmd = DRV_CTL_IO_WR_CMD;
 	io->offset = off;
 	io->data = val;
@@ -253,14 +247,13 @@ static u32 cnic_reg_rd_ind(struct cnic_dev *dev, u32 off)
 	struct drv_ctl_info info;
 	struct drv_ctl_io *io = &info.data.io;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	info.cmd = DRV_CTL_IO_RD_CMD;
 	io->offset = off;
 	ethdev->drv_ctl(dev->netdev, &info);
 	return io->data;
 }
 
-static void cnic_ulp_ctl(struct cnic_dev *dev, int ulp_type, bool reg, int state)
+static void cnic_ulp_ctl(struct cnic_dev *dev, int ulp_type, bool reg)
 {
 	struct cnic_local *cp = dev->cnic_priv;
 	struct cnic_eth_dev *ethdev = cp->ethdev;
@@ -268,7 +261,6 @@ static void cnic_ulp_ctl(struct cnic_dev *dev, int ulp_type, bool reg, int state
 	struct fcoe_capabilities *fcoe_cap =
 		&info.data.register_data.fcoe_features;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	if (reg) {
 		info.cmd = DRV_CTL_ULP_REGISTER_CMD;
 		if (ulp_type == CNIC_ULP_FCOE && dev->fcoe_cap)
@@ -278,7 +270,6 @@ static void cnic_ulp_ctl(struct cnic_dev *dev, int ulp_type, bool reg, int state
 	}
 
 	info.data.ulp_type = ulp_type;
-	info.drv_state = state;
 	ethdev->drv_ctl(dev->netdev, &info);
 }
 
@@ -293,7 +284,6 @@ static void cnic_spq_completion(struct cnic_dev *dev, int cmd, u32 count)
 	struct cnic_eth_dev *ethdev = cp->ethdev;
 	struct drv_ctl_info info;
 
-	memset(&info, 0, sizeof(struct drv_ctl_info));
 	info.cmd = cmd;
 	info.data.credit.credit_count = count;
 	ethdev->drv_ctl(dev->netdev, &info);
@@ -390,8 +380,10 @@ static int cnic_iscsi_nl_msg_recv(struct cnic_dev *dev, u32 msg_type,
 		if (l5_cid >= MAX_CM_SK_TBL_SZ)
 			break;
 
-		if (!rcu_access_pointer(cp->ulp_ops[CNIC_ULP_L4])) {
+		rcu_read_lock();
+		if (!rcu_dereference(cp->ulp_ops[CNIC_ULP_L4])) {
 			rc = -ENODEV;
+			rcu_read_unlock();
 			break;
 		}
 		csk = &cp->csk_tbl[l5_cid];
@@ -420,6 +412,7 @@ static int cnic_iscsi_nl_msg_recv(struct cnic_dev *dev, u32 msg_type,
 			}
 		}
 		csk_put(csk);
+		rcu_read_unlock();
 		rc = 0;
 	}
 	}
@@ -532,7 +525,7 @@ int cnic_unregister_driver(int ulp_type)
 	list_for_each_entry(dev, &cnic_dev_list, list) {
 		struct cnic_local *cp = dev->cnic_priv;
 
-		if (rcu_access_pointer(cp->ulp_ops[ulp_type])) {
+		if (rcu_dereference(cp->ulp_ops[ulp_type])) {
 			pr_err("%s: Type %d still has devices registered\n",
 			       __func__, ulp_type);
 			read_unlock(&cnic_dev_lock);
@@ -580,7 +573,7 @@ static int cnic_register_device(struct cnic_dev *dev, int ulp_type,
 		mutex_unlock(&cnic_lock);
 		return -EAGAIN;
 	}
-	if (rcu_access_pointer(cp->ulp_ops[ulp_type])) {
+	if (rcu_dereference(cp->ulp_ops[ulp_type])) {
 		pr_err("%s: Type %d has already been registered to this device\n",
 		       __func__, ulp_type);
 		mutex_unlock(&cnic_lock);
@@ -599,7 +592,7 @@ static int cnic_register_device(struct cnic_dev *dev, int ulp_type,
 
 	mutex_unlock(&cnic_lock);
 
-	cnic_ulp_ctl(dev, ulp_type, true, DRV_ACTIVE);
+	cnic_ulp_ctl(dev, ulp_type, true);
 
 	return 0;
 
@@ -620,7 +613,7 @@ static int cnic_unregister_device(struct cnic_dev *dev, int ulp_type)
 		cnic_send_nlmsg(cp, ISCSI_KEVENT_IF_DOWN, NULL);
 
 	mutex_lock(&cnic_lock);
-	if (rcu_access_pointer(cp->ulp_ops[ulp_type])) {
+	if (rcu_dereference(cp->ulp_ops[ulp_type])) {
 		RCU_INIT_POINTER(cp->ulp_ops[ulp_type], NULL);
 		cnic_put(dev);
 	} else {
@@ -644,10 +637,7 @@ static int cnic_unregister_device(struct cnic_dev *dev, int ulp_type)
 	if (test_bit(ULP_F_CALL_PENDING, &cp->ulp_flags[ulp_type]))
 		netdev_warn(dev->netdev, "Failed waiting for ULP up call to complete\n");
 
-	if (test_bit(ULP_F_INIT, &cp->ulp_flags[ulp_type]))
-		cnic_ulp_ctl(dev, ulp_type, false, DRV_UNLOADED);
-	else
-		cnic_ulp_ctl(dev, ulp_type, false, DRV_INACTIVE);
+	cnic_ulp_ctl(dev, ulp_type, false);
 
 	return 0;
 }
@@ -3693,7 +3683,7 @@ static int cnic_get_v4_route(struct sockaddr_in *dst_addr,
 static int cnic_get_v6_route(struct sockaddr_in6 *dst_addr,
 			     struct dst_entry **dst)
 {
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || (defined(CONFIG_IPV6_MODULE) && defined(MODULE))
 	struct flowi6 fl6;
 
 	memset(&fl6, 0, sizeof(fl6));
@@ -4278,7 +4268,6 @@ static void cnic_delete_task(struct work_struct *work)
 
 		cnic_ulp_stop_one(cp, CNIC_ULP_ISCSI);
 
-		memset(&info, 0, sizeof(struct drv_ctl_info));
 		info.cmd = DRV_CTL_ISCSI_STOPPED_CMD;
 		cp->ethdev->drv_ctl(dev->netdev, &info);
 	}
@@ -5350,10 +5339,7 @@ static int cnic_start_hw(struct cnic_dev *dev)
 	return 0;
 
 err1:
-	if (ethdev->drv_state & CNIC_DRV_STATE_HANDLES_IRQ)
-		cp->stop_hw(dev);
-	else
-		cp->free_resc(dev);
+	cp->free_resc(dev);
 	pci_dev_put(dev->pcidev);
 	return err;
 }
@@ -5448,23 +5434,6 @@ static void cnic_free_dev(struct cnic_dev *dev)
 	kfree(dev);
 }
 
-static int cnic_get_fc_npiv_tbl(struct cnic_dev *dev,
-				struct cnic_fc_npiv_tbl *npiv_tbl)
-{
-	struct cnic_local *cp = dev->cnic_priv;
-	struct bnx2x *bp = netdev_priv(dev->netdev);
-	int ret;
-
-	if (!test_bit(CNIC_F_CNIC_UP, &dev->flags))
-		return -EAGAIN;     /* bnx2x is down */
-
-	if (!BNX2X_CHIP_IS_E2_PLUS(bp))
-		return -EINVAL;
-
-	ret = cp->ethdev->drv_get_fc_npiv_tbl(dev->netdev, npiv_tbl);
-	return ret;
-}
-
 static struct cnic_dev *cnic_alloc_dev(struct net_device *dev,
 				       struct pci_dev *pdev)
 {
@@ -5483,7 +5452,6 @@ static struct cnic_dev *cnic_alloc_dev(struct net_device *dev,
 	cdev->register_device = cnic_register_device;
 	cdev->unregister_device = cnic_unregister_device;
 	cdev->iscsi_nl_msg_recv = cnic_iscsi_nl_msg_recv;
-	cdev->get_fc_npiv_tbl = cnic_get_fc_npiv_tbl;
 
 	cp = cdev->cnic_priv;
 	cp->dev = cdev;

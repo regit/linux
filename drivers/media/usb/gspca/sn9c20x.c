@@ -29,7 +29,8 @@
 
 #include <linux/dmi.h>
 
-MODULE_AUTHOR("Brian Johnson <brijohn@gmail.com>, microdia project <microdia@googlegroups.com>");
+MODULE_AUTHOR("Brian Johnson <brijohn@gmail.com>, "
+		"microdia project <microdia@googlegroups.com>");
 MODULE_DESCRIPTION("GSPCA/SN9C20X USB Camera Driver");
 MODULE_LICENSE("GPL");
 
@@ -91,6 +92,7 @@ struct sd {
 	struct v4l2_ctrl *jpegqual;
 
 	struct work_struct work;
+	struct workqueue_struct *work_thread;
 
 	u32 pktsz;			/* (used by pkt_scan) */
 	u16 npkt;
@@ -1295,7 +1297,7 @@ static void set_cmatrix(struct gspca_dev *gspca_dev,
 	s32 hue_coord, hue_index = 180 + hue;
 	u8 cmatrix[21];
 
-	memset(cmatrix, 0, sizeof(cmatrix));
+	memset(cmatrix, 0, sizeof cmatrix);
 	cmatrix[2] = (contrast * 0x25 / 0x100) + 0x26;
 	cmatrix[0] = 0x13 + (cmatrix[2] - 0x26) * 0x13 / 0x25;
 	cmatrix[4] = 0x07 + (cmatrix[2] - 0x26) * 0x07 / 0x25;
@@ -1785,9 +1787,8 @@ static int sd_init(struct gspca_dev *gspca_dev)
 	struct sd *sd = (struct sd *) gspca_dev;
 	int i;
 	u8 value;
-	u8 i2c_init[9] = {
-		0x80, sd->i2c_addr, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03
-	};
+	u8 i2c_init[9] =
+		{0x80, sd->i2c_addr, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03};
 
 	for (i = 0; i < ARRAY_SIZE(bridge_init); i++) {
 		value = bridge_init[i][1];
@@ -1947,7 +1948,8 @@ static int sd_isoc_init(struct gspca_dev *gspca_dev)
 		intf = usb_ifnum_to_if(gspca_dev->dev, gspca_dev->iface);
 
 		if (intf->num_altsetting != 9) {
-			pr_warn("sn9c20x camera with unknown number of alt settings (%d), please report!\n",
+			pr_warn("sn9c20x camera with unknown number of alt "
+				"settings (%d), please report!\n",
 				intf->num_altsetting);
 			gspca_dev->alt = intf->num_altsetting;
 			return 0;
@@ -2048,6 +2050,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	if (mode & MODE_JPEG) {
 		sd->pktsz = sd->npkt = 0;
 		sd->nchg = 0;
+		sd->work_thread =
+			create_singlethread_workqueue(KBUILD_MODNAME);
 	}
 
 	return gspca_dev->usb_err;
@@ -2065,9 +2069,12 @@ static void sd_stop0(struct gspca_dev *gspca_dev)
 {
 	struct sd *sd = (struct sd *) gspca_dev;
 
-	mutex_unlock(&gspca_dev->usb_lock);
-	flush_work(&sd->work);
-	mutex_lock(&gspca_dev->usb_lock);
+	if (sd->work_thread != NULL) {
+		mutex_unlock(&gspca_dev->usb_lock);
+		destroy_workqueue(sd->work_thread);
+		mutex_lock(&gspca_dev->usb_lock);
+		sd->work_thread = NULL;
+	}
 }
 
 static void do_autoexposure(struct gspca_dev *gspca_dev, u16 avg_lum)
@@ -2220,7 +2227,7 @@ static void transfer_check(struct gspca_dev *gspca_dev,
 				new_qual = sd->jpegqual->maximum;
 			if (new_qual != curqual) {
 				sd->jpegqual->cur.val = new_qual;
-				schedule_work(&sd->work);
+				queue_work(sd->work_thread, &sd->work);
 			}
 		}
 	} else {
@@ -2235,9 +2242,8 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 {
 	struct sd *sd = (struct sd *) gspca_dev;
 	int avg_lum, is_jpeg;
-	static const u8 frame_header[] = {
-		0xff, 0xff, 0x00, 0xc4, 0xc4, 0x96
-	};
+	static const u8 frame_header[] =
+		{0xff, 0xff, 0x00, 0xc4, 0xc4, 0x96};
 
 	is_jpeg = (sd->fmt & 0x03) == 0;
 	if (len >= 64 && memcmp(data, frame_header, 6) == 0) {

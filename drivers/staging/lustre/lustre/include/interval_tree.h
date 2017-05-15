@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -36,7 +40,7 @@
 #ifndef _INTERVAL_H__
 #define _INTERVAL_H__
 
-#include "../../include/linux/libcfs/libcfs.h"	/* LASSERT. */
+#include <linux/libcfs/libcfs.h>   /* LASSERT. */
 
 struct interval_node {
 	struct interval_node   *in_left;
@@ -82,8 +86,7 @@ static inline void interval_set(struct interval_node *node,
 	node->in_max_high = end;
 }
 
-/*
- * Rules to write an interval callback.
+/* Rules to write an interval callback.
  *  - the callback returns INTERVAL_ITER_STOP when it thinks the iteration
  *    should be stopped. It will then cause the iteration function to return
  *    immediately with return value INTERVAL_ITER_STOP.
@@ -99,12 +102,23 @@ struct interval_node *interval_insert(struct interval_node *node,
 				      struct interval_node **root);
 void interval_erase(struct interval_node *node, struct interval_node **root);
 
-/*
- * Search the extents in the tree and call @func for each overlapped
- * extents.
- */
+/* Search the extents in the tree and call @func for each overlapped
+ * extents. */
 enum interval_iter interval_search(struct interval_node *root,
 				   struct interval_node_extent *ex,
 				   interval_callback_t func, void *data);
 
+/* Iterate every node in the tree - by reverse order or regular order. */
+enum interval_iter interval_iterate(struct interval_node *root,
+				    interval_callback_t func, void *data);
+enum interval_iter interval_iterate_reverse(struct interval_node *root,
+				    interval_callback_t func,void *data);
+
+void interval_expand(struct interval_node *root,
+		     struct interval_node_extent *ext,
+		     struct interval_node_extent *limiter);
+int interval_is_overlapped(struct interval_node *root,
+			   struct interval_node_extent *ex);
+struct interval_node *interval_find(struct interval_node *root,
+				    struct interval_node_extent *ex);
 #endif

@@ -12,13 +12,16 @@
 
 #include <linux/acpi.h>
 #include <linux/module.h>
-#include <linux/ctype.h>
 
 static const struct acpi_device_id acpi_pnp_device_ids[] = {
+	/* soc_button_array */
+	{"PNP0C40"},
 	/* pata_isapnp */
 	{"PNP0600"},		/* Generic ESDI/IDE/ATA compatible hard disk controller */
 	/* floppy */
 	{"PNP0700"},
+	/* ipmi_si */
+	{"IPI0001"},
 	/* tpm_inf_pnp */
 	{"IFX0101"},		/* Infineon TPMs */
 	{"IFX0102"},		/* Infineon TPMs */
@@ -128,6 +131,10 @@ static const struct acpi_device_id acpi_pnp_device_ids[] = {
 	{"PNP0401"},		/* ECP Printer Port */
 	/* apple-gmux */
 	{"APP000B"},
+	/* fujitsu-laptop.c */
+	{"FUJ02bf"},
+	{"FUJ02B1"},
+	{"FUJ02E3"},
 	/* system */
 	{"PNP0c02"},		/* General ID for reserving resources */
 	{"PNP0c01"},		/* memory controller */
@@ -151,7 +158,6 @@ static const struct acpi_device_id acpi_pnp_device_ids[] = {
 	{"AEI0250"},		/* PROLiNK 1456VH ISA PnP K56flex Fax Modem */
 	{"AEI1240"},		/* Actiontec ISA PNP 56K X2 Fax Modem */
 	{"AKY1021"},		/* Rockwell 56K ACF II Fax+Data+Voice Modem */
-	{"ALI5123"},		/* ALi Fast Infrared Controller */
 	{"AZT4001"},		/* AZT3005 PnP SOUND DEVICE */
 	{"BDP3336"},		/* Best Data Products Inc. Smart One 336F PnP Modem */
 	{"BRI0A49"},		/* Boca Complete Ofc Communicator 14.4 Data-FAX */
@@ -303,8 +309,6 @@ static const struct acpi_device_id acpi_pnp_device_ids[] = {
 	{"PNPb006"},
 	/* cs423x-pnpbios */
 	{"CSC0100"},
-	{"CSC0103"},
-	{"CSC0110"},
 	{"CSC0000"},
 	{"GIM0100"},		/* Guillemot Turtlebeach something appears to be cs4232 compatible */
 	/* es18xx-pnpbios */
@@ -316,7 +320,12 @@ static const struct acpi_device_id acpi_pnp_device_ids[] = {
 	{""},
 };
 
-static bool matching_id(const char *idstr, const char *list_id)
+static bool is_hex_digit(char c)
+{
+	return (c >= 0 && c <= '9') || (c >= 'A' && c <= 'F');
+}
+
+static bool matching_id(char *idstr, char *list_id)
 {
 	int i;
 
@@ -326,14 +335,14 @@ static bool matching_id(const char *idstr, const char *list_id)
 	for (i = 3; i < 7; i++) {
 		char c = toupper(idstr[i]);
 
-		if (!isxdigit(c)
+		if (!is_hex_digit(c)
 		    || (list_id[i] != 'X' && c != toupper(list_id[i])))
 			return false;
 	}
 	return true;
 }
 
-static bool acpi_pnp_match(const char *idstr, const struct acpi_device_id **matchid)
+static bool acpi_pnp_match(char *idstr, const struct acpi_device_id **matchid)
 {
 	const struct acpi_device_id *devid;
 
@@ -367,7 +376,7 @@ static struct acpi_scan_handler acpi_pnp_handler = {
  */
 static int is_cmos_rtc_device(struct acpi_device *adev)
 {
-	static const struct acpi_device_id ids[] = {
+	struct acpi_device_id ids[] = {
 		{ "PNP0B00" },
 		{ "PNP0B01" },
 		{ "PNP0B02" },

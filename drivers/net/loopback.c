@@ -40,7 +40,7 @@
 #include <linux/fcntl.h>
 #include <linux/in.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 
 #include <linux/inet.h>
@@ -165,16 +165,18 @@ static void loopback_setup(struct net_device *dev)
 	dev->mtu		= 64 * 1024;
 	dev->hard_header_len	= ETH_HLEN;	/* 14	*/
 	dev->addr_len		= ETH_ALEN;	/* 6	*/
+	dev->tx_queue_len	= 0;
 	dev->type		= ARPHRD_LOOPBACK;	/* 0x0001*/
 	dev->flags		= IFF_LOOPBACK;
-	dev->priv_flags		|= IFF_LIVE_ADDR_CHANGE | IFF_NO_QUEUE;
-	netif_keep_dst(dev);
-	dev->hw_features	= NETIF_F_GSO_SOFTWARE;
+	dev->priv_flags		|= IFF_LIVE_ADDR_CHANGE;
+	dev->priv_flags	       &= ~IFF_XMIT_DST_RELEASE;
+	dev->hw_features	= NETIF_F_ALL_TSO | NETIF_F_UFO;
 	dev->features 		= NETIF_F_SG | NETIF_F_FRAGLIST
-		| NETIF_F_GSO_SOFTWARE
+		| NETIF_F_ALL_TSO
+		| NETIF_F_UFO
 		| NETIF_F_HW_CSUM
 		| NETIF_F_RXCSUM
-		| NETIF_F_SCTP_CRC
+		| NETIF_F_SCTP_CSUM
 		| NETIF_F_HIGHDMA
 		| NETIF_F_LLTX
 		| NETIF_F_NETNS_LOCAL
@@ -193,7 +195,7 @@ static __net_init int loopback_net_init(struct net *net)
 	int err;
 
 	err = -ENOMEM;
-	dev = alloc_netdev(0, "lo", NET_NAME_UNKNOWN, loopback_setup);
+	dev = alloc_netdev(0, "lo", loopback_setup);
 	if (!dev)
 		goto out;
 

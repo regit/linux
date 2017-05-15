@@ -19,8 +19,6 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -41,11 +39,7 @@ struct nxt6000_state {
 };
 
 static int debug;
-#define dprintk(fmt, arg...) do {					\
-	if (debug)							\
-		printk(KERN_DEBUG pr_fmt("%s: " fmt),			\
-		       __func__, ##arg);				\
-} while (0)
+#define dprintk if (debug) printk
 
 static int nxt6000_writereg(struct nxt6000_state* state, u8 reg, u8 data)
 {
@@ -115,8 +109,7 @@ static int nxt6000_set_bandwidth(struct nxt6000_state *state, u32 bandwidth)
 	return nxt6000_writereg(state, OFDM_TRL_NOMINALRATE_2, (nominal_rate >> 8) & 0xFF);
 }
 
-static int nxt6000_set_guard_interval(struct nxt6000_state *state,
-				      enum fe_guard_interval guard_interval)
+static int nxt6000_set_guard_interval(struct nxt6000_state* state, fe_guard_interval_t guard_interval)
 {
 	switch (guard_interval) {
 
@@ -138,8 +131,7 @@ static int nxt6000_set_guard_interval(struct nxt6000_state *state,
 	}
 }
 
-static int nxt6000_set_inversion(struct nxt6000_state *state,
-				 enum fe_spectral_inversion inversion)
+static int nxt6000_set_inversion(struct nxt6000_state* state, fe_spectral_inversion_t inversion)
 {
 	switch (inversion) {
 
@@ -155,9 +147,7 @@ static int nxt6000_set_inversion(struct nxt6000_state *state,
 	}
 }
 
-static int
-nxt6000_set_transmission_mode(struct nxt6000_state *state,
-			      enum fe_transmit_mode transmission_mode)
+static int nxt6000_set_transmission_mode(struct nxt6000_state* state, fe_transmit_mode_t transmission_mode)
 {
 	int result;
 
@@ -221,129 +211,119 @@ static void nxt6000_dump_status(struct nxt6000_state *state)
 {
 	u8 val;
 
-#if 0
-	pr_info("RS_COR_STAT: 0x%02X\n",
-		nxt6000_readreg(fe, RS_COR_STAT));
-	pr_info("VIT_SYNC_STATUS: 0x%02X\n",
-		nxt6000_readreg(fe, VIT_SYNC_STATUS));
-	pr_info("OFDM_COR_STAT: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_COR_STAT));
-	pr_info("OFDM_SYR_STAT: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_SYR_STAT));
-	pr_info("OFDM_TPS_RCVD_1: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_TPS_RCVD_1));
-	pr_info("OFDM_TPS_RCVD_2: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_TPS_RCVD_2));
-	pr_info("OFDM_TPS_RCVD_3: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_TPS_RCVD_3));
-	pr_info("OFDM_TPS_RCVD_4: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_TPS_RCVD_4));
-	pr_info("OFDM_TPS_RESERVED_1: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_TPS_RESERVED_1));
-	pr_info("OFDM_TPS_RESERVED_2: 0x%02X\n",
-		nxt6000_readreg(fe, OFDM_TPS_RESERVED_2));
-#endif
-	pr_info("NXT6000 status:");
+/*
+	printk("RS_COR_STAT: 0x%02X\n", nxt6000_readreg(fe, RS_COR_STAT));
+	printk("VIT_SYNC_STATUS: 0x%02X\n", nxt6000_readreg(fe, VIT_SYNC_STATUS));
+	printk("OFDM_COR_STAT: 0x%02X\n", nxt6000_readreg(fe, OFDM_COR_STAT));
+	printk("OFDM_SYR_STAT: 0x%02X\n", nxt6000_readreg(fe, OFDM_SYR_STAT));
+	printk("OFDM_TPS_RCVD_1: 0x%02X\n", nxt6000_readreg(fe, OFDM_TPS_RCVD_1));
+	printk("OFDM_TPS_RCVD_2: 0x%02X\n", nxt6000_readreg(fe, OFDM_TPS_RCVD_2));
+	printk("OFDM_TPS_RCVD_3: 0x%02X\n", nxt6000_readreg(fe, OFDM_TPS_RCVD_3));
+	printk("OFDM_TPS_RCVD_4: 0x%02X\n", nxt6000_readreg(fe, OFDM_TPS_RCVD_4));
+	printk("OFDM_TPS_RESERVED_1: 0x%02X\n", nxt6000_readreg(fe, OFDM_TPS_RESERVED_1));
+	printk("OFDM_TPS_RESERVED_2: 0x%02X\n", nxt6000_readreg(fe, OFDM_TPS_RESERVED_2));
+*/
+	printk("NXT6000 status:");
 
 	val = nxt6000_readreg(state, RS_COR_STAT);
 
-	pr_cont(" DATA DESCR LOCK: %d,", val & 0x01);
-	pr_cont(" DATA SYNC LOCK: %d,", (val >> 1) & 0x01);
+	printk(" DATA DESCR LOCK: %d,", val & 0x01);
+	printk(" DATA SYNC LOCK: %d,", (val >> 1) & 0x01);
 
 	val = nxt6000_readreg(state, VIT_SYNC_STATUS);
 
-	pr_cont(" VITERBI LOCK: %d,", (val >> 7) & 0x01);
+	printk(" VITERBI LOCK: %d,", (val >> 7) & 0x01);
 
 	switch ((val >> 4) & 0x07) {
 
 	case 0x00:
-		pr_cont(" VITERBI CODERATE: 1/2,");
+		printk(" VITERBI CODERATE: 1/2,");
 		break;
 
 	case 0x01:
-		pr_cont(" VITERBI CODERATE: 2/3,");
+		printk(" VITERBI CODERATE: 2/3,");
 		break;
 
 	case 0x02:
-		pr_cont(" VITERBI CODERATE: 3/4,");
+		printk(" VITERBI CODERATE: 3/4,");
 		break;
 
 	case 0x03:
-		pr_cont(" VITERBI CODERATE: 5/6,");
+		printk(" VITERBI CODERATE: 5/6,");
 		break;
 
 	case 0x04:
-		pr_cont(" VITERBI CODERATE: 7/8,");
+		printk(" VITERBI CODERATE: 7/8,");
 		break;
 
 	default:
-		pr_cont(" VITERBI CODERATE: Reserved,");
+		printk(" VITERBI CODERATE: Reserved,");
 
 	}
 
 	val = nxt6000_readreg(state, OFDM_COR_STAT);
 
-	pr_cont(" CHCTrack: %d,", (val >> 7) & 0x01);
-	pr_cont(" TPSLock: %d,", (val >> 6) & 0x01);
-	pr_cont(" SYRLock: %d,", (val >> 5) & 0x01);
-	pr_cont(" AGCLock: %d,", (val >> 4) & 0x01);
+	printk(" CHCTrack: %d,", (val >> 7) & 0x01);
+	printk(" TPSLock: %d,", (val >> 6) & 0x01);
+	printk(" SYRLock: %d,", (val >> 5) & 0x01);
+	printk(" AGCLock: %d,", (val >> 4) & 0x01);
 
 	switch (val & 0x0F) {
 
 	case 0x00:
-		pr_cont(" CoreState: IDLE,");
+		printk(" CoreState: IDLE,");
 		break;
 
 	case 0x02:
-		pr_cont(" CoreState: WAIT_AGC,");
+		printk(" CoreState: WAIT_AGC,");
 		break;
 
 	case 0x03:
-		pr_cont(" CoreState: WAIT_SYR,");
+		printk(" CoreState: WAIT_SYR,");
 		break;
 
 	case 0x04:
-		pr_cont(" CoreState: WAIT_PPM,");
+		printk(" CoreState: WAIT_PPM,");
 		break;
 
 	case 0x01:
-		pr_cont(" CoreState: WAIT_TRL,");
+		printk(" CoreState: WAIT_TRL,");
 		break;
 
 	case 0x05:
-		pr_cont(" CoreState: WAIT_TPS,");
+		printk(" CoreState: WAIT_TPS,");
 		break;
 
 	case 0x06:
-		pr_cont(" CoreState: MONITOR_TPS,");
+		printk(" CoreState: MONITOR_TPS,");
 		break;
 
 	default:
-		pr_cont(" CoreState: Reserved,");
+		printk(" CoreState: Reserved,");
 
 	}
 
 	val = nxt6000_readreg(state, OFDM_SYR_STAT);
 
-	pr_cont(" SYRLock: %d,", (val >> 4) & 0x01);
-	pr_cont(" SYRMode: %s,", (val >> 2) & 0x01 ? "8K" : "2K");
+	printk(" SYRLock: %d,", (val >> 4) & 0x01);
+	printk(" SYRMode: %s,", (val >> 2) & 0x01 ? "8K" : "2K");
 
 	switch ((val >> 4) & 0x03) {
 
 	case 0x00:
-		pr_cont(" SYRGuard: 1/32,");
+		printk(" SYRGuard: 1/32,");
 		break;
 
 	case 0x01:
-		pr_cont(" SYRGuard: 1/16,");
+		printk(" SYRGuard: 1/16,");
 		break;
 
 	case 0x02:
-		pr_cont(" SYRGuard: 1/8,");
+		printk(" SYRGuard: 1/8,");
 		break;
 
 	case 0x03:
-		pr_cont(" SYRGuard: 1/4,");
+		printk(" SYRGuard: 1/4,");
 		break;
 	}
 
@@ -352,77 +332,77 @@ static void nxt6000_dump_status(struct nxt6000_state *state)
 	switch ((val >> 4) & 0x07) {
 
 	case 0x00:
-		pr_cont(" TPSLP: 1/2,");
+		printk(" TPSLP: 1/2,");
 		break;
 
 	case 0x01:
-		pr_cont(" TPSLP: 2/3,");
+		printk(" TPSLP: 2/3,");
 		break;
 
 	case 0x02:
-		pr_cont(" TPSLP: 3/4,");
+		printk(" TPSLP: 3/4,");
 		break;
 
 	case 0x03:
-		pr_cont(" TPSLP: 5/6,");
+		printk(" TPSLP: 5/6,");
 		break;
 
 	case 0x04:
-		pr_cont(" TPSLP: 7/8,");
+		printk(" TPSLP: 7/8,");
 		break;
 
 	default:
-		pr_cont(" TPSLP: Reserved,");
+		printk(" TPSLP: Reserved,");
 
 	}
 
 	switch (val & 0x07) {
 
 	case 0x00:
-		pr_cont(" TPSHP: 1/2,");
+		printk(" TPSHP: 1/2,");
 		break;
 
 	case 0x01:
-		pr_cont(" TPSHP: 2/3,");
+		printk(" TPSHP: 2/3,");
 		break;
 
 	case 0x02:
-		pr_cont(" TPSHP: 3/4,");
+		printk(" TPSHP: 3/4,");
 		break;
 
 	case 0x03:
-		pr_cont(" TPSHP: 5/6,");
+		printk(" TPSHP: 5/6,");
 		break;
 
 	case 0x04:
-		pr_cont(" TPSHP: 7/8,");
+		printk(" TPSHP: 7/8,");
 		break;
 
 	default:
-		pr_cont(" TPSHP: Reserved,");
+		printk(" TPSHP: Reserved,");
 
 	}
 
 	val = nxt6000_readreg(state, OFDM_TPS_RCVD_4);
 
-	pr_cont(" TPSMode: %s,", val & 0x01 ? "8K" : "2K");
+	printk(" TPSMode: %s,", val & 0x01 ? "8K" : "2K");
 
 	switch ((val >> 4) & 0x03) {
 
 	case 0x00:
-		pr_cont(" TPSGuard: 1/32,");
+		printk(" TPSGuard: 1/32,");
 		break;
 
 	case 0x01:
-		pr_cont(" TPSGuard: 1/16,");
+		printk(" TPSGuard: 1/16,");
 		break;
 
 	case 0x02:
-		pr_cont(" TPSGuard: 1/8,");
+		printk(" TPSGuard: 1/8,");
 		break;
 
 	case 0x03:
-		pr_cont(" TPSGuard: 1/4,");
+		printk(" TPSGuard: 1/4,");
 		break;
 
 	}
@@ -432,11 +412,11 @@ static void nxt6000_dump_status(struct nxt6000_state *state)
 	val = nxt6000_readreg(state, RF_AGC_STATUS);
 	val = nxt6000_readreg(state, RF_AGC_STATUS);
 
-	pr_cont(" RF AGC LOCK: %d,", (val >> 4) & 0x01);
-	pr_cont("\n");
+	printk(" RF AGC LOCK: %d,", (val >> 4) & 0x01);
+	printk("\n");
 }
 
-static int nxt6000_read_status(struct dvb_frontend *fe, enum fe_status *status)
+static int nxt6000_read_status(struct dvb_frontend* fe, fe_status_t* status)
 {
 	u8 core_status;
 	struct nxt6000_state* state = fe->demodulator_priv;
@@ -564,7 +544,7 @@ static int nxt6000_i2c_gate_ctrl(struct dvb_frontend* fe, int enable)
 	}
 }
 
-static const struct dvb_frontend_ops nxt6000_ops;
+static struct dvb_frontend_ops nxt6000_ops;
 
 struct dvb_frontend* nxt6000_attach(const struct nxt6000_config* config,
 				    struct i2c_adapter* i2c)
@@ -592,7 +572,7 @@ error:
 	return NULL;
 }
 
-static const struct dvb_frontend_ops nxt6000_ops = {
+static struct dvb_frontend_ops nxt6000_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name = "NxtWave NXT6000 DVB-T",

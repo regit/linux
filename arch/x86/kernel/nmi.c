@@ -17,7 +17,6 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/hardirq.h>
-#include <linux/ratelimit.h>
 #include <linux/slab.h>
 #include <linux/export.h>
 
@@ -30,8 +29,6 @@
 #include <asm/mach_traps.h>
 #include <asm/nmi.h>
 #include <asm/x86_init.h>
-#include <asm/reboot.h>
-#include <asm/cache.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/nmi.h>
@@ -71,7 +68,7 @@ struct nmi_stats {
 
 static DEFINE_PER_CPU(struct nmi_stats, nmi_stats);
 
-static int ignore_nmis __read_mostly;
+static int ignore_nmis;
 
 int unknown_nmi_panic;
 /*
@@ -113,7 +110,7 @@ static void nmi_max_handler(struct irq_work *w)
 		a->handler, whole_msecs, decimal_msecs);
 }
 
-static int nmi_handle(unsigned int type, struct pt_regs *regs)
+static int nmi_handle(unsigned int type, struct pt_regs *regs, bool b2b)
 {
 	struct nmi_desc *desc = nmi_to_desc(type);
 	struct nmiaction *a;
@@ -216,7 +213,7 @@ static void
 pci_serr_error(unsigned char reason, struct pt_regs *regs)
 {
 	/* check to see if anyone registered against these types of errors */
-	if (nmi_handle(NMI_SERR, regs))
+	if (nmi_handle(NMI_SERR, regs, false))
 		return;
 
 	pr_emerg("NMI: PCI system error (SERR) for reason %02x on CPU %d.\n",
@@ -234,7 +231,7 @@ pci_serr_error(unsigned char reason, struct pt_regs *regs)
 #endif
 
 	if (panic_on_unrecovered_nmi)
-		nmi_panic(regs, "NMI: Not continuing");
+		panic("NMI: Not continuing");
 
 	pr_emerg("Dazed and confused, but trying to continue\n");
 
@@ -250,7 +247,7 @@ io_check_error(unsigned char reason, struct pt_regs *regs)
 	unsigned long i;
 
 	/* check to see if anyone registered against these types of errors */
-	if (nmi_handle(NMI_IO_CHECK, regs))
+	if (nmi_handle(NMI_IO_CHECK, regs, false))
 		return;
 
 	pr_emerg(
@@ -258,16 +255,8 @@ io_check_error(unsigned char reason, struct pt_regs *regs)
 		 reason, smp_processor_id());
 	show_regs(regs);
 
-	if (panic_on_io_nmi) {
-		nmi_panic(regs, "NMI IOCK error: Not continuing");
-
-		/*
-		 * If we end up here, it means we have received an NMI while
-		 * processing panic(). Simply return without delaying and
-		 * re-enabling NMIs.
-		 */
-		return;
-	}
+	if (panic_on_io_nmi)
+		panic("NMI IOCK error: Not continuing");
 
 	/* Re-enable the IOCK line, wait for a few seconds */
 	reason = (reason & NMI_REASON_CLEAR_MASK) | NMI_REASON_CLEAR_IOCHK;
@@ -295,7 +284,7 @@ unknown_nmi_error(unsigned char reason, struct pt_regs *regs)
 	 * as only the first one is ever run (unless it can actually determine
 	 * if it caused the NMI)
 	 */
-	handled = nmi_handle(NMI_UNKNOWN, regs);
+	handled = nmi_handle(NMI_UNKNOWN, regs, false);
 	if (handled) {
 		__this_cpu_add(nmi_stats.unknown, handled);
 		return;
@@ -308,7 +297,7 @@ unknown_nmi_error(unsigned char reason, struct pt_regs *regs)
 
 	pr_emerg("Do you have a strange power saving mode enabled?\n");
 	if (unknown_nmi_panic || panic_on_unrecovered_nmi)
-		nmi_panic(regs, "NMI: Not continuing");
+		panic("NMI: Not continuing");
 
 	pr_emerg("Dazed and confused, but trying to continue\n");
 }
@@ -343,7 +332,7 @@ static void default_do_nmi(struct pt_regs *regs)
 
 	__this_cpu_write(last_nmi_rip, regs->ip);
 
-	handled = nmi_handle(NMI_LOCAL, regs);
+	handled = nmi_handle(NMI_LOCAL, regs, b2b);
 	__this_cpu_add(nmi_stats.normal, handled);
 	if (handled) {
 		/*
@@ -359,19 +348,8 @@ static void default_do_nmi(struct pt_regs *regs)
 		return;
 	}
 
-	/*
-	 * Non-CPU-specific NMI: NMI sources can be processed on any CPU.
-	 *
-	 * Another CPU may be processing panic routines while holding
-	 * nmi_reason_lock. Check if the CPU issued the IPI for crash dumping,
-	 * and if so, call its callback directly.  If there is no CPU preparing
-	 * crash dump, we simply loop here.
-	 */
-	while (!raw_spin_trylock(&nmi_reason_lock)) {
-		run_crash_ipi_callback(regs);
-		cpu_relax();
-	}
-
+	/* Non-CPU-specific NMI: NMI sources can be processed on any CPU */
+	raw_spin_lock(&nmi_reason_lock);
 	reason = x86_platform.get_nmi_reason();
 
 	if (reason & NMI_REASON_MASK) {
@@ -430,15 +408,15 @@ static void default_do_nmi(struct pt_regs *regs)
 NOKPROBE_SYMBOL(default_do_nmi);
 
 /*
- * NMIs can page fault or hit breakpoints which will cause it to lose
- * its NMI context with the CPU when the breakpoint or page fault does an IRET.
- *
- * As a result, NMIs can nest if NMIs get unmasked due an IRET during
- * NMI processing.  On x86_64, the asm glue protects us from nested NMIs
- * if the outer NMI came from kernel mode, but we can still nest if the
- * outer NMI came from user mode.
- *
- * To handle these nested NMIs, we have three states:
+ * NMIs can hit breakpoints which will cause it to lose its
+ * NMI context with the CPU when the breakpoint does an iret.
+ */
+#ifdef CONFIG_X86_32
+/*
+ * For i386, NMIs use the same stack as the kernel, and we can
+ * add a workaround to the iret problem in C (preventing nested
+ * NMIs if an NMI takes a trap). Simply have 3 states the NMI
+ * can be in:
  *
  *  1) not running
  *  2) executing
@@ -452,14 +430,15 @@ NOKPROBE_SYMBOL(default_do_nmi);
  * (Note, the latch is binary, thus multiple NMIs triggering,
  *  when one is running, are ignored. Only one NMI is restarted.)
  *
- * If an NMI executes an iret, another NMI can preempt it. We do not
- * want to allow this new NMI to run, but we want to execute it when the
- * first one finishes.  We set the state to "latched", and the exit of
- * the first NMI will perform a dec_return, if the result is zero
- * (NOT_RUNNING), then it will simply exit the NMI handler. If not, the
- * dec_return would have set the state to NMI_EXECUTING (what we want it
- * to be when we are running). In this case, we simply jump back to
- * rerun the NMI handler again, and restart the 'latched' NMI.
+ * If an NMI hits a breakpoint that executes an iret, another
+ * NMI can preempt it. We do not want to allow this new NMI
+ * to run, but we want to execute it when the first one finishes.
+ * We set the state to "latched", and the exit of the first NMI will
+ * perform a dec_return, if the result is zero (NOT_RUNNING), then
+ * it will simply exit the NMI handler. If not, the dec_return
+ * would have set the state to NMI_EXECUTING (what we want it to
+ * be when we are running). In this case, we simply jump back
+ * to rerun the NMI handler again, and restart the 'latched' NMI.
  *
  * No trap (breakpoint or page fault) should be hit before nmi_restart,
  * thus there is no race between the first check of state for NOT_RUNNING
@@ -482,36 +461,49 @@ enum nmi_states {
 static DEFINE_PER_CPU(enum nmi_states, nmi_state);
 static DEFINE_PER_CPU(unsigned long, nmi_cr2);
 
-#ifdef CONFIG_X86_64
+#define nmi_nesting_preprocess(regs)					\
+	do {								\
+		if (this_cpu_read(nmi_state) != NMI_NOT_RUNNING) {	\
+			this_cpu_write(nmi_state, NMI_LATCHED);		\
+			return;						\
+		}							\
+		this_cpu_write(nmi_state, NMI_EXECUTING);		\
+		this_cpu_write(nmi_cr2, read_cr2());			\
+	} while (0);							\
+	nmi_restart:
+
+#define nmi_nesting_postprocess()					\
+	do {								\
+		if (unlikely(this_cpu_read(nmi_cr2) != read_cr2()))	\
+			write_cr2(this_cpu_read(nmi_cr2));		\
+		if (this_cpu_dec_return(nmi_state))			\
+			goto nmi_restart;				\
+	} while (0)
+#else /* x86_64 */
 /*
- * In x86_64, we need to handle breakpoint -> NMI -> breakpoint.  Without
- * some care, the inner breakpoint will clobber the outer breakpoint's
- * stack.
+ * In x86_64 things are a bit more difficult. This has the same problem
+ * where an NMI hitting a breakpoint that calls iret will remove the
+ * NMI context, allowing a nested NMI to enter. What makes this more
+ * difficult is that both NMIs and breakpoints have their own stack.
+ * When a new NMI or breakpoint is executed, the stack is set to a fixed
+ * point. If an NMI is nested, it will have its stack set at that same
+ * fixed address that the first NMI had, and will start corrupting the
+ * stack. This is handled in entry_64.S, but the same problem exists with
+ * the breakpoint stack.
  *
- * If a breakpoint is being processed, and the debug stack is being
- * used, if an NMI comes in and also hits a breakpoint, the stack
- * pointer will be set to the same fixed address as the breakpoint that
- * was interrupted, causing that stack to be corrupted. To handle this
- * case, check if the stack that was interrupted is the debug stack, and
- * if so, change the IDT so that new breakpoints will use the current
- * stack and not switch to the fixed address. On return of the NMI,
- * switch back to the original IDT.
+ * If a breakpoint is being processed, and the debug stack is being used,
+ * if an NMI comes in and also hits a breakpoint, the stack pointer
+ * will be set to the same fixed address as the breakpoint that was
+ * interrupted, causing that stack to be corrupted. To handle this case,
+ * check if the stack that was interrupted is the debug stack, and if
+ * so, change the IDT so that new breakpoints will use the current stack
+ * and not switch to the fixed address. On return of the NMI, switch back
+ * to the original IDT.
  */
 static DEFINE_PER_CPU(int, update_debug_stack);
-#endif
 
-dotraplinkage notrace void
-do_nmi(struct pt_regs *regs, long error_code)
+static inline void nmi_nesting_preprocess(struct pt_regs *regs)
 {
-	if (this_cpu_read(nmi_state) != NMI_NOT_RUNNING) {
-		this_cpu_write(nmi_state, NMI_LATCHED);
-		return;
-	}
-	this_cpu_write(nmi_state, NMI_EXECUTING);
-	this_cpu_write(nmi_cr2, read_cr2());
-nmi_restart:
-
-#ifdef CONFIG_X86_64
 	/*
 	 * If we interrupted a breakpoint, it is possible that
 	 * the nmi handler will have breakpoints too. We need to
@@ -522,7 +514,21 @@ nmi_restart:
 		debug_stack_set_zero();
 		this_cpu_write(update_debug_stack, 1);
 	}
+}
+
+static inline void nmi_nesting_postprocess(void)
+{
+	if (unlikely(this_cpu_read(update_debug_stack))) {
+		debug_stack_reset();
+		this_cpu_write(update_debug_stack, 0);
+	}
+}
 #endif
+
+dotraplinkage notrace void
+do_nmi(struct pt_regs *regs, long error_code)
+{
+	nmi_nesting_preprocess(regs);
 
 	nmi_enter();
 
@@ -533,17 +539,8 @@ nmi_restart:
 
 	nmi_exit();
 
-#ifdef CONFIG_X86_64
-	if (unlikely(this_cpu_read(update_debug_stack))) {
-		debug_stack_reset();
-		this_cpu_write(update_debug_stack, 0);
-	}
-#endif
-
-	if (unlikely(this_cpu_read(nmi_cr2) != read_cr2()))
-		write_cr2(this_cpu_read(nmi_cr2));
-	if (this_cpu_dec_return(nmi_state))
-		goto nmi_restart;
+	/* On i386, may loop back to preprocess */
+	nmi_nesting_postprocess();
 }
 NOKPROBE_SYMBOL(do_nmi);
 

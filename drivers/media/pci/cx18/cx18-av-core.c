@@ -468,19 +468,21 @@ void cx18_av_std_setup(struct cx18 *cx)
 		CX18_DEBUG_INFO_DEV(sd, "Pixel rate = %d.%06d Mpixel/sec\n",
 				    pll / 8000000, (pll / 8) % 1000000);
 
-		CX18_DEBUG_INFO_DEV(sd, "ADC XTAL/pixel clock decimation ratio = %d.%03d\n",
-				    src_decimation / 256,
+		CX18_DEBUG_INFO_DEV(sd, "ADC XTAL/pixel clock decimation ratio "
+				    "= %d.%03d\n", src_decimation / 256,
 				    ((src_decimation % 256) * 1000) / 256);
 
 		tmp = 28636360 * (u64) sc;
 		do_div(tmp, src_decimation);
 		fsc = tmp >> 13;
 		CX18_DEBUG_INFO_DEV(sd,
-				    "Chroma sub-carrier initial freq = %d.%06d MHz\n",
-				    fsc / 1000000, fsc % 1000000);
+				    "Chroma sub-carrier initial freq = %d.%06d "
+				    "MHz\n", fsc / 1000000, fsc % 1000000);
 
-		CX18_DEBUG_INFO_DEV(sd,
-				    "hblank %i, hactive %i, vblank %i, vactive %i, vblank656 %i, src_dec %i, burst 0x%02x, luma_lpf %i, uv_lpf %i, comb 0x%02x, sc 0x%06x\n",
+		CX18_DEBUG_INFO_DEV(sd, "hblank %i, hactive %i, vblank %i, "
+				    "vactive %i, vblank656 %i, src_dec %i, "
+				    "burst 0x%02x, luma_lpf %i, uv_lpf %i, "
+				    "comb 0x%02x, sc 0x%06x\n",
 				    hblank, hactive, vblank, vactive, vblank656,
 				    src_decimation, burst, luma_lpf, uv_lpf,
 				    comb, sc);
@@ -488,8 +490,8 @@ void cx18_av_std_setup(struct cx18 *cx)
 
 	/* Sets horizontal blanking delay and active lines */
 	cx18_av_write(cx, 0x470, hblank);
-	cx18_av_write(cx, 0x471,
-		      (((hblank >> 8) & 0x3) | (hactive << 4)) & 0xff);
+	cx18_av_write(cx, 0x471, 0xff & (((hblank >> 8) & 0x3) |
+						(hactive << 4)));
 	cx18_av_write(cx, 0x472, hactive >> 4);
 
 	/* Sets burst gate delay */
@@ -497,14 +499,14 @@ void cx18_av_std_setup(struct cx18 *cx)
 
 	/* Sets vertical blanking delay and active duration */
 	cx18_av_write(cx, 0x474, vblank);
-	cx18_av_write(cx, 0x475,
-		      (((vblank >> 8) & 0x3) | (vactive << 4)) & 0xff);
+	cx18_av_write(cx, 0x475, 0xff & (((vblank >> 8) & 0x3) |
+						(vactive << 4)));
 	cx18_av_write(cx, 0x476, vactive >> 4);
 	cx18_av_write(cx, 0x477, vblank656);
 
 	/* Sets src decimation rate */
-	cx18_av_write(cx, 0x478, src_decimation & 0xff);
-	cx18_av_write(cx, 0x479, (src_decimation >> 8) & 0xff);
+	cx18_av_write(cx, 0x478, 0xff & src_decimation);
+	cx18_av_write(cx, 0x479, 0xff & (src_decimation >> 8));
 
 	/* Sets Luma and UV Low pass filters */
 	cx18_av_write(cx, 0x47a, luma_lpf << 6 | ((uv_lpf << 4) & 0x30));
@@ -514,8 +516,8 @@ void cx18_av_std_setup(struct cx18 *cx)
 
 	/* Sets SC Step*/
 	cx18_av_write(cx, 0x47c, sc);
-	cx18_av_write(cx, 0x47d, (sc >> 8) & 0xff);
-	cx18_av_write(cx, 0x47e, (sc >> 16) & 0xff);
+	cx18_av_write(cx, 0x47d, 0xff & sc >> 8);
+	cx18_av_write(cx, 0x47e, 0xff & sc >> 16);
 
 	if (std & V4L2_STD_625_50) {
 		state->slicer_line_delay = 1;
@@ -943,17 +945,14 @@ static int cx18_av_s_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-static int cx18_av_set_fmt(struct v4l2_subdev *sd,
-		struct v4l2_subdev_pad_config *cfg,
-		struct v4l2_subdev_format *format)
+static int cx18_av_s_mbus_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *fmt)
 {
-	struct v4l2_mbus_framefmt *fmt = &format->format;
 	struct cx18_av_state *state = to_cx18_av_state(sd);
 	struct cx18 *cx = v4l2_get_subdevdata(sd);
 	int HSC, VSC, Vsrc, Hsrc, filter, Vlines;
 	int is_50Hz = !(state->std & V4L2_STD_525_60);
 
-	if (format->pad || fmt->code != MEDIA_BUS_FMT_FIXED)
+	if (fmt->code != V4L2_MBUS_FMT_FIXED)
 		return -EINVAL;
 
 	fmt->field = V4L2_FIELD_INTERLACED;
@@ -987,9 +986,6 @@ static int cx18_av_set_fmt(struct v4l2_subdev *sd,
 			     fmt->width, fmt->height);
 		return -ERANGE;
 	}
-
-	if (format->which == V4L2_SUBDEV_FORMAT_TRY)
-		return 0;
 
 	HSC = (Hsrc * (1 << 20)) / fmt->width - (1 << 20);
 	VSC = (1 << 16) - (Vsrc * (1 << 9) / Vlines - (1 << 9));
@@ -1067,7 +1063,8 @@ static void log_video_status(struct cx18 *cx)
 		CX18_INFO_DEV(sd, "Specified video input:     Composite %d\n",
 			      vid_input - CX18_AV_COMPOSITE1 + 1);
 	} else {
-		CX18_INFO_DEV(sd, "Specified video input:     S-Video (Luma In%d, Chroma In%d)\n",
+		CX18_INFO_DEV(sd, "Specified video input:     "
+			      "S-Video (Luma In%d, Chroma In%d)\n",
 			      (vid_input & 0xf0) >> 4,
 			      (vid_input & 0xf00) >> 8);
 	}
@@ -1288,6 +1285,7 @@ static const struct v4l2_subdev_video_ops cx18_av_video_ops = {
 	.s_std = cx18_av_s_std,
 	.s_routing = cx18_av_s_video_routing,
 	.s_stream = cx18_av_s_stream,
+	.s_mbus_fmt = cx18_av_s_mbus_fmt,
 };
 
 static const struct v4l2_subdev_vbi_ops cx18_av_vbi_ops = {
@@ -1297,17 +1295,12 @@ static const struct v4l2_subdev_vbi_ops cx18_av_vbi_ops = {
 	.s_raw_fmt = cx18_av_s_raw_fmt,
 };
 
-static const struct v4l2_subdev_pad_ops cx18_av_pad_ops = {
-	.set_fmt = cx18_av_set_fmt,
-};
-
 static const struct v4l2_subdev_ops cx18_av_ops = {
 	.core = &cx18_av_general_ops,
 	.tuner = &cx18_av_tuner_ops,
 	.audio = &cx18_av_audio_ops,
 	.video = &cx18_av_video_ops,
 	.vbi = &cx18_av_vbi_ops,
-	.pad = &cx18_av_pad_ops,
 };
 
 int cx18_av_probe(struct cx18 *cx)

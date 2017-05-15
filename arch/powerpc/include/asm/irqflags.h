@@ -32,8 +32,9 @@
 #endif
 
 /*
- * These are calls to C code, so the caller must be prepared for volatiles to
- * be clobbered.
+ * Most of the CPU's IRQ-state tracing is done from assembly code; we
+ * have to call a C function so call a wrapper that saves all the
+ * C-clobbered registers.
  */
 #define TRACE_ENABLE_INTS	TRACE_WITH_FRAME_BUFFER(trace_hardirqs_on)
 #define TRACE_DISABLE_INTS	TRACE_WITH_FRAME_BUFFER(trace_hardirqs_off)
@@ -41,9 +42,6 @@
 /*
  * This is used by assembly code to soft-disable interrupts first and
  * reconcile irq state.
- *
- * NB: This may call C code, so the caller must be prepared for volatiles to
- * be clobbered.
  */
 #define RECONCILE_IRQ_STATE(__rA, __rB)		\
 	lbz	__rA,PACASOFTIRQEN(r13);	\

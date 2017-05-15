@@ -36,7 +36,7 @@
 #include <linux/gameport.h>
 #include <linux/export.h>
 
-#if IS_REACHABLE(CONFIG_GAMEPORT)
+#if defined(CONFIG_GAMEPORT) || (defined(MODULE) && defined(CONFIG_GAMEPORT_MODULE))
 
 #define VORTEX_GAME_DWAIT	20	/* 20 ms */
 
@@ -98,8 +98,7 @@ static int vortex_gameport_register(vortex_t *vortex)
 
 	vortex->gameport = gp = gameport_allocate_port();
 	if (!gp) {
-		dev_err(vortex->card->dev,
-			"cannot allocate memory for gameport\n");
+		printk(KERN_ERR "vortex: cannot allocate memory for gameport\n");
 		return -ENOMEM;
 	}
 

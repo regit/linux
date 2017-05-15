@@ -2,19 +2,13 @@
  * ImgTec IR Decoder setup for NEC protocol.
  *
  * Copyright 2010-2014 Imagination Technologies Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  */
 
 #include "img-ir-hw.h"
 #include <linux/bitrev.h>
 
 /* Convert NEC data to a scancode */
-static int img_ir_nec_scancode(int len, u64 raw, u64 enabled_protocols,
-			       struct img_ir_scancode_req *request)
+static int img_ir_nec_scancode(int len, u64 raw, int *scancode, u64 protocols)
 {
 	unsigned int addr, addr_inv, data, data_inv;
 	/* a repeat code has no data */
@@ -30,24 +24,21 @@ static int img_ir_nec_scancode(int len, u64 raw, u64 enabled_protocols,
 	if ((data_inv ^ data) != 0xff) {
 		/* 32-bit NEC (used by Apple and TiVo remotes) */
 		/* scan encoding: as transmitted, MSBit = first received bit */
-		request->scancode = bitrev8(addr)     << 24 |
-				bitrev8(addr_inv) << 16 |
-				bitrev8(data)     <<  8 |
-				bitrev8(data_inv);
-		request->protocol = RC_TYPE_NEC32;
+		*scancode = bitrev8(addr)     << 24 |
+			    bitrev8(addr_inv) << 16 |
+			    bitrev8(data)     <<  8 |
+			    bitrev8(data_inv);
 	} else if ((addr_inv ^ addr) != 0xff) {
 		/* Extended NEC */
 		/* scan encoding: AAaaDD */
-		request->scancode = addr     << 16 |
-				addr_inv <<  8 |
-				data;
-		request->protocol = RC_TYPE_NECX;
+		*scancode = addr     << 16 |
+			    addr_inv <<  8 |
+			    data;
 	} else {
 		/* Normal NEC */
 		/* scan encoding: AADD */
-		request->scancode = addr << 8 |
-				data;
-		request->protocol = RC_TYPE_NEC;
+		*scancode = addr << 8 |
+			    data;
 	}
 	return IMG_IR_SCANCODE;
 }
@@ -111,7 +102,7 @@ static int img_ir_nec_filter(const struct rc_scancode_filter *in,
  *        http://wiki.altium.com/display/ADOH/NEC+Infrared+Transmission+Protocol
  */
 struct img_ir_decoder img_ir_nec = {
-	.type = RC_BIT_NEC | RC_BIT_NECX | RC_BIT_NEC32,
+	.type = RC_BIT_NEC,
 	.control = {
 		.decoden = 1,
 		.code_type = IMG_IR_CODETYPE_PULSEDIST,

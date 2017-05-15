@@ -62,7 +62,6 @@ static unsigned int card_alloc;
  */
 static void vxpocket_release(struct pcmcia_device *link)
 {
-	free_irq(link->irq, link->priv);
 	pcmcia_disable_device(link);
 }
 
@@ -174,7 +173,6 @@ static int snd_vxpocket_new(struct snd_card *card, int ibl,
 
 /**
  * snd_vxpocket_assign_resources - initialize the hardware and card instance.
- * @chip: VX core instance
  * @port: i/o port for the card
  * @irq: irq number for the card
  *
@@ -229,13 +227,11 @@ static int vxpocket_config(struct pcmcia_device *link)
 
 	ret = pcmcia_request_io(link);
 	if (ret)
-		goto failed_preirq;
+		goto failed;
 
-	ret = request_threaded_irq(link->irq, snd_vx_irq_handler,
-				   snd_vx_threaded_irq_handler,
-				   IRQF_SHARED, link->devname, link->priv);
+	ret = pcmcia_request_irq(link, snd_vx_irq_handler);
 	if (ret)
-		goto failed_preirq;
+		goto failed;
 
 	ret = pcmcia_enable_device(link);
 	if (ret)
@@ -249,9 +245,7 @@ static int vxpocket_config(struct pcmcia_device *link)
 
 	return 0;
 
- failed:
-	free_irq(link->irq, link->priv);
-failed_preirq:
+failed:
 	pcmcia_disable_device(link);
 	return -ENODEV;
 }

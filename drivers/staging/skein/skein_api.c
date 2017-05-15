@@ -1,27 +1,28 @@
 /*
- * Copyright (c) 2010 Werner Dittmann
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use,
- * copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following
- * conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
- * OTHER DEALINGS IN THE SOFTWARE.
- */
+Copyright (c) 2010 Werner Dittmann
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+*/
 
 #include <linux/string.h>
 #include "skein_api.h"
@@ -30,7 +31,7 @@ int skein_ctx_prepare(struct skein_ctx *ctx, enum skein_size size)
 {
 	skein_assert_ret(ctx && size, SKEIN_FAIL);
 
-	memset(ctx, 0, sizeof(struct skein_ctx));
+	memset(ctx , 0, sizeof(struct skein_ctx));
 	ctx->skein_size = size;
 
 	return SKEIN_SUCCESS;
@@ -50,7 +51,7 @@ int skein_init(struct skein_ctx *ctx, size_t hash_bit_len)
 	 * memory available.  The beauty of C :-) .
 	 */
 	x = ctx->m.s256.x;
-	x_len = ctx->skein_size / 8;
+	x_len = ctx->skein_size/8;
 	/*
 	 * If size is the same and hash bit length is zero then reuse
 	 * the save chaining variables.
@@ -91,23 +92,26 @@ int skein_mac_init(struct skein_ctx *ctx, const u8 *key, size_t key_len,
 	skein_assert_ret(ctx, SKEIN_FAIL);
 
 	x = ctx->m.s256.x;
-	x_len = ctx->skein_size / 8;
+	x_len = ctx->skein_size/8;
 
 	skein_assert_ret(hash_bit_len, SKEIN_BAD_HASHLEN);
 
 	switch (ctx->skein_size) {
 	case SKEIN_256:
 		ret = skein_256_init_ext(&ctx->m.s256, hash_bit_len,
-					 tree_info, key, key_len);
+					 tree_info,
+					 (const u8 *)key, key_len);
 
 		break;
 	case SKEIN_512:
 		ret = skein_512_init_ext(&ctx->m.s512, hash_bit_len,
-					 tree_info, key, key_len);
+					 tree_info,
+					 (const u8 *)key, key_len);
 		break;
 	case SKEIN_1024:
 		ret = skein_1024_init_ext(&ctx->m.s1024, hash_bit_len,
-					  tree_info, key, key_len);
+					  tree_info,
+					  (const u8 *)key, key_len);
 
 		break;
 	}
@@ -124,7 +128,7 @@ int skein_mac_init(struct skein_ctx *ctx, const u8 *key, size_t key_len,
 void skein_reset(struct skein_ctx *ctx)
 {
 	size_t x_len = 0;
-	u64 *x;
+	u64 *x = NULL;
 
 	/*
 	 * The following two lines rely of the fact that the real Skein
@@ -132,7 +136,7 @@ void skein_reset(struct skein_ctx *ctx)
 	 * memory available.  The beautiy of C :-) .
 	 */
 	x = ctx->m.s256.x;
-	x_len = ctx->skein_size / 8;
+	x_len = ctx->skein_size/8;
 	/* Restore the chaing variable, reset byte counter */
 	memcpy(x, ctx->x_save, x_len);
 
@@ -149,16 +153,20 @@ int skein_update(struct skein_ctx *ctx, const u8 *msg,
 
 	switch (ctx->skein_size) {
 	case SKEIN_256:
-		ret = skein_256_update(&ctx->m.s256, msg, msg_byte_cnt);
+		ret = skein_256_update(&ctx->m.s256, (const u8 *)msg,
+				       msg_byte_cnt);
 		break;
 	case SKEIN_512:
-		ret = skein_512_update(&ctx->m.s512, msg, msg_byte_cnt);
+		ret = skein_512_update(&ctx->m.s512, (const u8 *)msg,
+				       msg_byte_cnt);
 		break;
 	case SKEIN_1024:
-		ret = skein_1024_update(&ctx->m.s1024, msg, msg_byte_cnt);
+		ret = skein_1024_update(&ctx->m.s1024, (const u8 *)msg,
+					msg_byte_cnt);
 		break;
 	}
 	return ret;
+
 }
 
 int skein_update_bits(struct skein_ctx *ctx, const u8 *msg,
@@ -203,9 +211,9 @@ int skein_update_bits(struct skein_ctx *ctx, const u8 *msg,
 	/* internal sanity check: there IS a partial byte in the buffer! */
 	skein_assert(length != 0);
 	/* partial byte bit mask */
-	mask = (u8)(1u << (7 - (msg_bit_cnt & 7)));
+	mask = (u8) (1u << (7 - (msg_bit_cnt & 7)));
 	/* apply bit padding on final byte (in the buffer) */
-	up[length - 1]  = (up[length - 1] & (0 - mask)) | mask;
+	up[length-1]  = (u8)((up[length-1] & (0-mask))|mask);
 
 	return SKEIN_SUCCESS;
 }
@@ -218,13 +226,13 @@ int skein_final(struct skein_ctx *ctx, u8 *hash)
 
 	switch (ctx->skein_size) {
 	case SKEIN_256:
-		ret = skein_256_final(&ctx->m.s256, hash);
+		ret = skein_256_final(&ctx->m.s256, (u8 *)hash);
 		break;
 	case SKEIN_512:
-		ret = skein_512_final(&ctx->m.s512, hash);
+		ret = skein_512_final(&ctx->m.s512, (u8 *)hash);
 		break;
 	case SKEIN_1024:
-		ret = skein_1024_final(&ctx->m.s1024, hash);
+		ret = skein_1024_final(&ctx->m.s1024, (u8 *)hash);
 		break;
 	}
 	return ret;

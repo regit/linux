@@ -290,7 +290,7 @@ static int overwrite_test(void)
 
 	while (opno < max_overwrite) {
 
-		err = write_page(0);
+		err = rewrite_page(0);
 		if (err)
 			break;
 
@@ -319,10 +319,6 @@ static int overwrite_test(void)
 			pr_info("ECC failure, read data is incorrect despite read success\n");
 			break;
 		}
-
-		err = mtdtest_relax();
-		if (err)
-			break;
 
 		opno++;
 	}
@@ -368,7 +364,7 @@ static int __init mtd_nandbiterrs_init(void)
 
 	pr_info("Device uses %d subpages of %d bytes\n", subcount, subsize);
 
-	offset     = (loff_t)page_offset * mtd->writesize;
+	offset     = page_offset * mtd->writesize;
 	eraseblock = mtd_div_by_eb(offset, mtd);
 
 	pr_info("Using page=%u, offset=%llu, eraseblock=%u\n",

@@ -72,9 +72,9 @@ struct adsp_hw_timer_struct {
 /*  Look for "TCX0" for related constants.  */
 static __iomem struct adsp_hw_timer_struct *rtos_timer;
 
-static u64 timer_get_cycles(struct clocksource *cs)
+static cycle_t timer_get_cycles(struct clocksource *cs)
 {
-	return (u64) __vmgettime();
+	return (cycle_t) __vmgettime();
 }
 
 static struct clocksource hexagon_clocksource = {
@@ -97,6 +97,20 @@ static int set_next_event(unsigned long delta, struct clock_event_device *evt)
 	return 0;
 }
 
+/*
+ * Sets the mode (periodic, shutdown, oneshot, etc) of a timer.
+ */
+static void set_mode(enum clock_event_mode mode,
+	struct clock_event_device *evt)
+{
+	switch (mode) {
+	case CLOCK_EVT_MODE_SHUTDOWN:
+		/* XXX implement me */
+	default:
+		break;
+	}
+}
+
 #ifdef CONFIG_SMP
 /*  Broadcast mechanism  */
 static void broadcast(const struct cpumask *mask)
@@ -105,13 +119,13 @@ static void broadcast(const struct cpumask *mask)
 }
 #endif
 
-/* XXX Implement set_state_shutdown() */
 static struct clock_event_device hexagon_clockevent_dev = {
 	.name		= "clockevent",
 	.features	= CLOCK_EVT_FEAT_ONESHOT,
 	.rating		= 400,
 	.irq		= RTOS_TIMER_INT,
 	.set_next_event = set_next_event,
+	.set_mode	= set_mode,
 #ifdef CONFIG_SMP
 	.broadcast	= broadcast,
 #endif
@@ -132,6 +146,7 @@ void setup_percpu_clockdev(void)
 
 	dummy_clock_dev->features = CLOCK_EVT_FEAT_DUMMY;
 	dummy_clock_dev->cpumask = cpumask_of(cpu);
+	dummy_clock_dev->mode = CLOCK_EVT_MODE_UNUSED;
 
 	clockevents_register_device(dummy_clock_dev);
 }

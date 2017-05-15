@@ -1,7 +1,7 @@
 /*
  *  Driver for the NXP SAA7164 PCIe bridge
  *
- *  Copyright (c) 2010-2015 Steven Toth <stoth@kernellabs.com>
+ *  Copyright (c) 2010 Steven Toth <stoth@kernellabs.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -130,9 +130,9 @@ struct saa7164_buffer *saa7164_buffer_alloc(struct saa7164_port *port,
 		goto fail2;
 
 	/* init the buffers to a known pattern, easier during debugging */
-	memset(buf->cpu, 0xff, buf->pci_size);
+	memset_io(buf->cpu, 0xff, buf->pci_size);
 	buf->crc = crc32(0, buf->cpu, buf->actual_size);
-	memset(buf->pt_cpu, 0xff, buf->pt_size);
+	memset_io(buf->pt_cpu, 0xff, buf->pt_size);
 
 	dprintk(DBGLVL_BUF, "%s()   allocated buffer @ 0x%p (%d pageptrs)\n",
 		__func__, buf, params->numpagetables);
@@ -218,7 +218,8 @@ int saa7164_buffer_activate(struct saa7164_buffer *buf, int i)
 	saa7164_writel(port->bufptr32h + ((sizeof(u32) * 2) * i), buf->pt_dma);
 	saa7164_writel(port->bufptr32l + ((sizeof(u32) * 2) * i), 0);
 
-	dprintk(DBGLVL_BUF, "	buf[%d] offset 0x%llx (0x%x) buf 0x%llx/%llx (0x%x/%x) nr=%d\n",
+	dprintk(DBGLVL_BUF, "   buf[%d] offset 0x%llx (0x%x) "
+		"buf 0x%llx/%llx (0x%x/%x) nr=%d\n",
 		buf->idx,
 		(u64)port->bufoffset + (i * sizeof(u32)),
 		saa7164_readl(port->bufoffset + (sizeof(u32) * i)),

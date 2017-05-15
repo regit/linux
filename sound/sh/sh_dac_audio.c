@@ -87,7 +87,7 @@ static void dac_audio_reset(struct snd_sh_dac *chip)
 
 static void dac_audio_set_rate(struct snd_sh_dac *chip)
 {
-	chip->wakeups_per_second = 1000000000 / chip->rate;
+	chip->wakeups_per_second = ktime_set(0, 1000000000 / chip->rate);
 }
 
 
@@ -436,6 +436,7 @@ static struct platform_driver sh_dac_driver = {
 	.remove = snd_sh_dac_remove,
 	.driver = {
 		.name = "dac_audio",
+		.owner	= THIS_MODULE,
 	},
 };
 

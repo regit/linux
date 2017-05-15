@@ -33,6 +33,11 @@
 #define mb()   __asm__ __volatile__ ("sync" : : : "memory")
 #define rmb()  __asm__ __volatile__ ("sync" : : : "memory")
 #define wmb()  __asm__ __volatile__ ("sync" : : : "memory")
+#define read_barrier_depends()  do { } while(0)
+
+#define set_mb(var, value)	do { var = value; mb(); } while (0)
+
+#ifdef CONFIG_SMP
 
 #ifdef __SUBARCH_HAS_LWSYNC
 #    define SMPWMB      LWSYNC
@@ -41,14 +46,19 @@
 #endif
 
 #define __lwsync()	__asm__ __volatile__ (stringify_in_c(LWSYNC) : : :"memory")
-#define dma_rmb()	__lwsync()
-#define dma_wmb()	__asm__ __volatile__ (stringify_in_c(SMPWMB) : : :"memory")
 
-#define __smp_lwsync()	__lwsync()
+#define smp_mb()	mb()
+#define smp_rmb()	__lwsync()
+#define smp_wmb()	__asm__ __volatile__ (stringify_in_c(SMPWMB) : : :"memory")
+#define smp_read_barrier_depends()	read_barrier_depends()
+#else
+#define __lwsync()	barrier()
 
-#define __smp_mb()	mb()
-#define __smp_rmb()	__lwsync()
-#define __smp_wmb()	__asm__ __volatile__ (stringify_in_c(SMPWMB) : : :"memory")
+#define smp_mb()	barrier()
+#define smp_rmb()	barrier()
+#define smp_wmb()	barrier()
+#define smp_read_barrier_depends()	do { } while(0)
+#endif /* CONFIG_SMP */
 
 /*
  * This is a barrier which prevents following instructions from being
@@ -59,23 +69,22 @@
 #define data_barrier(x)	\
 	asm volatile("twi 0,%0,0; isync" : : "r" (x) : "memory");
 
-#define __smp_store_release(p, v)						\
+#define smp_store_release(p, v)						\
 do {									\
 	compiletime_assert_atomic_type(*p);				\
-	__smp_lwsync();							\
-	WRITE_ONCE(*p, v);						\
+	__lwsync();							\
+	ACCESS_ONCE(*p) = (v);						\
 } while (0)
 
-#define __smp_load_acquire(p)						\
+#define smp_load_acquire(p)						\
 ({									\
-	typeof(*p) ___p1 = READ_ONCE(*p);				\
+	typeof(*p) ___p1 = ACCESS_ONCE(*p);				\
 	compiletime_assert_atomic_type(*p);				\
-	__smp_lwsync();							\
+	__lwsync();							\
 	___p1;								\
 })
 
-#define smp_mb__before_spinlock()   smp_mb()
-
-#include <asm-generic/barrier.h>
+#define smp_mb__before_atomic()     smp_mb()
+#define smp_mb__after_atomic()      smp_mb()
 
 #endif /* _ASM_POWERPC_BARRIER_H */

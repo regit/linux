@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -23,7 +27,7 @@
  * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright (c) 2012, 2015 Intel Corporation.
+ * Copyright (c) 2012, Intel Corporation.
  */
 /*
  * This file is part of Lustre, http://www.lustre.org/
@@ -31,9 +35,9 @@
  */
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include <linux/statfs.h>
-#include "../include/lprocfs_status.h"
-#include "../include/obd_class.h"
+#include <asm/statfs.h>
+#include <lprocfs_status.h>
+#include <obd_class.h>
 #include <linux/seq_file.h>
 #include "lov_internal.h"
 
@@ -42,22 +46,20 @@ static int lov_stripesize_seq_show(struct seq_file *m, void *v)
 	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_desc *desc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
-	seq_printf(m, "%llu\n", desc->ld_default_stripe_size);
-	return 0;
+	return seq_printf(m, LPU64"\n", desc->ld_default_stripe_size);
 }
 
-static ssize_t lov_stripesize_seq_write(struct file *file,
-					const char __user *buffer,
-					size_t count, loff_t *off)
+static ssize_t lov_stripesize_seq_write(struct file *file, const char *buffer,
+				    size_t count, loff_t *off)
 {
 	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
 	struct lov_desc *desc;
 	__u64 val;
 	int rc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
 	rc = lprocfs_write_u64_helper(buffer, count, &val);
 	if (rc)
@@ -67,7 +69,6 @@ static ssize_t lov_stripesize_seq_write(struct file *file,
 	desc->ld_default_stripe_size = val;
 	return count;
 }
-
 LPROC_SEQ_FOPS(lov_stripesize);
 
 static int lov_stripeoffset_seq_show(struct seq_file *m, void *v)
@@ -75,22 +76,20 @@ static int lov_stripeoffset_seq_show(struct seq_file *m, void *v)
 	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_desc *desc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
-	seq_printf(m, "%llu\n", desc->ld_default_stripe_offset);
-	return 0;
+	return seq_printf(m, LPU64"\n", desc->ld_default_stripe_offset);
 }
 
-static ssize_t lov_stripeoffset_seq_write(struct file *file,
-					  const char __user *buffer,
-					  size_t count, loff_t *off)
+static ssize_t lov_stripeoffset_seq_write(struct file *file, const char *buffer,
+				      size_t count, loff_t *off)
 {
 	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
 	struct lov_desc *desc;
 	__u64 val;
 	int rc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
 	rc = lprocfs_write_u64_helper(buffer, count, &val);
 	if (rc)
@@ -99,7 +98,6 @@ static ssize_t lov_stripeoffset_seq_write(struct file *file,
 	desc->ld_default_stripe_offset = val;
 	return count;
 }
-
 LPROC_SEQ_FOPS(lov_stripeoffset);
 
 static int lov_stripetype_seq_show(struct seq_file *m, void *v)
@@ -107,21 +105,19 @@ static int lov_stripetype_seq_show(struct seq_file *m, void *v)
 	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_desc *desc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
-	seq_printf(m, "%u\n", desc->ld_pattern);
-	return 0;
+	return seq_printf(m, "%u\n", desc->ld_pattern);
 }
 
-static ssize_t lov_stripetype_seq_write(struct file *file,
-					const char __user *buffer,
-					size_t count, loff_t *off)
+static ssize_t lov_stripetype_seq_write(struct file *file, const char *buffer,
+				    size_t count, loff_t *off)
 {
 	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
 	struct lov_desc *desc;
 	int val, rc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
 	rc = lprocfs_write_helper(buffer, count, &val);
 	if (rc)
@@ -131,7 +127,6 @@ static ssize_t lov_stripetype_seq_write(struct file *file,
 	desc->ld_pattern = val;
 	return count;
 }
-
 LPROC_SEQ_FOPS(lov_stripetype);
 
 static int lov_stripecount_seq_show(struct seq_file *m, void *v)
@@ -139,21 +134,20 @@ static int lov_stripecount_seq_show(struct seq_file *m, void *v)
 	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_desc *desc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
-	seq_printf(m, "%d\n", (__s16)(desc->ld_default_stripe_count + 1) - 1);
-	return 0;
+	return seq_printf(m, "%d\n",
+			(__s16)(desc->ld_default_stripe_count + 1) - 1);
 }
 
-static ssize_t lov_stripecount_seq_write(struct file *file,
-					 const char __user *buffer,
-					 size_t count, loff_t *off)
+static ssize_t lov_stripecount_seq_write(struct file *file, const char *buffer,
+				     size_t count, loff_t *off)
 {
 	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
 	struct lov_desc *desc;
 	int val, rc;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
 	rc = lprocfs_write_helper(buffer, count, &val);
 	if (rc)
@@ -163,44 +157,39 @@ static ssize_t lov_stripecount_seq_write(struct file *file,
 	desc->ld_default_stripe_count = val;
 	return count;
 }
-
 LPROC_SEQ_FOPS(lov_stripecount);
 
-static ssize_t numobd_show(struct kobject *kobj, struct attribute *attr,
-			   char *buf)
+static int lov_numobd_seq_show(struct seq_file *m, void *v)
 {
-	struct obd_device *dev = container_of(kobj, struct obd_device,
-					      obd_kobj);
+	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_desc *desc;
 
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
-	return sprintf(buf, "%u\n", desc->ld_tgt_count);
+	return seq_printf(m, "%u\n", desc->ld_tgt_count);
 }
-LUSTRE_RO_ATTR(numobd);
+LPROC_SEQ_FOPS_RO(lov_numobd);
 
-static ssize_t activeobd_show(struct kobject *kobj, struct attribute *attr,
-			      char *buf)
+static int lov_activeobd_seq_show(struct seq_file *m, void *v)
 {
-	struct obd_device *dev = container_of(kobj, struct obd_device,
-					      obd_kobj);
+	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_desc *desc;
 
+	LASSERT(dev != NULL);
 	desc = &dev->u.lov.desc;
-	return sprintf(buf, "%u\n", desc->ld_active_tgt_count);
+	return seq_printf(m, "%u\n", desc->ld_active_tgt_count);
 }
-LUSTRE_RO_ATTR(activeobd);
+LPROC_SEQ_FOPS_RO(lov_activeobd);
 
 static int lov_desc_uuid_seq_show(struct seq_file *m, void *v)
 {
 	struct obd_device *dev = (struct obd_device *)m->private;
 	struct lov_obd *lov;
 
-	LASSERT(dev);
+	LASSERT(dev != NULL);
 	lov = &dev->u.lov;
-	seq_printf(m, "%s\n", lov->desc.ld_uuid.uuid);
-	return 0;
+	return seq_printf(m, "%s\n", lov->desc.ld_uuid.uuid);
 }
-
 LPROC_SEQ_FOPS_RO(lov_desc_uuid);
 
 static void *lov_tgt_seq_start(struct seq_file *p, loff_t *pos)
@@ -235,14 +224,12 @@ static void *lov_tgt_seq_next(struct seq_file *p, void *v, loff_t *pos)
 static int lov_tgt_seq_show(struct seq_file *p, void *v)
 {
 	struct lov_tgt_desc *tgt = v;
-
-	seq_printf(p, "%d: %s %sACTIVE\n",
-		   tgt->ltd_index, obd_uuid2str(&tgt->ltd_uuid),
-		   tgt->ltd_active ? "" : "IN");
-	return 0;
+	return seq_printf(p, "%d: %s %sACTIVE\n", tgt->ltd_index,
+			  obd_uuid2str(&tgt->ltd_uuid),
+			  tgt->ltd_active ? "" : "IN");
 }
 
-static const struct seq_operations lov_tgt_sops = {
+struct seq_operations lov_tgt_sops = {
 	.start = lov_tgt_seq_start,
 	.stop = lov_tgt_seq_stop,
 	.next = lov_tgt_seq_next,
@@ -259,34 +246,48 @@ static int lov_target_seq_open(struct inode *inode, struct file *file)
 		return rc;
 
 	seq = file->private_data;
-	seq->private = inode->i_private;
+	seq->private = PDE_DATA(inode);
 	return 0;
 }
 
-static struct lprocfs_vars lprocfs_lov_obd_vars[] = {
+LPROC_SEQ_FOPS_RO_TYPE(lov, uuid);
+LPROC_SEQ_FOPS_RO_TYPE(lov, filestotal);
+LPROC_SEQ_FOPS_RO_TYPE(lov, filesfree);
+LPROC_SEQ_FOPS_RO_TYPE(lov, blksize);
+LPROC_SEQ_FOPS_RO_TYPE(lov, kbytestotal);
+LPROC_SEQ_FOPS_RO_TYPE(lov, kbytesfree);
+LPROC_SEQ_FOPS_RO_TYPE(lov, kbytesavail);
+
+struct lprocfs_vars lprocfs_lov_obd_vars[] = {
+	{ "uuid",	  &lov_uuid_fops,	  NULL, 0 },
 	{ "stripesize",   &lov_stripesize_fops,   NULL },
 	{ "stripeoffset", &lov_stripeoffset_fops, NULL },
 	{ "stripecount",  &lov_stripecount_fops,  NULL },
 	{ "stripetype",   &lov_stripetype_fops,   NULL },
+	{ "numobd",       &lov_numobd_fops,	  NULL, 0 },
+	{ "activeobd",    &lov_activeobd_fops,	  NULL, 0 },
+	{ "filestotal",   &lov_filestotal_fops,   NULL, 0 },
+	{ "filesfree",    &lov_filesfree_fops,    NULL, 0 },
 	/*{ "filegroups", lprocfs_rd_filegroups,  NULL, 0 },*/
+	{ "blocksize",    &lov_blksize_fops,      NULL, 0 },
+	{ "kbytestotal",  &lov_kbytestotal_fops,  NULL, 0 },
+	{ "kbytesfree",   &lov_kbytesfree_fops,   NULL, 0 },
+	{ "kbytesavail",  &lov_kbytesavail_fops,  NULL, 0 },
 	{ "desc_uuid",    &lov_desc_uuid_fops,    NULL, 0 },
 	{ NULL }
 };
 
-static struct attribute *lov_attrs[] = {
-	&lustre_attr_activeobd.attr,
-	&lustre_attr_numobd.attr,
-	NULL,
-};
+LPROC_SEQ_FOPS_RO_TYPE(lov, numrefs);
 
-static struct attribute_group lov_attr_group = {
-	.attrs = lov_attrs,
+static struct lprocfs_vars lprocfs_lov_module_vars[] = {
+	{ "num_refs",     &lov_numrefs_fops,     NULL, 0 },
+	{ NULL }
 };
 
 void lprocfs_lov_init_vars(struct lprocfs_static_vars *lvars)
 {
-	lvars->sysfs_vars = &lov_attr_group;
-	lvars->obd_vars = lprocfs_lov_obd_vars;
+    lvars->module_vars  = lprocfs_lov_module_vars;
+    lvars->obd_vars     = lprocfs_lov_obd_vars;
 }
 
 const struct file_operations lov_proc_target_fops = {

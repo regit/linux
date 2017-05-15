@@ -48,11 +48,13 @@ static void __init imx6sl_init_machine(void)
 {
 	struct device *parent;
 
+	mxc_arch_reset_init_dt();
+
 	parent = imx_soc_device_init();
 	if (parent == NULL)
 		pr_warn("failed to initialize soc device\n");
 
-	of_platform_default_populate(NULL, NULL, parent);
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, parent);
 
 	imx6sl_fec_init();
 	imx_anatop_init();
@@ -61,24 +63,23 @@ static void __init imx6sl_init_machine(void)
 
 static void __init imx6sl_init_irq(void)
 {
-	imx_gpc_check_dt();
 	imx_init_revision_from_anatop();
 	imx_init_l2cache();
 	imx_src_init();
+	imx_gpc_init();
 	irqchip_init();
-	imx6_pm_ccm_init("fsl,imx6sl-ccm");
 }
 
-static const char * const imx6sl_dt_compat[] __initconst = {
+static const char *imx6sl_dt_compat[] __initconst = {
 	"fsl,imx6sl",
 	NULL,
 };
 
 DT_MACHINE_START(IMX6SL, "Freescale i.MX6 SoloLite (Device Tree)")
-	.l2c_aux_val 	= 0,
-	.l2c_aux_mask	= ~0,
+	.map_io		= debug_ll_io_init,
 	.init_irq	= imx6sl_init_irq,
 	.init_machine	= imx6sl_init_machine,
 	.init_late      = imx6sl_init_late,
 	.dt_compat	= imx6sl_dt_compat,
+	.restart	= mxc_restart,
 MACHINE_END

@@ -32,31 +32,14 @@
  * bsg_destroy_job - routine to teardown/delete a bsg job
  * @job: bsg_job that is to be torn down
  */
-static void bsg_destroy_job(struct kref *kref)
+static void bsg_destroy_job(struct bsg_job *job)
 {
-	struct bsg_job *job = container_of(kref, struct bsg_job, kref);
-	struct request *rq = job->req;
-
-	blk_end_request_all(rq, rq->errors);
-
 	put_device(job->dev);	/* release reference for the request */
 
 	kfree(job->request_payload.sg_list);
 	kfree(job->reply_payload.sg_list);
 	kfree(job);
 }
-
-void bsg_job_put(struct bsg_job *job)
-{
-	kref_put(&job->kref, bsg_destroy_job);
-}
-EXPORT_SYMBOL_GPL(bsg_job_put);
-
-int bsg_job_get(struct bsg_job *job)
-{
-	return kref_get_unless_zero(&job->kref);
-}
-EXPORT_SYMBOL_GPL(bsg_job_get);
 
 /**
  * bsg_job_done - completion routine for bsg requests
@@ -100,7 +83,8 @@ static void bsg_softirq_done(struct request *rq)
 {
 	struct bsg_job *job = rq->special;
 
-	bsg_job_put(job);
+	blk_end_request_all(rq, rq->errors);
+	bsg_destroy_job(job);
 }
 
 static int bsg_map_buffer(struct bsg_buffer *buf, struct request *req)
@@ -158,7 +142,6 @@ static int bsg_create_job(struct device *dev, struct request *req)
 	job->dev = dev;
 	/* take a reference for the request */
 	get_device(job->dev);
-	kref_init(&job->kref);
 	return 0;
 
 failjob_rls_rqst_payload:
@@ -178,8 +161,6 @@ failjob_rls_job:
  * Drivers/subsys should pass this to the queue init function.
  */
 void bsg_request_fn(struct request_queue *q)
-	__releases(q->queue_lock)
-	__acquires(q->queue_lock)
 {
 	struct device *dev = q->queuedata;
 	struct request *req;

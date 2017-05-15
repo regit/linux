@@ -13,7 +13,14 @@
 #define __SIMPLE_CARD_H
 
 #include <sound/soc.h>
-#include <sound/simple_card_utils.h>
+
+struct asoc_simple_dai {
+	const char *name;
+	unsigned int fmt;
+	unsigned int sysclk;
+	int slots;
+	int slot_width;
+};
 
 struct asoc_simple_card_info {
 	const char *name;

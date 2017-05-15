@@ -18,10 +18,11 @@
 #include "xfs.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
-#include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_bit.h"
+#include "xfs_sb.h"
+#include "xfs_ag.h"
 #include "xfs_mount.h"
 #include "xfs_trans.h"
 #include "xfs_trans_priv.h"
@@ -133,7 +134,7 @@ xfs_icreate_item_committing(
 /*
  * This is the ops vector shared by all buf log items.
  */
-static const struct xfs_item_ops xfs_icreate_item_ops = {
+static struct xfs_item_ops xfs_icreate_item_ops = {
 	.iop_size	= xfs_icreate_item_size,
 	.iop_format	= xfs_icreate_item_format,
 	.iop_pin	= xfs_icreate_item_pin,

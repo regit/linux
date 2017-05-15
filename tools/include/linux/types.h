@@ -42,7 +42,11 @@ typedef __s8  s8;
 #else
 #define __bitwise__
 #endif
+#ifdef __CHECK_ENDIAN__
 #define __bitwise __bitwise__
+#else
+#define __bitwise
+#endif
 
 #define __force
 #define __user
@@ -55,14 +59,6 @@ typedef __u32 __bitwise __le32;
 typedef __u32 __bitwise __be32;
 typedef __u64 __bitwise __le64;
 typedef __u64 __bitwise __be64;
-
-typedef struct {
-	int counter;
-} atomic_t;
-
-#ifndef __aligned_u64
-# define __aligned_u64 __u64 __attribute__((aligned(8)))
-#endif
 
 struct list_head {
 	struct list_head *next, *prev;

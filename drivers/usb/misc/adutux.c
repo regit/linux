@@ -672,7 +672,8 @@ static int adu_probe(struct usb_interface *interface,
 
 	/* allocate memory for our device state and initialize it */
 	dev = kzalloc(sizeof(struct adu_device), GFP_KERNEL);
-	if (!dev) {
+	if (dev == NULL) {
+		dev_err(&interface->dev, "Out of memory\n");
 		retval = -ENOMEM;
 		goto exit;
 	}
@@ -709,6 +710,7 @@ static int adu_probe(struct usb_interface *interface,
 
 	dev->read_buffer_primary = kmalloc((4 * in_end_size), GFP_KERNEL);
 	if (!dev->read_buffer_primary) {
+		dev_err(&interface->dev, "Couldn't allocate read_buffer_primary\n");
 		retval = -ENOMEM;
 		goto error;
 	}
@@ -721,6 +723,7 @@ static int adu_probe(struct usb_interface *interface,
 
 	dev->read_buffer_secondary = kmalloc((4 * in_end_size), GFP_KERNEL);
 	if (!dev->read_buffer_secondary) {
+		dev_err(&interface->dev, "Couldn't allocate read_buffer_secondary\n");
 		retval = -ENOMEM;
 		goto error;
 	}
@@ -732,21 +735,29 @@ static int adu_probe(struct usb_interface *interface,
 	memset(dev->read_buffer_secondary + (3 * in_end_size), 'h', in_end_size);
 
 	dev->interrupt_in_buffer = kmalloc(in_end_size, GFP_KERNEL);
-	if (!dev->interrupt_in_buffer)
+	if (!dev->interrupt_in_buffer) {
+		dev_err(&interface->dev, "Couldn't allocate interrupt_in_buffer\n");
 		goto error;
+	}
 
 	/* debug code prime the buffer */
 	memset(dev->interrupt_in_buffer, 'i', in_end_size);
 
 	dev->interrupt_in_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!dev->interrupt_in_urb)
+	if (!dev->interrupt_in_urb) {
+		dev_err(&interface->dev, "Couldn't allocate interrupt_in_urb\n");
 		goto error;
+	}
 	dev->interrupt_out_buffer = kmalloc(out_end_size, GFP_KERNEL);
-	if (!dev->interrupt_out_buffer)
+	if (!dev->interrupt_out_buffer) {
+		dev_err(&interface->dev, "Couldn't allocate interrupt_out_buffer\n");
 		goto error;
+	}
 	dev->interrupt_out_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!dev->interrupt_out_urb)
+	if (!dev->interrupt_out_urb) {
+		dev_err(&interface->dev, "Couldn't allocate interrupt_out_urb\n");
 		goto error;
+	}
 
 	if (!usb_string(udev, udev->descriptor.iSerialNumber, dev->serial_number,
 			sizeof(dev->serial_number))) {
@@ -803,10 +814,15 @@ static void adu_disconnect(struct usb_interface *interface)
 	usb_set_intfdata(interface, NULL);
 
 	/* if the device is not opened, then we clean up right now */
+	dev_dbg(&dev->udev->dev, "%s : open count %d\n",
+		__func__, dev->open_count);
 	if (!dev->open_count)
 		adu_delete(dev);
 
 	mutex_unlock(&adutux_mutex);
+
+	dev_info(&interface->dev, "ADU device adutux%d now disconnected\n",
+		 (minor - ADU_MINOR_BASE));
 }
 
 /* usb specific object needed to register this driver with the usb subsystem */

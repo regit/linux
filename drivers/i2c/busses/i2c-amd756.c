@@ -15,6 +15,10 @@
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
 /*
@@ -378,8 +382,11 @@ static int amd756_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		 amd756_ioport);
 
 	error = i2c_add_adapter(&amd756_smbus);
-	if (error)
+	if (error) {
+		dev_err(&pdev->dev,
+			"Adapter registration failed, module not inserted\n");
 		goto out_err;
+	}
 
 	return 0;
 

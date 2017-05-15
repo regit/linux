@@ -108,7 +108,8 @@ static void pci_vc_enable(struct pci_dev *dev, int pos, int res)
 	struct pci_dev *link = NULL;
 
 	/* Enable VCs from the downstream device */
-	if (!dev->has_secondary_link)
+	if (pci_pcie_type(dev) == PCI_EXP_TYPE_ROOT_PORT ||
+	    pci_pcie_type(dev) == PCI_EXP_TYPE_DOWNSTREAM)
 		return;
 
 	ctrl_pos = pos + PCI_VC_RES_CTRL + (res * PCI_CAP_VC_PER_VC_SIZEOF);
@@ -221,9 +222,9 @@ static int pci_vc_do_save_buffer(struct pci_dev *dev, int pos,
 		else
 			pci_write_config_word(dev, pos + PCI_VC_PORT_CTRL,
 					      *(u16 *)buf);
-		buf += 4;
+		buf += 2;
 	}
-	len += 4;
+	len += 2;
 
 	/*
 	 * If we have any Low Priority VCs and a VC Arbitration Table Offset

@@ -69,11 +69,11 @@ void ufs_free_inode (struct inode * inode)
 	
 	ino = inode->i_ino;
 
-	mutex_lock(&UFS_SB(sb)->s_lock);
+	lock_ufs(sb);
 
 	if (!((ino > 1) && (ino < (uspi->s_ncg * uspi->s_ipg )))) {
 		ufs_warning(sb, "ufs_free_inode", "reserved inode or nonexistent inode %u\n", ino);
-		mutex_unlock(&UFS_SB(sb)->s_lock);
+		unlock_ufs(sb);
 		return;
 	}
 	
@@ -81,7 +81,7 @@ void ufs_free_inode (struct inode * inode)
 	bit = ufs_inotocgoff (ino);
 	ucpi = ufs_load_cylinder (sb, cg);
 	if (!ucpi) {
-		mutex_unlock(&UFS_SB(sb)->s_lock);
+		unlock_ufs(sb);
 		return;
 	}
 	ucg = ubh_get_ucg(UCPI_UBH(ucpi));
@@ -115,7 +115,7 @@ void ufs_free_inode (struct inode * inode)
 		ubh_sync_block(UCPI_UBH(ucpi));
 	
 	ufs_mark_sb_dirty(sb);
-	mutex_unlock(&UFS_SB(sb)->s_lock);
+	unlock_ufs(sb);
 	UFSD("EXIT\n");
 }
 
@@ -193,7 +193,7 @@ struct inode *ufs_new_inode(struct inode *dir, umode_t mode)
 	sbi = UFS_SB(sb);
 	uspi = sbi->s_uspi;
 
-	mutex_lock(&sbi->s_lock);
+	lock_ufs(sb);
 
 	/*
 	 * Try to place the inode in its parent directory
@@ -290,7 +290,7 @@ cg_found:
 	inode_init_owner(inode, dir, mode);
 	inode->i_blocks = 0;
 	inode->i_generation = 0;
-	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
+	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME_SEC;
 	ufsi->i_flags = UFS_I(dir)->i_flags;
 	ufsi->i_lastfrag = 0;
 	ufsi->i_shadow = 0;
@@ -298,10 +298,7 @@ cg_found:
 	ufsi->i_oeftflag = 0;
 	ufsi->i_dir_start_lookup = 0;
 	memset(&ufsi->i_u1, 0, sizeof(ufsi->i_u1));
-	if (insert_inode_locked(inode) < 0) {
-		err = -EIO;
-		goto failed;
-	}
+	insert_inode_hash(inode);
 	mark_inode_dirty(inode);
 
 	if (uspi->fs_magic == UFS2_MAGIC) {
@@ -331,21 +328,20 @@ cg_found:
 			sync_dirty_buffer(bh);
 		brelse(bh);
 	}
-	mutex_unlock(&sbi->s_lock);
+	unlock_ufs(sb);
 
 	UFSD("allocating inode %lu\n", inode->i_ino);
 	UFSD("EXIT\n");
 	return inode;
 
 fail_remove_inode:
-	mutex_unlock(&sbi->s_lock);
+	unlock_ufs(sb);
 	clear_nlink(inode);
-	unlock_new_inode(inode);
 	iput(inode);
 	UFSD("EXIT (FAILED): err %d\n", err);
 	return ERR_PTR(err);
 failed:
-	mutex_unlock(&sbi->s_lock);
+	unlock_ufs(sb);
 	make_bad_inode(inode);
 	iput (inode);
 	UFSD("EXIT (FAILED): err %d\n", err);

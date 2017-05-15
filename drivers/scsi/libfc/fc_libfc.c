@@ -226,7 +226,7 @@ void fc_fill_reply_hdr(struct fc_frame *fp, const struct fc_frame *in_fp,
 
 	sp = fr_seq(in_fp);
 	if (sp)
-		fr_seq(fp) = fc_seq_start_next(sp);
+		fr_seq(fp) = fr_dev(in_fp)->tt.seq_start_next(sp);
 	fc_fill_hdr(fp, in_fp, r_ctl, FC_FCTL_RESP, 0, parm_offset);
 }
 EXPORT_SYMBOL(fc_fill_reply_hdr);
@@ -296,9 +296,9 @@ void fc_fc4_deregister_provider(enum fc_fh_type type, struct fc4_prov *prov)
 	BUG_ON(type >= FC_FC4_PROV_SIZE);
 	mutex_lock(&fc_prov_mutex);
 	if (prov->recv)
-		RCU_INIT_POINTER(fc_passive_prov[type], NULL);
+		rcu_assign_pointer(fc_passive_prov[type], NULL);
 	else
-		RCU_INIT_POINTER(fc_active_prov[type], NULL);
+		rcu_assign_pointer(fc_active_prov[type], NULL);
 	mutex_unlock(&fc_prov_mutex);
 	synchronize_rcu();
 }

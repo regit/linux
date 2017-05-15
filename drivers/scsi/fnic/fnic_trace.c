@@ -21,7 +21,6 @@
 #include <linux/spinlock.h>
 #include <linux/kallsyms.h>
 #include <linux/time.h>
-#include <linux/vmalloc.h>
 #include "fnic_io.h"
 #include "fnic.h"
 
@@ -593,7 +592,7 @@ int fnic_fc_trace_set_data(u32 host_no, u8 frame_type,
 
 	if (fnic_fc_trace_cleared == 1) {
 		fc_trace_entries.rd_idx = fc_trace_entries.wr_idx = 0;
-		pr_info("fnic: Resetting the read idx\n");
+		pr_info("fnic: Reseting the read idx\n");
 		memset((void *)fnic_fc_ctlr_trace_buf_p, 0,
 				fnic_fc_trace_max_pages * PAGE_SIZE);
 		fnic_fc_trace_cleared = 0;
@@ -613,7 +612,7 @@ int fnic_fc_trace_set_data(u32 host_no, u8 frame_type,
 			fc_trace_entries.rd_idx = 0;
 	}
 
-	ktime_get_real_ts64(&fc_buf->time_stamp);
+	fc_buf->time_stamp = CURRENT_TIME;
 	fc_buf->host_no = host_no;
 	fc_buf->frame_type = frame_type;
 
@@ -625,12 +624,12 @@ int fnic_fc_trace_set_data(u32 host_no, u8 frame_type,
 	if (frame_type == FNIC_FC_RECV) {
 		eth_fcoe_hdr_len = sizeof(struct ethhdr) +
 					sizeof(struct fcoe_hdr);
+		fc_trc_frame_len = fc_trc_frame_len + eth_fcoe_hdr_len;
 		memset((char *)fc_trace, 0xff, eth_fcoe_hdr_len);
 		/* Copy the rest of data frame */
 		memcpy((char *)(fc_trace + eth_fcoe_hdr_len), (void *)frame,
 		min_t(u8, fc_trc_frame_len,
-			(u8)(FC_TRC_SIZE_BYTES - FC_TRC_HEADER_SIZE
-						- eth_fcoe_hdr_len)));
+			(u8)(FC_TRC_SIZE_BYTES - FC_TRC_HEADER_SIZE)));
 	} else {
 		memcpy((char *)fc_trace, (void *)frame,
 		min_t(u8, fc_trc_frame_len,
@@ -740,11 +739,11 @@ void copy_and_format_trace_data(struct fc_trace_hdr *tdata,
 
 	len = *orig_len;
 
-	time64_to_tm(tdata->time_stamp.tv_sec, 0, &tm);
+	time_to_tm(tdata->time_stamp.tv_sec, 0, &tm);
 
 	fmt = "%02d:%02d:%04ld %02d:%02d:%02d.%09lu ns%8x       %c%8x\t";
 	len += snprintf(fnic_dbgfs_prt->buffer + len,
-		max_size - len,
+		(fnic_fc_trace_max_pages * PAGE_SIZE * 3) - len,
 		fmt,
 		tm.tm_mon + 1, tm.tm_mday, tm.tm_year + 1900,
 		tm.tm_hour, tm.tm_min, tm.tm_sec,
@@ -768,7 +767,8 @@ void copy_and_format_trace_data(struct fc_trace_hdr *tdata,
 				j == ethhdr_len + fcoehdr_len + fchdr_len ||
 				(i > 3 && j%fchdr_len == 0)) {
 				len += snprintf(fnic_dbgfs_prt->buffer
-					+ len, max_size - len,
+					+ len, (fnic_fc_trace_max_pages
+					* PAGE_SIZE * 3) - len,
 					"\n\t\t\t\t\t\t\t\t");
 				i++;
 			}

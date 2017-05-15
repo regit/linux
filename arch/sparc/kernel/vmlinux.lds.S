@@ -33,15 +33,10 @@ ENTRY(_start)
 jiffies = jiffies_64;
 #endif
 
-#ifdef CONFIG_SPARC64
-ASSERT((swapper_tsb == 0x0000000000408000), "Error: sparc64 early assembler too large")
-#endif
-
 SECTIONS
 {
-#ifdef CONFIG_SPARC64
-	swapper_pg_dir = 0x0000000000402000;
-#endif
+	/* swapper_low_pmd_dir is sparc64 only */
+	swapper_low_pmd_dir = 0x0000000000402000;
 	. = INITIAL_ADDRESS;
 	.text TEXTSTART :
 	{
@@ -49,11 +44,9 @@ SECTIONS
 		HEAD_TEXT
 		TEXT_TEXT
 		SCHED_TEXT
-		CPUIDLE_TEXT
 		LOCK_TEXT
 		KPROBES_TEXT
 		IRQENTRY_TEXT
-		SOFTIRQENTRY_TEXT
 		*(.gnu.warning)
 	} = 0
 	_etext = .;
@@ -129,6 +122,11 @@ SECTIONS
 		*(.swapper_4m_tsb_phys_patch)
 		__swapper_4m_tsb_phys_patch_end = .;
 	}
+	.page_offset_shift_patch : {
+		__page_offset_shift_patch = .;
+		*(.page_offset_shift_patch)
+		__page_offset_shift_patch_end = .;
+	}
 	.popc_3insn_patch : {
 		__popc_3insn_patch = .;
 		*(.popc_3insn_patch)
@@ -144,19 +142,7 @@ SECTIONS
 		*(.pause_3insn_patch)
 		__pause_3insn_patch_end = .;
 	}
-	.sun_m7_2insn_patch : {
-		__sun_m7_2insn_patch = .;
-		*(.sun_m7_2insn_patch)
-		__sun_m7_2insn_patch_end = .;
-	}
 	PERCPU_SECTION(SMP_CACHE_BYTES)
-
-#ifdef CONFIG_JUMP_LABEL
-	. = ALIGN(PAGE_SIZE);
-	.exit.text : {
-		EXIT_TEXT
-	}
-#endif
 
 	. = ALIGN(PAGE_SIZE);
 	__init_end = .;

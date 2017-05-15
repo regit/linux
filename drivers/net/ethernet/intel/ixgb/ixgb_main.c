@@ -53,7 +53,7 @@ MODULE_PARM_DESC(copybreak,
  * { Vendor ID, Device ID, SubVendor ID, SubDevice ID,
  *   Class, Class Mask, private data (not used) }
  */
-static const struct pci_device_id ixgb_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(ixgb_pci_tbl) = {
 	{PCI_VENDOR_ID_INTEL, IXGB_DEVICE_ID_82597EX,
 	 PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{PCI_VENDOR_ID_INTEL, IXGB_DEVICE_ID_82597EX_CX4,
@@ -285,8 +285,6 @@ ixgb_down(struct ixgb_adapter *adapter, bool kill_watchdog)
 	/* prevent the interrupt handler from restarting watchdog */
 	set_bit(__IXGB_DOWN, &adapter->flags);
 
-	netif_carrier_off(netdev);
-
 	napi_disable(&adapter->napi);
 	/* waiting for NAPI to complete can re-enable interrupts */
 	ixgb_irq_disable(adapter);
@@ -300,6 +298,7 @@ ixgb_down(struct ixgb_adapter *adapter, bool kill_watchdog)
 
 	adapter->link_speed = 0;
 	adapter->link_duplex = 0;
+	netif_carrier_off(netdev);
 	netif_stop_queue(netdev);
 
 	ixgb_reset(adapter);
@@ -486,10 +485,6 @@ ixgb_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		netdev->features |= NETIF_F_HIGHDMA;
 		netdev->vlan_features |= NETIF_F_HIGHDMA;
 	}
-
-	/* MTU range: 68 - 16114 */
-	netdev->min_mtu = ETH_MIN_MTU;
-	netdev->max_mtu = IXGB_MAX_JUMBO_FRAME_SIZE - ETH_HLEN;
 
 	/* make sure the EEPROM is good */
 
@@ -1537,9 +1532,9 @@ ixgb_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
                      DESC_NEEDED)))
 		return NETDEV_TX_BUSY;
 
-	if (skb_vlan_tag_present(skb)) {
+	if (vlan_tx_tag_present(skb)) {
 		tx_flags |= IXGB_TX_FLAGS_VLAN;
-		vlan_id = skb_vlan_tag_get(skb);
+		vlan_id = vlan_tx_tag_get(skb);
 	}
 
 	first = adapter->tx_ring.next_to_use;
@@ -1623,6 +1618,18 @@ ixgb_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct ixgb_adapter *adapter = netdev_priv(netdev);
 	int max_frame = new_mtu + ENET_HEADER_SIZE + ENET_FCS_LENGTH;
+	int old_max_frame = netdev->mtu + ENET_HEADER_SIZE + ENET_FCS_LENGTH;
+
+	/* MTU < 68 is an error for IPv4 traffic, just don't allow it */
+	if ((new_mtu < 68) ||
+	    (max_frame > IXGB_MAX_JUMBO_FRAME_SIZE + ENET_FCS_LENGTH)) {
+		netif_err(adapter, probe, adapter->netdev,
+			  "Invalid MTU setting %d\n", new_mtu);
+		return -EINVAL;
+	}
+
+	if (old_max_frame == max_frame)
+		return 0;
 
 	if (netif_running(netdev))
 		ixgb_down(adapter, true);
@@ -1956,7 +1963,7 @@ ixgb_rx_checksum(struct ixgb_adapter *adapter,
  * this should improve performance for small packets with large amounts
  * of reassembly being done in the stack
  */
-static void ixgb_check_copybreak(struct napi_struct *napi,
+static void ixgb_check_copybreak(struct net_device *netdev,
 				 struct ixgb_buffer *buffer_info,
 				 u32 length, struct sk_buff **skb)
 {
@@ -1965,7 +1972,7 @@ static void ixgb_check_copybreak(struct napi_struct *napi,
 	if (length > copybreak)
 		return;
 
-	new_skb = napi_alloc_skb(napi, length);
+	new_skb = netdev_alloc_skb_ip_align(netdev, length);
 	if (!new_skb)
 		return;
 
@@ -2057,7 +2064,7 @@ ixgb_clean_rx_irq(struct ixgb_adapter *adapter, int *work_done, int work_to_do)
 			goto rxdesc_done;
 		}
 
-		ixgb_check_copybreak(&adapter->napi, buffer_info, length, &skb);
+		ixgb_check_copybreak(netdev, buffer_info, length, &skb);
 
 		/* Good Receive */
 		skb_put(skb, length);

@@ -51,27 +51,26 @@ XGINew_GetXG20DRAMType(struct xgi_hw_device_info *HwDeviceExtension,
 	} else if (HwDeviceExtension->jChipType == XG21) {
 		/* Independent GPIO control */
 		xgifb_reg_and(pVBInfo->P3d4, 0xB4, ~0x02);
-		usleep_range(800, 1800);
+		udelay(800);
 		xgifb_reg_or(pVBInfo->P3d4, 0x4A, 0x80); /* Enable GPIOH read */
 		/* GPIOF 0:DVI 1:DVO */
 		data = xgifb_reg_get(pVBInfo->P3d4, 0x48);
-		/*
-		 * HOTPLUG_SUPPORT
-		 * for current XG20 & XG21, GPIOH is floating, driver will
-		 * fix DDR temporarily
-		 */
+		/* HOTPLUG_SUPPORT */
+		/* for current XG20 & XG21, GPIOH is floating, driver will
+		 * fix DDR temporarily */
 		/* DVI read GPIOH */
 		data &= 0x01; /* 1=DDRII, 0=DDR */
 		/* ~HOTPLUG_SUPPORT */
 		xgifb_reg_or(pVBInfo->P3d4, 0xB4, 0x02);
 		return data;
+	} else {
+		data = xgifb_reg_get(pVBInfo->P3d4, 0x97) & 0x01;
+
+		if (data == 1)
+			data++;
+
+		return data;
 	}
-	data = xgifb_reg_get(pVBInfo->P3d4, 0x97) & 0x01;
-
-	if (data == 1)
-		data++;
-
-	return data;
 }
 
 static void XGINew_DDR1x_MRS_340(unsigned long P3c4,
@@ -82,20 +81,20 @@ static void XGINew_DDR1x_MRS_340(unsigned long P3c4,
 	xgifb_reg_set(P3c4, 0x16, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x80);
 
-	usleep_range(3, 1003);
+	mdelay(3);
 	xgifb_reg_set(P3c4, 0x18, 0x00);
 	xgifb_reg_set(P3c4, 0x19, 0x20);
 	xgifb_reg_set(P3c4, 0x16, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x80);
 
-	usleep_range(60, 1060);
+	udelay(60);
 	xgifb_reg_set(P3c4, 0x18, pVBInfo->SR18[pVBInfo->ram_type]); /* SR18 */
 	xgifb_reg_set(P3c4, 0x19, 0x01);
 	xgifb_reg_set(P3c4, 0x16, 0x03);
 	xgifb_reg_set(P3c4, 0x16, 0x83);
-	usleep_range(1, 1001);
+	mdelay(1);
 	xgifb_reg_set(P3c4, 0x1B, 0x03);
-	usleep_range(500, 1500);
+	udelay(500);
 	xgifb_reg_set(P3c4, 0x18, pVBInfo->SR18[pVBInfo->ram_type]); /* SR18 */
 	xgifb_reg_set(P3c4, 0x19, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x03);
@@ -138,70 +137,70 @@ static void XGINew_DDRII_Bootup_XG27(
 	/* Set Double Frequency */
 	xgifb_reg_set(P3d4, 0x97, pVBInfo->XGINew_CR97); /* CR97 */
 
-	usleep_range(200, 1200);
+	udelay(200);
 
 	xgifb_reg_set(P3c4, 0x18, 0x00); /* Set SR18 */ /* EMRS2 */
 	xgifb_reg_set(P3c4, 0x19, 0x80); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x20); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 	xgifb_reg_set(P3c4, 0x16, 0xA0); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 
 	xgifb_reg_set(P3c4, 0x18, 0x00); /* Set SR18 */ /* EMRS3 */
 	xgifb_reg_set(P3c4, 0x19, 0xC0); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x20); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 	xgifb_reg_set(P3c4, 0x16, 0xA0); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 
 	xgifb_reg_set(P3c4, 0x18, 0x00); /* Set SR18 */ /* EMRS1 */
 	xgifb_reg_set(P3c4, 0x19, 0x40); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x20); /* Set SR16 */
-	usleep_range(30, 1030);
+	udelay(30);
 	xgifb_reg_set(P3c4, 0x16, 0xA0); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 
 	xgifb_reg_set(P3c4, 0x18, 0x42); /* Set SR18 */ /* MRS, DLL Enable */
 	xgifb_reg_set(P3c4, 0x19, 0x0A); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x00); /* Set SR16 */
-	usleep_range(30, 1030);
+	udelay(30);
 	xgifb_reg_set(P3c4, 0x16, 0x00); /* Set SR16 */
 	xgifb_reg_set(P3c4, 0x16, 0x80); /* Set SR16 */
 
 	xgifb_reg_set(P3c4, 0x1B, 0x04); /* Set SR1B */
-	usleep_range(60, 1060);
+	udelay(60);
 	xgifb_reg_set(P3c4, 0x1B, 0x00); /* Set SR1B */
 
 	xgifb_reg_set(P3c4, 0x18, 0x42); /* Set SR18 */ /* MRS, DLL Reset */
 	xgifb_reg_set(P3c4, 0x19, 0x08); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x00); /* Set SR16 */
 
-	usleep_range(30, 1030);
+	udelay(30);
 	xgifb_reg_set(P3c4, 0x16, 0x83); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 
 	xgifb_reg_set(P3c4, 0x18, 0x80); /* Set SR18 */ /* MRS, ODT */
 	xgifb_reg_set(P3c4, 0x19, 0x46); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x20); /* Set SR16 */
-	usleep_range(30, 1030);
+	udelay(30);
 	xgifb_reg_set(P3c4, 0x16, 0xA0); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 
 	xgifb_reg_set(P3c4, 0x18, 0x00); /* Set SR18 */ /* EMRS */
 	xgifb_reg_set(P3c4, 0x19, 0x40); /* Set SR19 */
 	xgifb_reg_set(P3c4, 0x16, 0x20); /* Set SR16 */
-	usleep_range(30, 1030);
+	udelay(30);
 	xgifb_reg_set(P3c4, 0x16, 0xA0); /* Set SR16 */
-	usleep_range(15, 1015);
+	udelay(15);
 
 	/* Set SR1B refresh control 000:close; 010:open */
 	xgifb_reg_set(P3c4, 0x1B, 0x04);
-	usleep_range(200, 1200);
+	udelay(200);
+
 }
 
 static void XGINew_DDR2_MRS_XG20(struct xgi_hw_device_info *HwDeviceExtension,
-				 unsigned long P3c4,
-				 struct vb_device_info *pVBInfo)
+		unsigned long P3c4, struct vb_device_info *pVBInfo)
 {
 	unsigned long P3d4 = P3c4 + 0x10;
 
@@ -210,7 +209,7 @@ static void XGINew_DDR2_MRS_XG20(struct xgi_hw_device_info *HwDeviceExtension,
 
 	xgifb_reg_set(P3d4, 0x97, 0x11); /* CR97 */
 
-	usleep_range(200, 1200);
+	udelay(200);
 	xgifb_reg_set(P3c4, 0x18, 0x00); /* EMRS2 */
 	xgifb_reg_set(P3c4, 0x19, 0x80);
 	xgifb_reg_set(P3c4, 0x16, 0x05);
@@ -231,18 +230,18 @@ static void XGINew_DDR2_MRS_XG20(struct xgi_hw_device_info *HwDeviceExtension,
 	xgifb_reg_set(P3c4, 0x16, 0x05);
 	xgifb_reg_set(P3c4, 0x16, 0x85);
 
-	usleep_range(15, 1015);
+	udelay(15);
 	xgifb_reg_set(P3c4, 0x1B, 0x04); /* SR1B */
-	usleep_range(30, 1030);
+	udelay(30);
 	xgifb_reg_set(P3c4, 0x1B, 0x00); /* SR1B */
-	usleep_range(100, 1100);
+	udelay(100);
 
 	xgifb_reg_set(P3c4, 0x18, 0x42); /* MRS1 */
 	xgifb_reg_set(P3c4, 0x19, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x05);
 	xgifb_reg_set(P3c4, 0x16, 0x85);
 
-	usleep_range(200, 1200);
+	udelay(200);
 }
 
 static void XGINew_DDR1x_MRS_XG20(unsigned long P3c4,
@@ -252,20 +251,20 @@ static void XGINew_DDR1x_MRS_XG20(unsigned long P3c4,
 	xgifb_reg_set(P3c4, 0x19, 0x40);
 	xgifb_reg_set(P3c4, 0x16, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x80);
-	usleep_range(60, 1060);
+	udelay(60);
 
 	xgifb_reg_set(P3c4, 0x18, 0x00);
 	xgifb_reg_set(P3c4, 0x19, 0x40);
 	xgifb_reg_set(P3c4, 0x16, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x80);
-	usleep_range(60, 1060);
+	udelay(60);
 	xgifb_reg_set(P3c4, 0x18, pVBInfo->SR18[pVBInfo->ram_type]); /* SR18 */
 	xgifb_reg_set(P3c4, 0x19, 0x01);
 	xgifb_reg_set(P3c4, 0x16, 0x03);
 	xgifb_reg_set(P3c4, 0x16, 0x83);
-	usleep_range(1, 1001);
+	mdelay(1);
 	xgifb_reg_set(P3c4, 0x1B, 0x03);
-	usleep_range(500, 1500);
+	udelay(500);
 	xgifb_reg_set(P3c4, 0x18, pVBInfo->SR18[pVBInfo->ram_type]); /* SR18 */
 	xgifb_reg_set(P3c4, 0x19, 0x00);
 	xgifb_reg_set(P3c4, 0x16, 0x03);
@@ -355,10 +354,9 @@ static void XGINew_DDR2_DefaultRegister(
 		unsigned long Port, struct vb_device_info *pVBInfo)
 {
 	unsigned long P3d4 = Port, P3c4 = Port - 0x10;
-	/*
-	 * keep following setting sequence, each setting in
-	 * the same reg insert idle
-	 */
+
+	/* keep following setting sequence, each setting in
+	 * the same reg insert idle */
 	xgifb_reg_set(P3d4, 0x82, 0x77);
 	xgifb_reg_set(P3d4, 0x86, 0x00);
 	xgifb_reg_get(P3d4, 0x86); /* Insert read command for delay */
@@ -389,7 +387,7 @@ static void XGINew_DDR2_DefaultRegister(
 }
 
 static void XGI_SetDRAM_Helper(unsigned long P3d4, u8 seed, u8 temp2, u8 reg,
-			       u8 shift_factor, u8 mask1, u8 mask2)
+	u8 shift_factor, u8 mask1, u8 mask2)
 {
 	u8 j;
 
@@ -462,15 +460,15 @@ static void XGINew_SetDRAMDefaultRegister340(
 
 	for (j = 0; j <= 6; j++) /* CR90 - CR96 */
 		xgifb_reg_set(P3d4, (0x90 + j),
-			      pVBInfo->CR40[14 + j][pVBInfo->ram_type]);
+				pVBInfo->CR40[14 + j][pVBInfo->ram_type]);
 
 	for (j = 0; j <= 2; j++) /* CRC3 - CRC5 */
 		xgifb_reg_set(P3d4, (0xC3 + j),
-			      pVBInfo->CR40[21 + j][pVBInfo->ram_type]);
+				pVBInfo->CR40[21 + j][pVBInfo->ram_type]);
 
 	for (j = 0; j < 2; j++) /* CR8A - CR8B */
 		xgifb_reg_set(P3d4, (0x8A + j),
-			      pVBInfo->CR40[1 + j][pVBInfo->ram_type]);
+				pVBInfo->CR40[1 + j][pVBInfo->ram_type]);
 
 	if (HwDeviceExtension->jChipType == XG42)
 		xgifb_reg_set(P3d4, 0x8C, 0x87);
@@ -501,6 +499,7 @@ static void XGINew_SetDRAMDefaultRegister340(
 	}
 	xgifb_reg_set(P3c4, 0x1B, 0x03); /* SR1B */
 }
+
 
 static unsigned short XGINew_SetDRAMSize20Reg(
 		unsigned short dram_size,
@@ -535,14 +534,13 @@ static unsigned short XGINew_SetDRAMSize20Reg(
 			      0x14,
 			      (xgifb_reg_get(pVBInfo->P3c4, 0x14) & 0x0F) |
 				(data & 0xF0));
-		usleep_range(15, 1015);
+		udelay(15);
 	}
 	return memsize;
 }
 
 static int XGINew_ReadWriteRest(unsigned short StopAddr,
-				unsigned short StartAddr,
-				struct vb_device_info *pVBInfo)
+		unsigned short StartAddr, struct vb_device_info *pVBInfo)
 {
 	int i;
 	unsigned long Position = 0;
@@ -555,8 +553,7 @@ static int XGINew_ReadWriteRest(unsigned short StopAddr,
 		writel(Position, fbaddr + Position);
 	}
 
-	/* Fix #1759 Memory Size error in Multi-Adapter. */
-	usleep_range(500, 1500);
+	udelay(500); /* Fix #1759 Memory Size error in Multi-Adapter. */
 
 	Position = 0;
 
@@ -581,12 +578,13 @@ static unsigned char XGINew_CheckFrequence(struct vb_device_info *pVBInfo)
 		data = xgifb_reg_get(pVBInfo->P3c4, 0x39);
 		data = (data & 0x02) >> 1;
 		return data;
+	} else {
+		return data & 0x01;
 	}
-	return data & 0x01;
 }
 
 static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
-				struct vb_device_info *pVBInfo)
+		struct vb_device_info *pVBInfo)
 {
 	unsigned char data;
 
@@ -601,11 +599,12 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 
 			if ((HwDeviceExtension->ulVideoMemorySize - 1)
 					> 0x1000000) {
+
 				pVBInfo->ram_bus = 32; /* 32 bits */
 				/* 22bit + 2 rank + 32bit */
 				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0xB1);
 				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x52);
-				usleep_range(15, 1015);
+				udelay(15);
 
 				if (XGINew_ReadWriteRest(24, 23, pVBInfo) == 1)
 					return;
@@ -619,7 +618,7 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 					xgifb_reg_set(pVBInfo->P3c4,
 						      0x14,
 						      0x42);
-					usleep_range(15, 1015);
+					udelay(15);
 
 					if (XGINew_ReadWriteRest(23,
 								 23,
@@ -634,14 +633,15 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 				/* 22bit + 2 rank + 16bit */
 				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0xB1);
 				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x41);
-				usleep_range(15, 1015);
+				udelay(15);
 
 				if (XGINew_ReadWriteRest(23, 22, pVBInfo) == 1)
 					return;
-				xgifb_reg_set(pVBInfo->P3c4,
-					      0x13,
-					      0x31);
-				usleep_range(15, 1015);
+				else
+					xgifb_reg_set(pVBInfo->P3c4,
+						      0x13,
+						      0x31);
+				udelay(15);
 			}
 
 		} else { /* Dual_16_8 */
@@ -650,9 +650,9 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 				pVBInfo->ram_bus = 16; /* 16 bits */
 				/* (0x31:12x8x2) 22bit + 2 rank */
 				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0xB1);
-				/* 0x41:16Mx16 bit */
+				/* 0x41:16Mx16 bit*/
 				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x41);
-				usleep_range(15, 1015);
+				udelay(15);
 
 				if (XGINew_ReadWriteRest(23, 22, pVBInfo) == 1)
 					return;
@@ -663,11 +663,11 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 					xgifb_reg_set(pVBInfo->P3c4,
 						      0x13,
 						      0x31);
-					/* 0x31:8Mx16 bit */
+					/* 0x31:8Mx16 bit*/
 					xgifb_reg_set(pVBInfo->P3c4,
 						      0x14,
 						      0x31);
-					usleep_range(15, 1015);
+					udelay(15);
 
 					if (XGINew_ReadWriteRest(22,
 								 22,
@@ -681,18 +681,17 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 				pVBInfo->ram_bus = 8; /* 8 bits */
 				/* (0x31:12x8x2) 22bit + 2 rank */
 				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0xB1);
-				/* 0x30:8Mx8 bit */
+				/* 0x30:8Mx8 bit*/
 				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x30);
-				usleep_range(15, 1015);
+				udelay(15);
 
 				if (XGINew_ReadWriteRest(22, 21, pVBInfo) == 1)
 					return;
-
-				/* (0x31:12x8x2) 22bit + 1 rank */
-				xgifb_reg_set(pVBInfo->P3c4,
-					      0x13,
-					      0x31);
-				usleep_range(15, 1015);
+				else /* (0x31:12x8x2) 22bit + 1 rank */
+					xgifb_reg_set(pVBInfo->P3c4,
+						      0x13,
+						      0x31);
+				udelay(15);
 			}
 		}
 		break;
@@ -700,15 +699,15 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 	case XG27:
 		pVBInfo->ram_bus = 16; /* 16 bits */
 		pVBInfo->ram_channel = 1; /* Single channel */
-		xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x51); /* 32Mx16 bit */
+		xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x51); /* 32Mx16 bit*/
 		break;
 	case XG42:
 		/*
-		 * XG42 SR14 D[3] Reserve
-		 * D[2] = 1, Dual Channel
-		 * = 0, Single Channel
-		 *
-		 * It's Different from Other XG40 Series.
+		 XG42 SR14 D[3] Reserve
+		 D[2] = 1, Dual Channel
+		 = 0, Single Channel
+
+		 It's Different from Other XG40 Series.
 		 */
 		if (XGINew_CheckFrequence(pVBInfo) == 1) { /* DDRII, DDR2x */
 			pVBInfo->ram_bus = 32; /* 32 bits */
@@ -730,8 +729,10 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 
 			if (XGINew_ReadWriteRest(23, 22, pVBInfo) == 1)
 				return;
-			xgifb_reg_set(pVBInfo->P3c4, 0x13, 0x21);
-			xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x30);
+			else {
+				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0x21);
+				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x30);
+			}
 		} else { /* DDR */
 			pVBInfo->ram_bus = 64; /* 64 bits */
 			pVBInfo->ram_channel = 1; /* 1 channels */
@@ -740,8 +741,10 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 
 			if (XGINew_ReadWriteRest(24, 23, pVBInfo) == 1)
 				return;
-			xgifb_reg_set(pVBInfo->P3c4, 0x13, 0x21);
-			xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x42);
+			else {
+				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0x21);
+				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x42);
+			}
 		}
 
 		break;
@@ -778,17 +781,19 @@ static void XGINew_CheckChannel(struct xgi_hw_device_info *HwDeviceExtension,
 			xgifb_reg_set(pVBInfo->P3c4, 0x13, 0xA1);
 			xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x5A);
 
-			if (XGINew_ReadWriteRest(25, 24, pVBInfo) == 1)
+			if (XGINew_ReadWriteRest(25, 24, pVBInfo) == 1) {
 				return;
-			xgifb_reg_set(pVBInfo->P3c4, 0x13, 0x21);
-			xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x4A);
+			} else {
+				xgifb_reg_set(pVBInfo->P3c4, 0x13, 0x21);
+				xgifb_reg_set(pVBInfo->P3c4, 0x14, 0x4A);
+			}
 		}
 		break;
 	}
 }
 
 static int XGINew_DDRSizing340(struct xgi_hw_device_info *HwDeviceExtension,
-			       struct vb_device_info *pVBInfo)
+		struct vb_device_info *pVBInfo)
 {
 	u8 i, size;
 	unsigned short memsize, start_addr;
@@ -811,7 +816,7 @@ static int XGINew_DDRSizing340(struct xgi_hw_device_info *HwDeviceExtension,
 	for (i = 0; i < size; i++) {
 		/* SetDRAMSizingType */
 		xgifb_reg_and_or(pVBInfo->P3c4, 0x13, 0x80, dram_table[i][1]);
-		usleep_range(50, 1050); /* should delay 50 ns */
+		udelay(15); /* should delay 50 ns */
 
 		memsize = XGINew_SetDRAMSize20Reg(dram_table[i][0], pVBInfo);
 
@@ -820,7 +825,7 @@ static int XGINew_DDRSizing340(struct xgi_hw_device_info *HwDeviceExtension,
 
 		memsize += (pVBInfo->ram_channel - 2) + 20;
 		if ((HwDeviceExtension->ulVideoMemorySize - 1) <
-			(unsigned long)(1 << memsize))
+			(unsigned long) (1 << memsize))
 			continue;
 
 		if (XGINew_ReadWriteRest(memsize, start_addr, pVBInfo) == 1)
@@ -830,8 +835,8 @@ static int XGINew_DDRSizing340(struct xgi_hw_device_info *HwDeviceExtension,
 }
 
 static void XGINew_SetDRAMSize_340(struct xgifb_video_info *xgifb_info,
-				   struct xgi_hw_device_info *HwDeviceExtension,
-				   struct vb_device_info *pVBInfo)
+		struct xgi_hw_device_info *HwDeviceExtension,
+		struct vb_device_info *pVBInfo)
 {
 	unsigned short data;
 
@@ -841,13 +846,13 @@ static void XGINew_SetDRAMSize_340(struct xgifb_video_info *xgifb_info,
 
 	data = xgifb_reg_get(pVBInfo->P3c4, 0x21);
 	/* disable read cache */
-	xgifb_reg_set(pVBInfo->P3c4, 0x21, (unsigned short)(data & 0xDF));
+	xgifb_reg_set(pVBInfo->P3c4, 0x21, (unsigned short) (data & 0xDF));
 	XGI_DisplayOff(xgifb_info, HwDeviceExtension, pVBInfo);
 
 	XGINew_DDRSizing340(HwDeviceExtension, pVBInfo);
 	data = xgifb_reg_get(pVBInfo->P3c4, 0x21);
 	/* enable read cache */
-	xgifb_reg_set(pVBInfo->P3c4, 0x21, (unsigned short)(data | 0x20));
+	xgifb_reg_set(pVBInfo->P3c4, 0x21, (unsigned short) (data | 0x20));
 }
 
 static u8 *xgifb_copy_rom(struct pci_dev *dev, size_t *rom_size)
@@ -856,11 +861,11 @@ static u8 *xgifb_copy_rom(struct pci_dev *dev, size_t *rom_size)
 	u8 *rom_copy;
 
 	rom_address = pci_map_rom(dev, rom_size);
-	if (!rom_address)
+	if (rom_address == NULL)
 		return NULL;
 
 	rom_copy = vzalloc(XGIFB_ROM_SIZE);
-	if (!rom_copy)
+	if (rom_copy == NULL)
 		goto done;
 
 	*rom_size = min_t(size_t, *rom_size, XGIFB_ROM_SIZE);
@@ -882,7 +887,7 @@ static bool xgifb_read_vbios(struct pci_dev *pdev)
 	int entry;
 
 	vbios = xgifb_copy_rom(pdev, &vbios_size);
-	if (!vbios) {
+	if (vbios == NULL) {
 		dev_err(&pdev->dev, "Video BIOS not available\n");
 		return false;
 	}
@@ -908,9 +913,9 @@ static bool xgifb_read_vbios(struct pci_dev *pdev)
 		goto error;
 	if (j == 0xff)
 		j = 1;
-
-	/* Read the LVDS table index scratch register set by the BIOS. */
-
+	/*
+	 * Read the LVDS table index scratch register set by the BIOS.
+	 */
 	entry = xgifb_reg_get(xgifb_info->dev_info.P3d4, 0x36);
 	if (entry >= j)
 		entry = 0;
@@ -1042,9 +1047,8 @@ static void XGINew_SetModeScratch(struct vb_device_info *pVBInfo)
 	}
 
 	tempcl |= SetSimuScanMode;
-	if ((!(temp & ActiveCRT1)) && ((temp & ActiveLCD) ||
-				       (temp & ActiveTV) ||
-				       (temp & ActiveCRT2)))
+	if ((!(temp & ActiveCRT1)) && ((temp & ActiveLCD) || (temp & ActiveTV)
+			|| (temp & ActiveCRT2)))
 		tempcl ^= (SetSimuScanMode | SwitchCRT2);
 	if ((temp & ActiveLCD) && (temp & ActiveTV))
 		tempcl ^= (SetSimuScanMode | SwitchCRT2);
@@ -1063,6 +1067,7 @@ static void XGINew_SetModeScratch(struct vb_device_info *pVBInfo)
 	CR38Data &= ~SetYPbPr;
 	CR38Data |= tempch;
 	xgifb_reg_set(pVBInfo->P3d4, 0x38, CR38Data);
+
 }
 
 static unsigned short XGINew_SenseLCD(struct xgi_hw_device_info
@@ -1089,7 +1094,7 @@ static unsigned short XGINew_SenseLCD(struct xgi_hw_device_info
 }
 
 static void XGINew_GetXG21Sense(struct pci_dev *pdev,
-				struct vb_device_info *pVBInfo)
+		struct vb_device_info *pVBInfo)
 {
 	struct xgifb_video_info *xgifb_info = pci_get_drvdata(pdev);
 	unsigned char Temp;
@@ -1099,7 +1104,7 @@ static void XGINew_GetXG21Sense(struct pci_dev *pdev,
 		/* LVDS on chip */
 		xgifb_reg_and_or(pVBInfo->P3d4, 0x38, ~0xE0, 0xC0);
 	} else {
-		/* Enable GPIOA/B read */
+		/* Enable GPIOA/B read  */
 		xgifb_reg_and_or(pVBInfo->P3d4, 0x4A, ~0x03, 0x03);
 		Temp = xgifb_reg_get(pVBInfo->P3d4, 0x48) & 0xC0;
 		if (Temp == 0xC0) { /* DVI & DVO GPIOA/B pull high */
@@ -1123,7 +1128,7 @@ static void XGINew_GetXG27Sense(struct vb_device_info *pVBInfo)
 	unsigned char Temp, bCR4A;
 
 	bCR4A = xgifb_reg_get(pVBInfo->P3d4, 0x4A);
-	/* Enable GPIOA/B/C read */
+	/* Enable GPIOA/B/C read  */
 	xgifb_reg_and_or(pVBInfo->P3d4, 0x4A, ~0x07, 0x07);
 	Temp = xgifb_reg_get(pVBInfo->P3d4, 0x48) & 0x07;
 	xgifb_reg_set(pVBInfo->P3d4, 0x4A, bCR4A);
@@ -1137,6 +1142,7 @@ static void XGINew_GetXG27Sense(struct vb_device_info *pVBInfo)
 		xgifb_reg_and_or(pVBInfo->P3d4, 0x38, ~0xE0, 0xA0);
 	}
 	xgifb_reg_or(pVBInfo->P3d4, 0x32, LCDSense);
+
 }
 
 static unsigned char GetXG21FPBits(struct vb_device_info *pVBInfo)
@@ -1193,7 +1199,7 @@ unsigned char XGIInitNew(struct pci_dev *pdev)
 
 	pVBInfo->FBAddr = HwDeviceExtension->pjVideoMemoryAddress;
 
-	if (!pVBInfo->FBAddr) {
+	if (pVBInfo->FBAddr == NULL) {
 		dev_dbg(&pdev->dev, "pVBInfo->FBAddr == 0\n");
 		return 0;
 	}
@@ -1331,12 +1337,14 @@ unsigned char XGIInitNew(struct pci_dev *pdev)
 	XGI_SenseCRT1(pVBInfo);
 
 	if (HwDeviceExtension->jChipType == XG21) {
+
 		xgifb_reg_and_or(pVBInfo->P3d4,
 				 0x32,
 				 ~Monitor1Sense,
 				 Monitor1Sense); /* Z9 default has CRT */
 		temp = GetXG21FPBits(pVBInfo);
 		xgifb_reg_and_or(pVBInfo->P3d4, 0x37, ~0x01, temp);
+
 	}
 	if (HwDeviceExtension->jChipType == XG27) {
 		xgifb_reg_and_or(pVBInfo->P3d4,

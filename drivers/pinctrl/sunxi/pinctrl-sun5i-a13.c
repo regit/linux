@@ -10,7 +10,7 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -330,12 +330,15 @@ static const struct sunxi_desc_pin sun5i_a13_pins[] = {
 	/* Hole */
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(G, 0),
 		  SUNXI_FUNCTION(0x0, "gpio_in"),
+		  SUNXI_FUNCTION(0x1, "gpio_out"),
 		  SUNXI_FUNCTION_IRQ(0x6, 0)),		/* EINT0 */
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(G, 1),
 		  SUNXI_FUNCTION(0x0, "gpio_in"),
+		  SUNXI_FUNCTION(0x1, "gpio_out"),
 		  SUNXI_FUNCTION_IRQ(0x6, 1)),		/* EINT1 */
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(G, 2),
 		  SUNXI_FUNCTION(0x0, "gpio_in"),
+		  SUNXI_FUNCTION(0x1, "gpio_out"),
 		  SUNXI_FUNCTION_IRQ(0x6, 2)),		/* EINT2 */
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(G, 3),
 		  SUNXI_FUNCTION(0x0, "gpio_in"),
@@ -379,7 +382,6 @@ static const struct sunxi_desc_pin sun5i_a13_pins[] = {
 static const struct sunxi_pinctrl_desc sun5i_a13_pinctrl_data = {
 	.pins = sun5i_a13_pins,
 	.npins = ARRAY_SIZE(sun5i_a13_pins),
-	.irq_banks = 1,
 };
 
 static int sun5i_a13_pinctrl_probe(struct platform_device *pdev)
@@ -388,16 +390,22 @@ static int sun5i_a13_pinctrl_probe(struct platform_device *pdev)
 				  &sun5i_a13_pinctrl_data);
 }
 
-static const struct of_device_id sun5i_a13_pinctrl_match[] = {
+static struct of_device_id sun5i_a13_pinctrl_match[] = {
 	{ .compatible = "allwinner,sun5i-a13-pinctrl", },
 	{}
 };
+MODULE_DEVICE_TABLE(of, sun5i_a13_pinctrl_match);
 
 static struct platform_driver sun5i_a13_pinctrl_driver = {
 	.probe	= sun5i_a13_pinctrl_probe,
 	.driver	= {
 		.name		= "sun5i-a13-pinctrl",
+		.owner		= THIS_MODULE,
 		.of_match_table	= sun5i_a13_pinctrl_match,
 	},
 };
-builtin_platform_driver(sun5i_a13_pinctrl_driver);
+module_platform_driver(sun5i_a13_pinctrl_driver);
+
+MODULE_AUTHOR("Maxime Ripard <maxime.ripard@free-electrons.com");
+MODULE_DESCRIPTION("Allwinner A13 pinctrl driver");
+MODULE_LICENSE("GPL");

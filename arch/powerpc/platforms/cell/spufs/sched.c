@@ -622,7 +622,7 @@ static struct spu *spu_get_idle(struct spu_context *ctx)
 
 /**
  * find_victim - find a lower priority context to preempt
- * @ctx:	candidate context for running
+ * @ctx:	canidate context for running
  *
  * Returns the freed physical spu to run the new context on.
  */
@@ -1039,11 +1039,13 @@ void spuctx_switch_state(struct spu_context *ctx,
 {
 	unsigned long long curtime;
 	signed long long delta;
+	struct timespec ts;
 	struct spu *spu;
 	enum spu_utilization_state old_state;
 	int node;
 
-	curtime = ktime_get_ns();
+	ktime_get_ts(&ts);
+	curtime = timespec_to_ns(&ts);
 	delta = curtime - ctx->stats.tstamp;
 
 	WARN_ON(!mutex_is_locked(&ctx->state_mutex));

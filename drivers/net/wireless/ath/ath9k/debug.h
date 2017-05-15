@@ -49,9 +49,6 @@ enum ath_reset_type {
 	RESET_TYPE_MAC_HANG,
 	RESET_TYPE_BEACON_STUCK,
 	RESET_TYPE_MCI,
-	RESET_TYPE_CALIBRATION,
-	RESET_TX_DMA_ERROR,
-	RESET_RX_DMA_ERROR,
 	__RESET_TYPE_MAX
 };
 
@@ -147,6 +144,7 @@ struct ath_interrupt_stats {
  * @completed: Total MPDUs (non-aggr) completed
  * @a_aggr: Total no. of aggregates queued
  * @a_queued_hw: Total AMPDUs queued to hardware
+ * @a_queued_sw: Total AMPDUs queued to software queues
  * @a_completed: Total AMPDUs completed
  * @a_retries: No. of AMPDUs retried (SW)
  * @a_xretries: No. of AMPDUs dropped due to xretries
@@ -173,6 +171,7 @@ struct ath_tx_stats {
 	u32 xretries;
 	u32 a_aggr;
 	u32 a_queued_hw;
+	u32 a_queued_sw;
 	u32 a_completed;
 	u32 a_retries;
 	u32 a_xretries;
@@ -196,11 +195,12 @@ struct ath_tx_stats {
 #define TXSTATS sc->debug.stats.txstats
 #define PR(str, elem)							\
 	do {								\
-		seq_printf(file, "%s%13u%11u%10u%10u\n", str,		\
-			   TXSTATS[PR_QNUM(IEEE80211_AC_BE)].elem,\
-			   TXSTATS[PR_QNUM(IEEE80211_AC_BK)].elem,\
-			   TXSTATS[PR_QNUM(IEEE80211_AC_VI)].elem,\
-			   TXSTATS[PR_QNUM(IEEE80211_AC_VO)].elem); \
+		len += scnprintf(buf + len, size - len,			\
+				 "%s%13u%11u%10u%10u\n", str,		\
+				 TXSTATS[PR_QNUM(IEEE80211_AC_BE)].elem,\
+				 TXSTATS[PR_QNUM(IEEE80211_AC_BK)].elem,\
+				 TXSTATS[PR_QNUM(IEEE80211_AC_VI)].elem,\
+				 TXSTATS[PR_QNUM(IEEE80211_AC_VO)].elem); \
 	} while(0)
 
 struct ath_rx_rate_stats {

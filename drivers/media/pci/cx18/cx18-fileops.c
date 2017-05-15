@@ -34,7 +34,6 @@
 #include "cx18-controls.h"
 #include "cx18-ioctl.h"
 #include "cx18-cards.h"
-#include <media/v4l2-event.h>
 
 /* This function tries to claim the stream for a specific file descriptor.
    If no one else is using this stream then the stream is claimed and
@@ -49,7 +48,8 @@ int cx18_claim_stream(struct cx18_open_id *id, int type)
 
 	/* Nothing should ever try to directly claim the IDX stream */
 	if (type == CX18_ENC_STREAM_TYPE_IDX) {
-		CX18_WARN("MPEG Index stream cannot be claimed directly, but something tried.\n");
+		CX18_WARN("MPEG Index stream cannot be claimed "
+			  "directly, but something tried.\n");
 		return -EINVAL;
 	}
 
@@ -609,16 +609,13 @@ ssize_t cx18_v4l2_read(struct file *filp, char __user *buf, size_t count,
 
 unsigned int cx18_v4l2_enc_poll(struct file *filp, poll_table *wait)
 {
-	unsigned long req_events = poll_requested_events(wait);
 	struct cx18_open_id *id = file2id(filp);
 	struct cx18 *cx = id->cx;
 	struct cx18_stream *s = &cx->streams[id->type];
 	int eof = test_bit(CX18_F_S_STREAMOFF, &s->s_flags);
-	unsigned res = 0;
 
 	/* Start a capture if there is none */
-	if (!eof && !test_bit(CX18_F_S_STREAMING, &s->s_flags) &&
-			(req_events & (POLLIN | POLLRDNORM))) {
+	if (!eof && !test_bit(CX18_F_S_STREAMING, &s->s_flags)) {
 		int rc;
 
 		mutex_lock(&cx->serialize_lock);
@@ -635,26 +632,21 @@ unsigned int cx18_v4l2_enc_poll(struct file *filp, poll_table *wait)
 	if ((s->vb_type == V4L2_BUF_TYPE_VIDEO_CAPTURE) &&
 		(id->type == CX18_ENC_STREAM_TYPE_YUV)) {
 		int videobuf_poll = videobuf_poll_stream(filp, &s->vbuf_q, wait);
-
-		if (v4l2_event_pending(&id->fh))
-			res |= POLLPRI;
                 if (eof && videobuf_poll == POLLERR)
-			return res | POLLHUP;
-		return res | videobuf_poll;
+                        return POLLHUP;
+                else
+                        return videobuf_poll;
 	}
 
 	/* add stream's waitq to the poll list */
 	CX18_DEBUG_HI_FILE("Encoder poll\n");
-	if (v4l2_event_pending(&id->fh))
-		res |= POLLPRI;
-	else
-		poll_wait(filp, &s->waitq, wait);
+	poll_wait(filp, &s->waitq, wait);
 
 	if (atomic_read(&s->q_full.depth))
-		return res | POLLIN | POLLRDNORM;
+		return POLLIN | POLLRDNORM;
 	if (eof)
-		return res | POLLHUP;
-	return res;
+		return POLLHUP;
+	return 0;
 }
 
 int cx18_v4l2_mmap(struct file *file, struct vm_area_struct *vma)
@@ -727,7 +719,8 @@ void cx18_stop_capture(struct cx18_open_id *id, int gop_end)
 			/* Stop internal use associated VBI and IDX streams */
 			if (test_bit(CX18_F_S_STREAMING, &s_vbi->s_flags) &&
 			    !test_bit(CX18_F_S_APPL_IO, &s_vbi->s_flags)) {
-				CX18_DEBUG_INFO("close stopping embedded VBI capture\n");
+				CX18_DEBUG_INFO("close stopping embedded VBI "
+						"capture\n");
 				cx18_stop_v4l2_encode_stream(s_vbi, 0);
 			}
 			if (test_bit(CX18_F_S_STREAMING, &s_idx->s_flags)) {
@@ -804,7 +797,7 @@ static int cx18_serialized_open(struct cx18_stream *s, struct file *filp)
 		CX18_DEBUG_WARN("nomem on v4l2 open\n");
 		return -ENOMEM;
 	}
-	v4l2_fh_init(&item->fh, &s->video_dev);
+	v4l2_fh_init(&item->fh, s->video_dev);
 
 	item->cx = cx;
 	item->type = s->type;

@@ -19,11 +19,12 @@
 #include <net/ip.h>
 #include <net/pkt_cls.h>
 
-static int em_ipset_change(struct net *net, void *data, int data_len,
+static int em_ipset_change(struct tcf_proto *tp, void *data, int data_len,
 			   struct tcf_ematch *em)
 {
 	struct xt_set_info *set = data;
 	ip_set_id_t index;
+	struct net *net = dev_net(qdisc_dev(tp->q));
 
 	if (data_len != sizeof(*set))
 		return -EINVAL;
@@ -41,11 +42,11 @@ static int em_ipset_change(struct net *net, void *data, int data_len,
 	return -ENOMEM;
 }
 
-static void em_ipset_destroy(struct tcf_ematch *em)
+static void em_ipset_destroy(struct tcf_proto *p, struct tcf_ematch *em)
 {
 	const struct xt_set_info *set = (const void *) em->data;
 	if (set) {
-		ip_set_nfnl_put(em->net, set->index);
+		ip_set_nfnl_put(dev_net(qdisc_dev(p->q)), set->index);
 		kfree((void *) em->data);
 	}
 }
@@ -57,20 +58,17 @@ static int em_ipset_match(struct sk_buff *skb, struct tcf_ematch *em,
 	struct xt_action_param acpar;
 	const struct xt_set_info *set = (const void *) em->data;
 	struct net_device *dev, *indev = NULL;
-	struct nf_hook_state state = {
-		.net	= em->net,
-	};
 	int ret, network_offset;
 
-	switch (tc_skb_protocol(skb)) {
+	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		state.pf = NFPROTO_IPV4;
+		acpar.family = NFPROTO_IPV4;
 		if (!pskb_network_may_pull(skb, sizeof(struct iphdr)))
 			return 0;
 		acpar.thoff = ip_hdrlen(skb);
 		break;
 	case htons(ETH_P_IPV6):
-		state.pf = NFPROTO_IPV6;
+		acpar.family = NFPROTO_IPV6;
 		if (!pskb_network_may_pull(skb, sizeof(struct ipv6hdr)))
 			return 0;
 		/* doesn't call ipv6_find_hdr() because ipset doesn't use thoff, yet */
@@ -80,7 +78,9 @@ static int em_ipset_match(struct sk_buff *skb, struct tcf_ematch *em,
 		return 0;
 	}
 
-	opt.family = state.pf;
+	acpar.hooknum = 0;
+
+	opt.family = acpar.family;
 	opt.dim = set->dim;
 	opt.flags = set->flags;
 	opt.cmdflags = 0;
@@ -93,12 +93,11 @@ static int em_ipset_match(struct sk_buff *skb, struct tcf_ematch *em,
 
 	rcu_read_lock();
 
-	if (skb->skb_iif)
-		indev = dev_get_by_index_rcu(em->net, skb->skb_iif);
+	if (dev && skb->skb_iif)
+		indev = dev_get_by_index_rcu(dev_net(dev), skb->skb_iif);
 
-	state.in      = indev ? indev : dev;
-	state.out     = dev;
-	acpar.state   = &state;
+	acpar.in      = indev ? indev : dev;
+	acpar.out     = dev;
 
 	ret = ip_set_test(set->index, skb, &acpar, &opt);
 

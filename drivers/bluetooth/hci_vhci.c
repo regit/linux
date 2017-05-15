@@ -40,7 +40,7 @@
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 
-#define VERSION "1.5"
+#define VERSION "1.4"
 
 static bool amp;
 
@@ -50,18 +50,22 @@ struct vhci_data {
 	wait_queue_head_t read_wait;
 	struct sk_buff_head readq;
 
-	struct mutex open_mutex;
 	struct delayed_work open_timeout;
 };
 
 static int vhci_open_dev(struct hci_dev *hdev)
 {
+	set_bit(HCI_RUNNING, &hdev->flags);
+
 	return 0;
 }
 
 static int vhci_close_dev(struct hci_dev *hdev)
 {
 	struct vhci_data *data = hci_get_drvdata(hdev);
+
+	if (!test_and_clear_bit(HCI_RUNNING, &hdev->flags))
+		return 0;
 
 	skb_queue_purge(&data->readq);
 
@@ -81,31 +85,20 @@ static int vhci_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct vhci_data *data = hci_get_drvdata(hdev);
 
-	memcpy(skb_push(skb, 1), &hci_skb_pkt_type(skb), 1);
+	if (!test_bit(HCI_RUNNING, &hdev->flags))
+		return -EBUSY;
+
+	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 	skb_queue_tail(&data->readq, skb);
 
 	wake_up_interruptible(&data->read_wait);
 	return 0;
 }
 
-static int __vhci_create_device(struct vhci_data *data, __u8 opcode)
+static int vhci_create_device(struct vhci_data *data, __u8 dev_type)
 {
 	struct hci_dev *hdev;
 	struct sk_buff *skb;
-	__u8 dev_type;
-
-	if (data->hdev)
-		return -EBADFD;
-
-	/* bits 0-1 are dev_type (Primary or AMP) */
-	dev_type = opcode & 0x03;
-
-	if (dev_type != HCI_PRIMARY && dev_type != HCI_AMP)
-		return -EINVAL;
-
-	/* bits 2-5 are reserved (must be zero) */
-	if (opcode & 0x3c)
-		return -EINVAL;
 
 	skb = bt_skb_alloc(4, GFP_KERNEL);
 	if (!skb)
@@ -128,14 +121,6 @@ static int __vhci_create_device(struct vhci_data *data, __u8 opcode)
 	hdev->flush = vhci_flush;
 	hdev->send  = vhci_send_frame;
 
-	/* bit 6 is for external configuration */
-	if (opcode & 0x40)
-		set_bit(HCI_QUIRK_EXTERNAL_CONFIG, &hdev->quirks);
-
-	/* bit 7 is for raw device */
-	if (opcode & 0x80)
-		set_bit(HCI_QUIRK_RAW_DEVICE, &hdev->quirks);
-
 	if (hci_register_dev(hdev) < 0) {
 		BT_ERR("Can't register HCI device");
 		hci_free_dev(hdev);
@@ -144,10 +129,10 @@ static int __vhci_create_device(struct vhci_data *data, __u8 opcode)
 		return -EBUSY;
 	}
 
-	hci_skb_pkt_type(skb) = HCI_VENDOR_PKT;
+	bt_cb(skb)->pkt_type = HCI_VENDOR_PKT;
 
 	*skb_put(skb, 1) = 0xff;
-	*skb_put(skb, 1) = opcode;
+	*skb_put(skb, 1) = dev_type;
 	put_unaligned_le16(hdev->id, skb_put(skb, 2));
 	skb_queue_tail(&data->readq, skb);
 
@@ -155,23 +140,14 @@ static int __vhci_create_device(struct vhci_data *data, __u8 opcode)
 	return 0;
 }
 
-static int vhci_create_device(struct vhci_data *data, __u8 opcode)
-{
-	int err;
-
-	mutex_lock(&data->open_mutex);
-	err = __vhci_create_device(data, opcode);
-	mutex_unlock(&data->open_mutex);
-
-	return err;
-}
-
 static inline ssize_t vhci_get_user(struct vhci_data *data,
-				    struct iov_iter *from)
+				    const struct iovec *iov,
+				    unsigned long count)
 {
-	size_t len = iov_iter_count(from);
+	size_t len = iov_length(iov, count);
 	struct sk_buff *skb;
-	__u8 pkt_type, opcode;
+	__u8 pkt_type, dev_type;
+	unsigned long i;
 	int ret;
 
 	if (len < 2 || len > HCI_MAX_FRAME_SIZE)
@@ -181,9 +157,12 @@ static inline ssize_t vhci_get_user(struct vhci_data *data,
 	if (!skb)
 		return -ENOMEM;
 
-	if (!copy_from_iter_full(skb_put(skb, len), len, from)) {
-		kfree_skb(skb);
-		return -EFAULT;
+	for (i = 0; i < count; i++) {
+		if (copy_from_user(skb_put(skb, iov[i].iov_len),
+				   iov[i].iov_base, iov[i].iov_len)) {
+			kfree_skb(skb);
+			return -EFAULT;
+		}
 	}
 
 	pkt_type = *((__u8 *) skb->data);
@@ -198,15 +177,20 @@ static inline ssize_t vhci_get_user(struct vhci_data *data,
 			return -ENODEV;
 		}
 
-		hci_skb_pkt_type(skb) = pkt_type;
+		bt_cb(skb)->pkt_type = pkt_type;
 
 		ret = hci_recv_frame(data->hdev, skb);
 		break;
 
 	case HCI_VENDOR_PKT:
+		if (data->hdev) {
+			kfree_skb(skb);
+			return -EBADFD;
+		}
+
 		cancel_delayed_work_sync(&data->open_timeout);
 
-		opcode = *((__u8 *) skb->data);
+		dev_type = *((__u8 *) skb->data);
 		skb_pull(skb, 1);
 
 		if (skb->len > 0) {
@@ -216,7 +200,10 @@ static inline ssize_t vhci_get_user(struct vhci_data *data,
 
 		kfree_skb(skb);
 
-		ret = vhci_create_device(data, opcode);
+		if (dev_type != HCI_BREDR && dev_type != HCI_AMP)
+			return -EINVAL;
+
+		ret = vhci_create_device(data, dev_type);
 		break;
 
 	default:
@@ -244,7 +231,7 @@ static inline ssize_t vhci_put_user(struct vhci_data *data,
 
 	data->hdev->stat.byte_tx += len;
 
-	switch (hci_skb_pkt_type(skb)) {
+	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
 		data->hdev->stat.cmd_tx++;
 		break;
@@ -291,12 +278,13 @@ static ssize_t vhci_read(struct file *file,
 	return ret;
 }
 
-static ssize_t vhci_write(struct kiocb *iocb, struct iov_iter *from)
+static ssize_t vhci_write(struct kiocb *iocb, const struct iovec *iov,
+			  unsigned long count, loff_t pos)
 {
 	struct file *file = iocb->ki_filp;
 	struct vhci_data *data = file->private_data;
 
-	return vhci_get_user(data, from);
+	return vhci_get_user(data, iov, count);
 }
 
 static unsigned int vhci_poll(struct file *file, poll_table *wait)
@@ -316,7 +304,7 @@ static void vhci_open_timeout(struct work_struct *work)
 	struct vhci_data *data = container_of(work, struct vhci_data,
 					      open_timeout.work);
 
-	vhci_create_device(data, amp ? HCI_AMP : HCI_PRIMARY);
+	vhci_create_device(data, amp ? HCI_AMP : HCI_BREDR);
 }
 
 static int vhci_open(struct inode *inode, struct file *file)
@@ -330,7 +318,6 @@ static int vhci_open(struct inode *inode, struct file *file)
 	skb_queue_head_init(&data->readq);
 	init_waitqueue_head(&data->read_wait);
 
-	mutex_init(&data->open_mutex);
 	INIT_DELAYED_WORK(&data->open_timeout, vhci_open_timeout);
 
 	file->private_data = data;
@@ -344,18 +331,15 @@ static int vhci_open(struct inode *inode, struct file *file)
 static int vhci_release(struct inode *inode, struct file *file)
 {
 	struct vhci_data *data = file->private_data;
-	struct hci_dev *hdev;
+	struct hci_dev *hdev = data->hdev;
 
 	cancel_delayed_work_sync(&data->open_timeout);
-
-	hdev = data->hdev;
 
 	if (hdev) {
 		hci_unregister_dev(hdev);
 		hci_free_dev(hdev);
 	}
 
-	skb_queue_purge(&data->readq);
 	file->private_data = NULL;
 	kfree(data);
 
@@ -365,19 +349,33 @@ static int vhci_release(struct inode *inode, struct file *file)
 static const struct file_operations vhci_fops = {
 	.owner		= THIS_MODULE,
 	.read		= vhci_read,
-	.write_iter	= vhci_write,
+	.aio_write	= vhci_write,
 	.poll		= vhci_poll,
 	.open		= vhci_open,
 	.release	= vhci_release,
 	.llseek		= no_llseek,
 };
 
-static struct miscdevice vhci_miscdev = {
+static struct miscdevice vhci_miscdev= {
 	.name	= "vhci",
 	.fops	= &vhci_fops,
 	.minor	= VHCI_MINOR,
 };
-module_misc_device(vhci_miscdev);
+
+static int __init vhci_init(void)
+{
+	BT_INFO("Virtual HCI driver ver %s", VERSION);
+
+	return misc_register(&vhci_miscdev);
+}
+
+static void __exit vhci_exit(void)
+{
+	misc_deregister(&vhci_miscdev);
+}
+
+module_init(vhci_init);
+module_exit(vhci_exit);
 
 module_param(amp, bool, 0644);
 MODULE_PARM_DESC(amp, "Create AMP controller device");

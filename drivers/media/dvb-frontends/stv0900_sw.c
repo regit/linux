@@ -1485,7 +1485,8 @@ static u32 stv0900_search_srate_coarse(struct dvb_frontend *fe)
 		current_step++;
 		direction *= -1;
 
-		dprintk("lock: I2C_DEMOD_MODE_FIELD =0. Search started. tuner freq=%d agc2=0x%x srate_coarse=%d tmg_cpt=%d\n",
+		dprintk("lock: I2C_DEMOD_MODE_FIELD =0. Search started."
+			" tuner freq=%d agc2=0x%x srate_coarse=%d tmg_cpt=%d\n",
 			tuner_freq, agc2_integr, coarse_srate, timingcpt);
 
 		if ((timingcpt >= 5) &&
@@ -1555,8 +1556,8 @@ static u32 stv0900_search_srate_fine(struct dvb_frontend *fe)
 	}
 
 	symbcomp = 13 * (coarse_srate / 10);
-	coarse_freq = (stv0900_read_reg(intp, CFR2) << 8)
-		      | stv0900_read_reg(intp, CFR1);
+		coarse_freq = (stv0900_read_reg(intp, CFR2) << 8)
+					| stv0900_read_reg(intp, CFR1);
 
 	if (symbcomp < intp->symbol_rate[demod])
 		coarse_srate = 0;
@@ -1732,10 +1733,9 @@ static void stv0900_set_search_standard(struct stv0900_internal *intp,
 		break;
 	case STV0900_SEARCH_DSS:
 		dprintk("Search Standard = DSS\n");
-		break;
 	case STV0900_SEARCH_DVBS2:
-		dprintk("Search Standard = DVBS2\n");
 		break;
+		dprintk("Search Standard = DVBS2\n");
 	case STV0900_AUTO_SEARCH:
 	default:
 		dprintk("Search Standard = AUTO\n");
@@ -2008,7 +2008,7 @@ enum fe_stv0900_signal_type stv0900_algo(struct dvb_frontend *fe)
 			signal_type = STV0900_NODATA;
 			no_signal = stv0900_check_signal_presence(intp, demod);
 
-			intp->result[demod].locked = FALSE;
+				intp->result[demod].locked = FALSE;
 		}
 	}
 

@@ -71,7 +71,6 @@
 #define S5P_FIMV_R2H_CMD_ENC_BUFFER_FUL_RET_V6	16
 #define S5P_FIMV_R2H_CMD_ERR_RET_V6		32
 
-#define S5P_FIMV_MFC_BUS_RESET_CTRL            0x7110
 #define S5P_FIMV_FW_VERSION_V6			0xf000
 
 #define S5P_FIMV_INSTANCE_ID_V6			0xf008
@@ -386,8 +385,7 @@
 			((w) * 144 + 8192 * (h) + 49216 + 1048576)
 #define S5P_FIMV_SCRATCH_BUF_SIZE_VC1_DEC_V6(w, h) \
 						(2096 * ((w) + (h) + 1))
-#define S5P_FIMV_SCRATCH_BUF_SIZE_H263_DEC_V6(w, h)	\
-			S5P_FIMV_SCRATCH_BUF_SIZE_MPEG4_DEC_V6(w, h)
+#define S5P_FIMV_SCRATCH_BUF_SIZE_H263_DEC_V6(w, h)	((w) * 400)
 #define S5P_FIMV_SCRATCH_BUF_SIZE_VP8_DEC_V6(w, h) \
 			((w) * 32 + (h) * 128 + (((w) + 1) / 2) * 64 + 2112)
 #define S5P_FIMV_SCRATCH_BUF_SIZE_H264_ENC_V6(w, h) \

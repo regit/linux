@@ -48,12 +48,7 @@ cflags-y	:= -pipe
 
 # These flags should be implied by an hppa-linux configuration, but they
 # are not in gcc 3.2.
-cflags-y	+= -mno-space-regs
-
-# -mfast-indirect-calls is only relevant for 32-bit kernels.
-ifndef CONFIG_64BIT
-cflags-y	+= -mfast-indirect-calls
-endif
+cflags-y	+= -mno-space-regs -mfast-indirect-calls
 
 # Currently we save and restore fpregs on all kernel entry/interruption paths.
 # If that gets optimized, we might need to disable the use of fpregs in the
@@ -62,7 +57,9 @@ cflags-y	+= -mdisable-fpregs
 
 # Without this, "ld -r" results in .text sections that are too big
 # (> 0x40000) for branches to reach stubs.
-cflags-y	+= -ffunction-sections
+ifndef CONFIG_FUNCTION_TRACER
+  cflags-y	+= -ffunction-sections
+endif
 
 # Use long jumps instead of long branches (needed if your linker fails to
 # link a too big vmlinux executable). Not enabled for building modules.
@@ -82,6 +79,7 @@ head-y			:= arch/parisc/kernel/head.o
 KBUILD_CFLAGS	+= $(cflags-y)
 
 kernel-y			:= mm/ kernel/ math-emu/
+kernel-$(CONFIG_HPUX)		+= hpux/
 
 core-y	+= $(addprefix arch/parisc/, $(kernel-y))
 libs-y	+= arch/parisc/lib/ $(LIBGCC)
@@ -146,7 +144,7 @@ endef
 # we require gcc 3.3 or above to compile the kernel
 archprepare: checkbin
 checkbin:
-	@if test "$(cc-version)" -lt "0303"; then \
+	@if test "$(call cc-version)" -lt "0303"; then \
 		echo -n "Sorry, GCC v3.3 or above is required to build " ; \
 		echo "the kernel." ; \
 		false ; \

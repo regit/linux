@@ -49,12 +49,12 @@ struct kmem_cache *fanotify_perm_event_cachep __read_mostly;
  * enough to fit in "count". Return an error pointer if the count
  * is not large enough.
  *
- * Called with the group->notification_lock held.
+ * Called with the group->notification_mutex held.
  */
 static struct fsnotify_event *get_one_event(struct fsnotify_group *group,
 					    size_t count)
 {
-	assert_spin_locked(&group->notification_lock);
+	BUG_ON(!mutex_is_locked(&group->notification_mutex));
 
 	pr_debug("%s: group=%p count=%zd\n", __func__, group, count);
 
@@ -64,9 +64,9 @@ static struct fsnotify_event *get_one_event(struct fsnotify_group *group,
 	if (FAN_EVENT_METADATA_LEN > count)
 		return ERR_PTR(-EINVAL);
 
-	/* held the notification_lock the whole time, so this is the
+	/* held the notification_mutex the whole time, so this is the
 	 * same event we peeked above */
-	return fsnotify_remove_first_event(group);
+	return fsnotify_remove_notify_event(group);
 }
 
 static int create_fd(struct fsnotify_group *group,
@@ -78,7 +78,7 @@ static int create_fd(struct fsnotify_group *group,
 
 	pr_debug("%s: group=%p event=%p\n", __func__, group, event);
 
-	client_fd = get_unused_fd_flags(group->fanotify_data.f_flags);
+	client_fd = get_unused_fd();
 	if (client_fd < 0)
 		return client_fd;
 
@@ -147,7 +147,7 @@ static struct fanotify_perm_event_info *dequeue_event(
 {
 	struct fanotify_perm_event_info *event, *return_e = NULL;
 
-	spin_lock(&group->notification_lock);
+	spin_lock(&group->fanotify_data.access_lock);
 	list_for_each_entry(event, &group->fanotify_data.access_list,
 			    fae.fse.list) {
 		if (event->fd != fd)
@@ -157,7 +157,7 @@ static struct fanotify_perm_event_info *dequeue_event(
 		return_e = event;
 		break;
 	}
-	spin_unlock(&group->notification_lock);
+	spin_unlock(&group->fanotify_data.access_lock);
 
 	pr_debug("%s: found return_re=%p\n", __func__, return_e);
 
@@ -244,10 +244,10 @@ static unsigned int fanotify_poll(struct file *file, poll_table *wait)
 	int ret = 0;
 
 	poll_wait(file, &group->notification_waitq, wait);
-	spin_lock(&group->notification_lock);
+	mutex_lock(&group->notification_mutex);
 	if (!fsnotify_notify_queue_is_empty(group))
 		ret = POLLIN | POLLRDNORM;
-	spin_unlock(&group->notification_lock);
+	mutex_unlock(&group->notification_mutex);
 
 	return ret;
 }
@@ -259,18 +259,19 @@ static ssize_t fanotify_read(struct file *file, char __user *buf,
 	struct fsnotify_event *kevent;
 	char __user *start;
 	int ret;
-	DEFINE_WAIT_FUNC(wait, woken_wake_function);
+	DEFINE_WAIT(wait);
 
 	start = buf;
 	group = file->private_data;
 
 	pr_debug("%s: group=%p\n", __func__, group);
 
-	add_wait_queue(&group->notification_waitq, &wait);
 	while (1) {
-		spin_lock(&group->notification_lock);
+		prepare_to_wait(&group->notification_waitq, &wait, TASK_INTERRUPTIBLE);
+
+		mutex_lock(&group->notification_mutex);
 		kevent = get_one_event(group, count);
-		spin_unlock(&group->notification_lock);
+		mutex_unlock(&group->notification_mutex);
 
 		if (IS_ERR(kevent)) {
 			ret = PTR_ERR(kevent);
@@ -288,8 +289,7 @@ static ssize_t fanotify_read(struct file *file, char __user *buf,
 
 			if (start != buf)
 				break;
-
-			wait_woken(&wait, TASK_INTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
+			schedule();
 			continue;
 		}
 
@@ -309,17 +309,17 @@ static ssize_t fanotify_read(struct file *file, char __user *buf,
 				wake_up(&group->fanotify_data.access_waitq);
 				break;
 			}
-			spin_lock(&group->notification_lock);
+			spin_lock(&group->fanotify_data.access_lock);
 			list_add_tail(&kevent->list,
 				      &group->fanotify_data.access_list);
-			spin_unlock(&group->notification_lock);
+			spin_unlock(&group->fanotify_data.access_lock);
 #endif
 		}
 		buf += ret;
 		count -= ret;
 	}
-	remove_wait_queue(&group->notification_waitq, &wait);
 
+	finish_wait(&group->notification_waitq, &wait);
 	if (start != buf && ret != -EFAULT)
 		ret = buf - start;
 	return ret;
@@ -358,20 +358,11 @@ static int fanotify_release(struct inode *ignored, struct file *file)
 
 #ifdef CONFIG_FANOTIFY_ACCESS_PERMISSIONS
 	struct fanotify_perm_event_info *event, *next;
-	struct fsnotify_event *fsn_event;
 
-	/*
-	 * Stop new events from arriving in the notification queue. since
-	 * userspace cannot use fanotify fd anymore, no event can enter or
-	 * leave access_list by now either.
-	 */
-	fsnotify_group_stop_queueing(group);
+	spin_lock(&group->fanotify_data.access_lock);
 
-	/*
-	 * Process all permission events on access_list and notification queue
-	 * and simulate reply from userspace.
-	 */
-	spin_lock(&group->notification_lock);
+	atomic_inc(&group->fanotify_data.bypass_perm);
+
 	list_for_each_entry_safe(event, next, &group->fanotify_data.access_list,
 				 fae.fse.list) {
 		pr_debug("%s: found group=%p event=%p\n", __func__, group,
@@ -380,24 +371,8 @@ static int fanotify_release(struct inode *ignored, struct file *file)
 		list_del_init(&event->fae.fse.list);
 		event->response = FAN_ALLOW;
 	}
+	spin_unlock(&group->fanotify_data.access_lock);
 
-	/*
-	 * Destroy all non-permission events. For permission events just
-	 * dequeue them and set the response. They will be freed once the
-	 * response is consumed and fanotify_get_response() returns.
-	 */
-	while (!fsnotify_notify_queue_is_empty(group)) {
-		fsn_event = fsnotify_remove_first_event(group);
-		if (!(fsn_event->mask & FAN_ALL_PERM_EVENTS)) {
-			spin_unlock(&group->notification_lock);
-			fsnotify_destroy_event(group, fsn_event);
-			spin_lock(&group->notification_lock);
-		} else
-			FANOTIFY_PE(fsn_event)->response = FAN_ALLOW;
-	}
-	spin_unlock(&group->notification_lock);
-
-	/* Response for all permission events it set, wakeup waiters */
 	wake_up(&group->fanotify_data.access_waitq);
 #endif
 
@@ -421,10 +396,10 @@ static long fanotify_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 
 	switch (cmd) {
 	case FIONREAD:
-		spin_lock(&group->notification_lock);
+		mutex_lock(&group->notification_mutex);
 		list_for_each_entry(fsn_event, &group->notification_list, list)
 			send_len += FAN_EVENT_METADATA_LEN;
-		spin_unlock(&group->notification_lock);
+		mutex_unlock(&group->notification_mutex);
 		ret = put_user(send_len, (int __user *) p);
 		break;
 	}
@@ -500,26 +475,19 @@ static __u32 fanotify_mark_remove_from_mask(struct fsnotify_mark *fsn_mark,
 					    unsigned int flags,
 					    int *destroy)
 {
-	__u32 oldmask = 0;
+	__u32 oldmask;
 
 	spin_lock(&fsn_mark->lock);
 	if (!(flags & FAN_MARK_IGNORED_MASK)) {
-		__u32 tmask = fsn_mark->mask & ~mask;
-
-		if (flags & FAN_MARK_ONDIR)
-			tmask &= ~FAN_ONDIR;
-
 		oldmask = fsn_mark->mask;
-		fsnotify_set_mark_mask_locked(fsn_mark, tmask);
+		fsnotify_set_mark_mask_locked(fsn_mark, (oldmask & ~mask));
 	} else {
-		__u32 tmask = fsn_mark->ignored_mask & ~mask;
-		if (flags & FAN_MARK_ONDIR)
-			tmask &= ~FAN_ONDIR;
-
-		fsnotify_set_mark_ignored_mask_locked(fsn_mark, tmask);
+		oldmask = fsn_mark->ignored_mask;
+		fsnotify_set_mark_ignored_mask_locked(fsn_mark, (oldmask & ~mask));
 	}
-	*destroy = !(fsn_mark->mask | fsn_mark->ignored_mask);
 	spin_unlock(&fsn_mark->lock);
+
+	*destroy = !(oldmask & ~mask);
 
 	return mask & oldmask;
 }
@@ -542,10 +510,8 @@ static int fanotify_remove_vfsmount_mark(struct fsnotify_group *group,
 	removed = fanotify_mark_remove_from_mask(fsn_mark, mask, flags,
 						 &destroy_mark);
 	if (destroy_mark)
-		fsnotify_detach_mark(fsn_mark);
+		fsnotify_destroy_mark_locked(fsn_mark, group);
 	mutex_unlock(&group->mark_mutex);
-	if (destroy_mark)
-		fsnotify_free_mark(fsn_mark);
 
 	fsnotify_put_mark(fsn_mark);
 	if (removed & real_mount(mnt)->mnt_fsnotify_mask)
@@ -572,10 +538,8 @@ static int fanotify_remove_inode_mark(struct fsnotify_group *group,
 	removed = fanotify_mark_remove_from_mask(fsn_mark, mask, flags,
 						 &destroy_mark);
 	if (destroy_mark)
-		fsnotify_detach_mark(fsn_mark);
+		fsnotify_destroy_mark_locked(fsn_mark, group);
 	mutex_unlock(&group->mark_mutex);
-	if (destroy_mark)
-		fsnotify_free_mark(fsn_mark);
 
 	/* matches the fsnotify_find_inode_mark() */
 	fsnotify_put_mark(fsn_mark);
@@ -593,22 +557,20 @@ static __u32 fanotify_mark_add_to_mask(struct fsnotify_mark *fsn_mark,
 
 	spin_lock(&fsn_mark->lock);
 	if (!(flags & FAN_MARK_IGNORED_MASK)) {
-		__u32 tmask = fsn_mark->mask | mask;
-
-		if (flags & FAN_MARK_ONDIR)
-			tmask |= FAN_ONDIR;
-
 		oldmask = fsn_mark->mask;
-		fsnotify_set_mark_mask_locked(fsn_mark, tmask);
+		fsnotify_set_mark_mask_locked(fsn_mark, (oldmask | mask));
 	} else {
 		__u32 tmask = fsn_mark->ignored_mask | mask;
-		if (flags & FAN_MARK_ONDIR)
-			tmask |= FAN_ONDIR;
-
 		fsnotify_set_mark_ignored_mask_locked(fsn_mark, tmask);
 		if (flags & FAN_MARK_IGNORED_SURV_MODIFY)
 			fsn_mark->flags |= FSNOTIFY_MARK_FLAG_IGNORED_SURV_MODIFY;
 	}
+
+	if (!(flags & FAN_MARK_ONDIR)) {
+		__u32 tmask = fsn_mark->ignored_mask | FAN_ONDIR;
+		fsnotify_set_mark_ignored_mask_locked(fsn_mark, tmask);
+	}
+
 	spin_unlock(&fsn_mark->lock);
 
 	return mask & ~oldmask;
@@ -765,8 +727,10 @@ SYSCALL_DEFINE2(fanotify_init, unsigned int, flags, unsigned int, event_f_flags)
 		event_f_flags |= O_LARGEFILE;
 	group->fanotify_data.f_flags = event_f_flags;
 #ifdef CONFIG_FANOTIFY_ACCESS_PERMISSIONS
+	spin_lock_init(&group->fanotify_data.access_lock);
 	init_waitqueue_head(&group->fanotify_data.access_waitq);
 	INIT_LIST_HEAD(&group->fanotify_data.access_list);
+	atomic_set(&group->fanotify_data.bypass_perm, 0);
 #endif
 	switch (flags & FAN_ALL_CLASS_BITS) {
 	case FAN_CLASS_NOTIF:

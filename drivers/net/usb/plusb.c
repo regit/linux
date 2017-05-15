@@ -38,7 +38,7 @@
  * HEADS UP:  this handshaking isn't all that robust.  This driver
  * gets confused easily if you unplug one end of the cable then
  * try to connect it again; you'll need to restart both ends. The
- * "naplink" software (used by some PlayStation/2 developers) does
+ * "naplink" software (used by some PlayStation/2 deveopers) does
  * the handshaking much better!   Also, sometimes this hardware
  * seems to get wedged under load.  Prolific docs are weak, and
  * don't identify differences between PL2301 and PL2302, much less
@@ -133,11 +133,6 @@ static const struct usb_device_id	products [] = {
 	.driver_info =  (unsigned long) &prolific_info,
 }, {
 	USB_DEVICE(0x050d, 0x258a),     /* Belkin F5U258/F5U279 (PL-25A1) */
-	.driver_info =  (unsigned long) &prolific_info,
-}, {
-	USB_DEVICE(0x3923, 0x7825),     /* National Instruments USB
-					 * Host-to-Host Cable
-					 */
 	.driver_info =  (unsigned long) &prolific_info,
 },
 

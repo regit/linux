@@ -46,7 +46,7 @@
 
 #include <asm/io.h>
 #include <asm/byteorder.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define AXNET_CMD	0x00
 #define AXNET_DATAPORT	0x10	/* NatSemi-defined port window offset. */
@@ -108,7 +108,7 @@ static u32 axnet_msg_enable;
 
 /*====================================================================*/
 
-struct axnet_dev {
+typedef struct axnet_dev_t {
 	struct pcmcia_device	*p_dev;
 	caddr_t	base;
 	struct timer_list	watchdog;
@@ -118,9 +118,9 @@ struct axnet_dev {
 	int	phy_id;
 	int	flags;
 	int	active_low;
-};
+} axnet_dev_t;
 
-static inline struct axnet_dev *PRIV(struct net_device *dev)
+static inline axnet_dev_t *PRIV(struct net_device *dev)
 {
 	void *p = (char *)netdev_priv(dev) + sizeof(struct ei_device);
 	return p;
@@ -134,19 +134,20 @@ static const struct net_device_ops axnet_netdev_ops = {
 	.ndo_tx_timeout		= axnet_tx_timeout,
 	.ndo_get_stats		= get_stats,
 	.ndo_set_rx_mode	= set_multicast_list,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
 static int axnet_probe(struct pcmcia_device *link)
 {
-    struct axnet_dev *info;
+    axnet_dev_t *info;
     struct net_device *dev;
     struct ei_device *ei_local;
 
     dev_dbg(&link->dev, "axnet_attach()\n");
 
-    dev = alloc_etherdev(sizeof(struct ei_device) + sizeof(struct axnet_dev));
+    dev = alloc_etherdev(sizeof(struct ei_device) + sizeof(axnet_dev_t));
     if (!dev)
 	return -ENOMEM;
 
@@ -273,7 +274,7 @@ static int axnet_configcheck(struct pcmcia_device *p_dev, void *priv_data)
 static int axnet_config(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
-    struct axnet_dev *info = PRIV(dev);
+    axnet_dev_t *info = PRIV(dev);
     int i, j, j2, ret;
 
     dev_dbg(&link->dev, "axnet_config(0x%p)\n", link);
@@ -388,7 +389,7 @@ static int axnet_suspend(struct pcmcia_device *link)
 static int axnet_resume(struct pcmcia_device *link)
 {
 	struct net_device *dev = link->priv;
-	struct axnet_dev *info = PRIV(dev);
+	axnet_dev_t *info = PRIV(dev);
 
 	if (link->open) {
 		if (info->active_low == 1)
@@ -466,7 +467,7 @@ static void mdio_write(unsigned int addr, int phy_id, int loc, int value)
 static int axnet_open(struct net_device *dev)
 {
     int ret;
-    struct axnet_dev *info = PRIV(dev);
+    axnet_dev_t *info = PRIV(dev);
     struct pcmcia_device *link = info->p_dev;
     unsigned int nic_base = dev->base_addr;
     
@@ -483,8 +484,11 @@ static int axnet_open(struct net_device *dev)
     link->open++;
 
     info->link_status = 0x00;
-    setup_timer(&info->watchdog, ei_watchdog, (u_long)dev);
-    mod_timer(&info->watchdog, jiffies + HZ);
+    init_timer(&info->watchdog);
+    info->watchdog.function = ei_watchdog;
+    info->watchdog.data = (u_long)dev;
+    info->watchdog.expires = jiffies + HZ;
+    add_timer(&info->watchdog);
 
     return ax_open(dev);
 } /* axnet_open */
@@ -493,7 +497,7 @@ static int axnet_open(struct net_device *dev)
 
 static int axnet_close(struct net_device *dev)
 {
-    struct axnet_dev *info = PRIV(dev);
+    axnet_dev_t *info = PRIV(dev);
     struct pcmcia_device *link = info->p_dev;
 
     dev_dbg(&link->dev, "axnet_close('%s')\n", dev->name);
@@ -550,7 +554,7 @@ static irqreturn_t ei_irq_wrapper(int irq, void *dev_id)
 static void ei_watchdog(u_long arg)
 {
     struct net_device *dev = (struct net_device *)(arg);
-    struct axnet_dev *info = PRIV(dev);
+    axnet_dev_t *info = PRIV(dev);
     unsigned int nic_base = dev->base_addr;
     unsigned int mii_addr = nic_base + AXNET_MII_EEP;
     u_short link;
@@ -606,7 +610,7 @@ reschedule:
 
 static int axnet_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
-    struct axnet_dev *info = PRIV(dev);
+    axnet_dev_t *info = PRIV(dev);
     struct mii_ioctl_data *data = if_mii(rq);
     unsigned int mii_addr = dev->base_addr + AXNET_MII_EEP;
     switch (cmd) {
@@ -1040,7 +1044,7 @@ static netdev_tx_t axnet_start_xmit(struct sk_buff *skb,
 	{
 		ei_local->txing = 1;
 		NS8390_trigger_send(dev, send_length, output_page);
-		netif_trans_update(dev);
+		dev->trans_start = jiffies;
 		if (output_page == ei_local->tx_start_page) 
 		{
 			ei_local->tx1 = -1;
@@ -1269,7 +1273,7 @@ static void ei_tx_intr(struct net_device *dev)
 		{
 			ei_local->txing = 1;
 			NS8390_trigger_send(dev, ei_local->tx2, ei_local->tx_start_page + 6);
-			netif_trans_update(dev);
+			dev->trans_start = jiffies;
 			ei_local->tx2 = -1,
 			ei_local->lasttx = 2;
 		}
@@ -1286,7 +1290,7 @@ static void ei_tx_intr(struct net_device *dev)
 		{
 			ei_local->txing = 1;
 			NS8390_trigger_send(dev, ei_local->tx1, ei_local->tx_start_page);
-			netif_trans_update(dev);
+			dev->trans_start = jiffies;
 			ei_local->tx1 = -1;
 			ei_local->lasttx = 1;
 		}
@@ -1448,7 +1452,7 @@ static void ei_receive(struct net_device *dev)
 
 static void ei_rx_overrun(struct net_device *dev)
 {
-	struct axnet_dev *info = PRIV(dev);
+	axnet_dev_t *info = PRIV(dev);
 	long e8390_base = dev->base_addr;
 	unsigned char was_txing, must_resend = 0;
 	struct ei_device *ei_local = netdev_priv(dev);
@@ -1620,7 +1624,7 @@ static void set_multicast_list(struct net_device *dev)
 
 static void AX88190_init(struct net_device *dev, int startp)
 {
-	struct axnet_dev *info = PRIV(dev);
+	axnet_dev_t *info = PRIV(dev);
 	long e8390_base = dev->base_addr;
 	struct ei_device *ei_local = netdev_priv(dev);
 	int i;

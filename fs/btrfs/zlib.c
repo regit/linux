@@ -33,7 +33,8 @@
 #include "compression.h"
 
 struct workspace {
-	z_stream strm;
+	z_stream inf_strm;
+	z_stream def_strm;
 	char *buf;
 	struct list_head list;
 };
@@ -42,7 +43,8 @@ static void zlib_free_workspace(struct list_head *ws)
 {
 	struct workspace *workspace = list_entry(ws, struct workspace, list);
 
-	vfree(workspace->strm.workspace);
+	vfree(workspace->def_strm.workspace);
+	vfree(workspace->inf_strm.workspace);
 	kfree(workspace->buf);
 	kfree(workspace);
 }
@@ -50,17 +52,17 @@ static void zlib_free_workspace(struct list_head *ws)
 static struct list_head *zlib_alloc_workspace(void)
 {
 	struct workspace *workspace;
-	int workspacesize;
 
 	workspace = kzalloc(sizeof(*workspace), GFP_NOFS);
 	if (!workspace)
 		return ERR_PTR(-ENOMEM);
 
-	workspacesize = max(zlib_deflate_workspacesize(MAX_WBITS, MAX_MEM_LEVEL),
-			zlib_inflate_workspacesize());
-	workspace->strm.workspace = vmalloc(workspacesize);
-	workspace->buf = kmalloc(PAGE_SIZE, GFP_NOFS);
-	if (!workspace->strm.workspace || !workspace->buf)
+	workspace->def_strm.workspace = vmalloc(zlib_deflate_workspacesize(
+						MAX_WBITS, MAX_MEM_LEVEL));
+	workspace->inf_strm.workspace = vmalloc(zlib_inflate_workspacesize());
+	workspace->buf = kmalloc(PAGE_CACHE_SIZE, GFP_NOFS);
+	if (!workspace->def_strm.workspace ||
+	    !workspace->inf_strm.workspace || !workspace->buf)
 		goto fail;
 
 	INIT_LIST_HEAD(&workspace->list);
@@ -94,16 +96,16 @@ static int zlib_compress_pages(struct list_head *ws,
 	*total_out = 0;
 	*total_in = 0;
 
-	if (Z_OK != zlib_deflateInit(&workspace->strm, 3)) {
-		pr_warn("BTRFS: deflateInit failed\n");
+	if (Z_OK != zlib_deflateInit(&workspace->def_strm, 3)) {
+		printk(KERN_WARNING "BTRFS: deflateInit failed\n");
 		ret = -EIO;
 		goto out;
 	}
 
-	workspace->strm.total_in = 0;
-	workspace->strm.total_out = 0;
+	workspace->def_strm.total_in = 0;
+	workspace->def_strm.total_out = 0;
 
-	in_page = find_get_page(mapping, start >> PAGE_SHIFT);
+	in_page = find_get_page(mapping, start >> PAGE_CACHE_SHIFT);
 	data_in = kmap(in_page);
 
 	out_page = alloc_page(GFP_NOFS | __GFP_HIGHMEM);
@@ -115,25 +117,25 @@ static int zlib_compress_pages(struct list_head *ws,
 	pages[0] = out_page;
 	nr_pages = 1;
 
-	workspace->strm.next_in = data_in;
-	workspace->strm.next_out = cpage_out;
-	workspace->strm.avail_out = PAGE_SIZE;
-	workspace->strm.avail_in = min(len, PAGE_SIZE);
+	workspace->def_strm.next_in = data_in;
+	workspace->def_strm.next_out = cpage_out;
+	workspace->def_strm.avail_out = PAGE_CACHE_SIZE;
+	workspace->def_strm.avail_in = min(len, PAGE_CACHE_SIZE);
 
-	while (workspace->strm.total_in < len) {
-		ret = zlib_deflate(&workspace->strm, Z_SYNC_FLUSH);
+	while (workspace->def_strm.total_in < len) {
+		ret = zlib_deflate(&workspace->def_strm, Z_SYNC_FLUSH);
 		if (ret != Z_OK) {
-			pr_debug("BTRFS: deflate in loop returned %d\n",
+			printk(KERN_DEBUG "BTRFS: deflate in loop returned %d\n",
 			       ret);
-			zlib_deflateEnd(&workspace->strm);
+			zlib_deflateEnd(&workspace->def_strm);
 			ret = -EIO;
 			goto out;
 		}
 
 		/* we're making it bigger, give up */
-		if (workspace->strm.total_in > 8192 &&
-		    workspace->strm.total_in <
-		    workspace->strm.total_out) {
+		if (workspace->def_strm.total_in > 8192 &&
+		    workspace->def_strm.total_in <
+		    workspace->def_strm.total_out) {
 			ret = -E2BIG;
 			goto out;
 		}
@@ -141,7 +143,7 @@ static int zlib_compress_pages(struct list_head *ws,
 		 * before the total_in so we will pull in a new page for
 		 * the stream end if required
 		 */
-		if (workspace->strm.avail_out == 0) {
+		if (workspace->def_strm.avail_out == 0) {
 			kunmap(out_page);
 			if (nr_pages == nr_dest_pages) {
 				out_page = NULL;
@@ -156,48 +158,48 @@ static int zlib_compress_pages(struct list_head *ws,
 			cpage_out = kmap(out_page);
 			pages[nr_pages] = out_page;
 			nr_pages++;
-			workspace->strm.avail_out = PAGE_SIZE;
-			workspace->strm.next_out = cpage_out;
+			workspace->def_strm.avail_out = PAGE_CACHE_SIZE;
+			workspace->def_strm.next_out = cpage_out;
 		}
 		/* we're all done */
-		if (workspace->strm.total_in >= len)
+		if (workspace->def_strm.total_in >= len)
 			break;
 
 		/* we've read in a full page, get a new one */
-		if (workspace->strm.avail_in == 0) {
-			if (workspace->strm.total_out > max_out)
+		if (workspace->def_strm.avail_in == 0) {
+			if (workspace->def_strm.total_out > max_out)
 				break;
 
-			bytes_left = len - workspace->strm.total_in;
+			bytes_left = len - workspace->def_strm.total_in;
 			kunmap(in_page);
-			put_page(in_page);
+			page_cache_release(in_page);
 
-			start += PAGE_SIZE;
+			start += PAGE_CACHE_SIZE;
 			in_page = find_get_page(mapping,
-						start >> PAGE_SHIFT);
+						start >> PAGE_CACHE_SHIFT);
 			data_in = kmap(in_page);
-			workspace->strm.avail_in = min(bytes_left,
-							   PAGE_SIZE);
-			workspace->strm.next_in = data_in;
+			workspace->def_strm.avail_in = min(bytes_left,
+							   PAGE_CACHE_SIZE);
+			workspace->def_strm.next_in = data_in;
 		}
 	}
-	workspace->strm.avail_in = 0;
-	ret = zlib_deflate(&workspace->strm, Z_FINISH);
-	zlib_deflateEnd(&workspace->strm);
+	workspace->def_strm.avail_in = 0;
+	ret = zlib_deflate(&workspace->def_strm, Z_FINISH);
+	zlib_deflateEnd(&workspace->def_strm);
 
 	if (ret != Z_STREAM_END) {
 		ret = -EIO;
 		goto out;
 	}
 
-	if (workspace->strm.total_out >= workspace->strm.total_in) {
+	if (workspace->def_strm.total_out >= workspace->def_strm.total_in) {
 		ret = -E2BIG;
 		goto out;
 	}
 
 	ret = 0;
-	*total_out = workspace->strm.total_out;
-	*total_in = workspace->strm.total_in;
+	*total_out = workspace->def_strm.total_out;
+	*total_in = workspace->def_strm.total_in;
 out:
 	*out_pages = nr_pages;
 	if (out_page)
@@ -205,14 +207,15 @@ out:
 
 	if (in_page) {
 		kunmap(in_page);
-		put_page(in_page);
+		page_cache_release(in_page);
 	}
 	return ret;
 }
 
-static int zlib_decompress_bio(struct list_head *ws, struct page **pages_in,
+static int zlib_decompress_biovec(struct list_head *ws, struct page **pages_in,
 				  u64 disk_start,
-				  struct bio *orig_bio,
+				  struct bio_vec *bvec,
+				  int vcnt,
 				  size_t srclen)
 {
 	struct workspace *workspace = list_entry(ws, struct workspace, list);
@@ -221,17 +224,21 @@ static int zlib_decompress_bio(struct list_head *ws, struct page **pages_in,
 	char *data_in;
 	size_t total_out = 0;
 	unsigned long page_in_index = 0;
-	unsigned long total_pages_in = DIV_ROUND_UP(srclen, PAGE_SIZE);
+	unsigned long page_out_index = 0;
+	unsigned long total_pages_in = (srclen + PAGE_CACHE_SIZE - 1) /
+					PAGE_CACHE_SIZE;
 	unsigned long buf_start;
+	unsigned long pg_offset;
 
 	data_in = kmap(pages_in[page_in_index]);
-	workspace->strm.next_in = data_in;
-	workspace->strm.avail_in = min_t(size_t, srclen, PAGE_SIZE);
-	workspace->strm.total_in = 0;
+	workspace->inf_strm.next_in = data_in;
+	workspace->inf_strm.avail_in = min_t(size_t, srclen, PAGE_CACHE_SIZE);
+	workspace->inf_strm.total_in = 0;
 
-	workspace->strm.total_out = 0;
-	workspace->strm.next_out = workspace->buf;
-	workspace->strm.avail_out = PAGE_SIZE;
+	workspace->inf_strm.total_out = 0;
+	workspace->inf_strm.next_out = workspace->buf;
+	workspace->inf_strm.avail_out = PAGE_CACHE_SIZE;
+	pg_offset = 0;
 
 	/* If it's deflate, and it's got no preset dictionary, then
 	   we can tell zlib to skip the adler32 check. */
@@ -240,22 +247,21 @@ static int zlib_decompress_bio(struct list_head *ws, struct page **pages_in,
 	    !(((data_in[0]<<8) + data_in[1]) % 31)) {
 
 		wbits = -((data_in[0] >> 4) + 8);
-		workspace->strm.next_in += 2;
-		workspace->strm.avail_in -= 2;
+		workspace->inf_strm.next_in += 2;
+		workspace->inf_strm.avail_in -= 2;
 	}
 
-	if (Z_OK != zlib_inflateInit2(&workspace->strm, wbits)) {
-		pr_warn("BTRFS: inflateInit failed\n");
-		kunmap(pages_in[page_in_index]);
+	if (Z_OK != zlib_inflateInit2(&workspace->inf_strm, wbits)) {
+		printk(KERN_WARNING "BTRFS: inflateInit failed\n");
 		return -EIO;
 	}
-	while (workspace->strm.total_in < srclen) {
-		ret = zlib_inflate(&workspace->strm, Z_NO_FLUSH);
+	while (workspace->inf_strm.total_in < srclen) {
+		ret = zlib_inflate(&workspace->inf_strm, Z_NO_FLUSH);
 		if (ret != Z_OK && ret != Z_STREAM_END)
 			break;
 
 		buf_start = total_out;
-		total_out = workspace->strm.total_out;
+		total_out = workspace->inf_strm.total_out;
 
 		/* we didn't make progress in this inflate call, we're done */
 		if (buf_start == total_out)
@@ -263,16 +269,17 @@ static int zlib_decompress_bio(struct list_head *ws, struct page **pages_in,
 
 		ret2 = btrfs_decompress_buf2page(workspace->buf, buf_start,
 						 total_out, disk_start,
-						 orig_bio);
+						 bvec, vcnt,
+						 &page_out_index, &pg_offset);
 		if (ret2 == 0) {
 			ret = 0;
 			goto done;
 		}
 
-		workspace->strm.next_out = workspace->buf;
-		workspace->strm.avail_out = PAGE_SIZE;
+		workspace->inf_strm.next_out = workspace->buf;
+		workspace->inf_strm.avail_out = PAGE_CACHE_SIZE;
 
-		if (workspace->strm.avail_in == 0) {
+		if (workspace->inf_strm.avail_in == 0) {
 			unsigned long tmp;
 			kunmap(pages_in[page_in_index]);
 			page_in_index++;
@@ -281,10 +288,10 @@ static int zlib_decompress_bio(struct list_head *ws, struct page **pages_in,
 				break;
 			}
 			data_in = kmap(pages_in[page_in_index]);
-			workspace->strm.next_in = data_in;
-			tmp = srclen - workspace->strm.total_in;
-			workspace->strm.avail_in = min(tmp,
-							   PAGE_SIZE);
+			workspace->inf_strm.next_in = data_in;
+			tmp = srclen - workspace->inf_strm.total_in;
+			workspace->inf_strm.avail_in = min(tmp,
+							   PAGE_CACHE_SIZE);
 		}
 	}
 	if (ret != Z_STREAM_END)
@@ -292,11 +299,9 @@ static int zlib_decompress_bio(struct list_head *ws, struct page **pages_in,
 	else
 		ret = 0;
 done:
-	zlib_inflateEnd(&workspace->strm);
+	zlib_inflateEnd(&workspace->inf_strm);
 	if (data_in)
 		kunmap(pages_in[page_in_index]);
-	if (!ret)
-		zero_fill_bio(orig_bio);
 	return ret;
 }
 
@@ -308,21 +313,17 @@ static int zlib_decompress(struct list_head *ws, unsigned char *data_in,
 	struct workspace *workspace = list_entry(ws, struct workspace, list);
 	int ret = 0;
 	int wbits = MAX_WBITS;
-	unsigned long bytes_left;
+	unsigned long bytes_left = destlen;
 	unsigned long total_out = 0;
-	unsigned long pg_offset = 0;
 	char *kaddr;
 
-	destlen = min_t(unsigned long, destlen, PAGE_SIZE);
-	bytes_left = destlen;
+	workspace->inf_strm.next_in = data_in;
+	workspace->inf_strm.avail_in = srclen;
+	workspace->inf_strm.total_in = 0;
 
-	workspace->strm.next_in = data_in;
-	workspace->strm.avail_in = srclen;
-	workspace->strm.total_in = 0;
-
-	workspace->strm.next_out = workspace->buf;
-	workspace->strm.avail_out = PAGE_SIZE;
-	workspace->strm.total_out = 0;
+	workspace->inf_strm.next_out = workspace->buf;
+	workspace->inf_strm.avail_out = PAGE_CACHE_SIZE;
+	workspace->inf_strm.total_out = 0;
 	/* If it's deflate, and it's got no preset dictionary, then
 	   we can tell zlib to skip the adler32 check. */
 	if (srclen > 2 && !(data_in[1] & PRESET_DICT) &&
@@ -330,12 +331,12 @@ static int zlib_decompress(struct list_head *ws, unsigned char *data_in,
 	    !(((data_in[0]<<8) + data_in[1]) % 31)) {
 
 		wbits = -((data_in[0] >> 4) + 8);
-		workspace->strm.next_in += 2;
-		workspace->strm.avail_in -= 2;
+		workspace->inf_strm.next_in += 2;
+		workspace->inf_strm.avail_in -= 2;
 	}
 
-	if (Z_OK != zlib_inflateInit2(&workspace->strm, wbits)) {
-		pr_warn("BTRFS: inflateInit failed\n");
+	if (Z_OK != zlib_inflateInit2(&workspace->inf_strm, wbits)) {
+		printk(KERN_WARNING "BTRFS: inflateInit failed\n");
 		return -EIO;
 	}
 
@@ -343,13 +344,14 @@ static int zlib_decompress(struct list_head *ws, unsigned char *data_in,
 		unsigned long buf_start;
 		unsigned long buf_offset;
 		unsigned long bytes;
+		unsigned long pg_offset = 0;
 
-		ret = zlib_inflate(&workspace->strm, Z_NO_FLUSH);
+		ret = zlib_inflate(&workspace->inf_strm, Z_NO_FLUSH);
 		if (ret != Z_OK && ret != Z_STREAM_END)
 			break;
 
 		buf_start = total_out;
-		total_out = workspace->strm.total_out;
+		total_out = workspace->inf_strm.total_out;
 
 		if (total_out == buf_start) {
 			ret = -EIO;
@@ -364,8 +366,8 @@ static int zlib_decompress(struct list_head *ws, unsigned char *data_in,
 		else
 			buf_offset = 0;
 
-		bytes = min(PAGE_SIZE - pg_offset,
-			    PAGE_SIZE - buf_offset);
+		bytes = min(PAGE_CACHE_SIZE - pg_offset,
+			    PAGE_CACHE_SIZE - buf_offset);
 		bytes = min(bytes, bytes_left);
 
 		kaddr = kmap_atomic(dest_page);
@@ -375,8 +377,8 @@ static int zlib_decompress(struct list_head *ws, unsigned char *data_in,
 		pg_offset += bytes;
 		bytes_left -= bytes;
 next:
-		workspace->strm.next_out = workspace->buf;
-		workspace->strm.avail_out = PAGE_SIZE;
+		workspace->inf_strm.next_out = workspace->buf;
+		workspace->inf_strm.avail_out = PAGE_CACHE_SIZE;
 	}
 
 	if (ret != Z_STREAM_END && bytes_left != 0)
@@ -384,25 +386,14 @@ next:
 	else
 		ret = 0;
 
-	zlib_inflateEnd(&workspace->strm);
-
-	/*
-	 * this should only happen if zlib returned fewer bytes than we
-	 * expected.  btrfs_get_block is responsible for zeroing from the
-	 * end of the inline extent (destlen) to the end of the page
-	 */
-	if (pg_offset < destlen) {
-		kaddr = kmap_atomic(dest_page);
-		memset(kaddr + pg_offset, 0, destlen - pg_offset);
-		kunmap_atomic(kaddr);
-	}
+	zlib_inflateEnd(&workspace->inf_strm);
 	return ret;
 }
 
-const struct btrfs_compress_op btrfs_zlib_compress = {
+struct btrfs_compress_op btrfs_zlib_compress = {
 	.alloc_workspace	= zlib_alloc_workspace,
 	.free_workspace		= zlib_free_workspace,
 	.compress_pages		= zlib_compress_pages,
-	.decompress_bio		= zlib_decompress_bio,
+	.decompress_biovec	= zlib_decompress_biovec,
 	.decompress		= zlib_decompress,
 };

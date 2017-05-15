@@ -904,7 +904,7 @@ static int ene_set_tx_carrier(struct rc_dev *rdev, u32 carrier)
 
 		dbg("TX: out of range %d-%d kHz carrier",
 			2000 / ENE_CIRMOD_PRD_MIN, 2000 / ENE_CIRMOD_PRD_MAX);
-		return -EINVAL;
+		return -1;
 	}
 
 	dev->tx_period = period;
@@ -979,7 +979,7 @@ static int ene_transmit(struct rc_dev *rdev, unsigned *buf, unsigned n)
 	dev->tx_reg = 0;
 	dev->tx_done = 0;
 	dev->tx_sample = 0;
-	dev->tx_sample_pulse = false;
+	dev->tx_sample_pulse = 0;
 
 	dbg("TX: %d samples", dev->tx_len);
 
@@ -1059,7 +1059,7 @@ static int ene_probe(struct pnp_dev *pnp_dev, const struct pnp_device_id *id)
 		learning_mode_force = false;
 
 	rdev->driver_type = RC_DRIVER_IR_RAW;
-	rdev->allowed_protocols = RC_BIT_ALL;
+	rc_set_allowed_protocols(rdev, RC_BIT_ALL);
 	rdev->priv = dev;
 	rdev->open = ene_open;
 	rdev->close = ene_close;
@@ -1195,6 +1195,16 @@ static struct pnp_driver ene_driver = {
 	.shutdown = ene_shutdown,
 };
 
+static int __init ene_init(void)
+{
+	return pnp_register_driver(&ene_driver);
+}
+
+static void ene_exit(void)
+{
+	pnp_unregister_driver(&ene_driver);
+}
+
 module_param(sample_period, int, S_IRUGO);
 MODULE_PARM_DESC(sample_period, "Hardware sample period (50 us default)");
 
@@ -1210,9 +1220,11 @@ MODULE_PARM_DESC(txsim,
 
 MODULE_DEVICE_TABLE(pnp, ene_ids);
 MODULE_DESCRIPTION
-	("Infrared input driver for KB3926B/C/D/E/F (aka ENE0100/ENE0200/ENE0201/ENE0202) CIR port");
+	("Infrared input driver for KB3926B/C/D/E/F "
+	"(aka ENE0100/ENE0200/ENE0201/ENE0202) CIR port");
 
 MODULE_AUTHOR("Maxim Levitsky");
 MODULE_LICENSE("GPL");
 
-module_pnp_driver(ene_driver);
+module_init(ene_init);
+module_exit(ene_exit);

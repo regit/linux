@@ -35,43 +35,24 @@ enum magn_3d_channel {
 	CHANNEL_SCAN_INDEX_X,
 	CHANNEL_SCAN_INDEX_Y,
 	CHANNEL_SCAN_INDEX_Z,
-	CHANNEL_SCAN_INDEX_NORTH_MAGN_TILT_COMP,
-	CHANNEL_SCAN_INDEX_NORTH_TRUE_TILT_COMP,
-	CHANNEL_SCAN_INDEX_NORTH_MAGN,
-	CHANNEL_SCAN_INDEX_NORTH_TRUE,
 	MAGN_3D_CHANNEL_MAX,
 };
 
-struct common_attributes {
+struct magn_3d_state {
+	struct hid_sensor_hub_callbacks callbacks;
+	struct hid_sensor_common common_attributes;
+	struct hid_sensor_hub_attribute_info magn[MAGN_3D_CHANNEL_MAX];
+	u32 magn_val[MAGN_3D_CHANNEL_MAX];
 	int scale_pre_decml;
 	int scale_post_decml;
 	int scale_precision;
 	int value_offset;
 };
 
-struct magn_3d_state {
-	struct hid_sensor_hub_callbacks callbacks;
-	struct hid_sensor_common magn_flux_attributes;
-	struct hid_sensor_common rot_attributes;
-	struct hid_sensor_hub_attribute_info magn[MAGN_3D_CHANNEL_MAX];
-
-	/* dynamically sized array to hold sensor values */
-	u32 *iio_vals;
-	/* array of pointers to sensor value */
-	u32 *magn_val_addr[MAGN_3D_CHANNEL_MAX];
-
-	struct common_attributes magn_flux_attr;
-	struct common_attributes rot_attr;
-};
-
 static const u32 magn_3d_addresses[MAGN_3D_CHANNEL_MAX] = {
 	HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_X_AXIS,
 	HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_Y_AXIS,
-	HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_Z_AXIS,
-	HID_USAGE_SENSOR_ORIENT_COMP_MAGN_NORTH,
-	HID_USAGE_SENSOR_ORIENT_COMP_TRUE_NORTH,
-	HID_USAGE_SENSOR_ORIENT_MAGN_NORTH,
-	HID_USAGE_SENSOR_ORIENT_TRUE_NORTH,
+	HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_Z_AXIS
 };
 
 /* Channel definitions */
@@ -85,6 +66,7 @@ static const struct iio_chan_spec magn_3d_channels[] = {
 		BIT(IIO_CHAN_INFO_SCALE) |
 		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
 		BIT(IIO_CHAN_INFO_HYSTERESIS),
+		.scan_index = CHANNEL_SCAN_INDEX_X,
 	}, {
 		.type = IIO_MAGN,
 		.modified = 1,
@@ -94,6 +76,7 @@ static const struct iio_chan_spec magn_3d_channels[] = {
 		BIT(IIO_CHAN_INFO_SCALE) |
 		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
 		BIT(IIO_CHAN_INFO_HYSTERESIS),
+		.scan_index = CHANNEL_SCAN_INDEX_Y,
 	}, {
 		.type = IIO_MAGN,
 		.modified = 1,
@@ -103,42 +86,7 @@ static const struct iio_chan_spec magn_3d_channels[] = {
 		BIT(IIO_CHAN_INFO_SCALE) |
 		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
 		BIT(IIO_CHAN_INFO_HYSTERESIS),
-	}, {
-		.type = IIO_ROT,
-		.modified = 1,
-		.channel2 = IIO_MOD_NORTH_MAGN_TILT_COMP,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
-		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_OFFSET) |
-		BIT(IIO_CHAN_INFO_SCALE) |
-		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
-		BIT(IIO_CHAN_INFO_HYSTERESIS),
-	}, {
-		.type = IIO_ROT,
-		.modified = 1,
-		.channel2 = IIO_MOD_NORTH_TRUE_TILT_COMP,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
-		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_OFFSET) |
-		BIT(IIO_CHAN_INFO_SCALE) |
-		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
-		BIT(IIO_CHAN_INFO_HYSTERESIS),
-	}, {
-		.type = IIO_ROT,
-		.modified = 1,
-		.channel2 = IIO_MOD_NORTH_MAGN,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
-		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_OFFSET) |
-		BIT(IIO_CHAN_INFO_SCALE) |
-		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
-		BIT(IIO_CHAN_INFO_HYSTERESIS),
-	}, {
-		.type = IIO_ROT,
-		.modified = 1,
-		.channel2 = IIO_MOD_NORTH_TRUE,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
-		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_OFFSET) |
-		BIT(IIO_CHAN_INFO_SCALE) |
-		BIT(IIO_CHAN_INFO_SAMP_FREQ) |
-		BIT(IIO_CHAN_INFO_HYSTERESIS),
+		.scan_index = CHANNEL_SCAN_INDEX_Z,
 	}
 };
 
@@ -163,79 +111,53 @@ static int magn_3d_read_raw(struct iio_dev *indio_dev,
 	int report_id = -1;
 	u32 address;
 	int ret_type;
+	s32 poll_value;
 
 	*val = 0;
 	*val2 = 0;
 	switch (mask) {
 	case 0:
-		hid_sensor_power_state(&magn_state->magn_flux_attributes, true);
+		poll_value = hid_sensor_read_poll_value(
+					&magn_state->common_attributes);
+		if (poll_value < 0)
+				return -EINVAL;
+
+		hid_sensor_power_state(&magn_state->common_attributes, true);
+		msleep_interruptible(poll_value * 2);
+
 		report_id =
-			magn_state->magn[chan->address].report_id;
-		address = magn_3d_addresses[chan->address];
+			magn_state->magn[chan->scan_index].report_id;
+		address = magn_3d_addresses[chan->scan_index];
 		if (report_id >= 0)
 			*val = sensor_hub_input_attr_get_raw_value(
-				magn_state->magn_flux_attributes.hsdev,
+				magn_state->common_attributes.hsdev,
 				HID_USAGE_SENSOR_COMPASS_3D, address,
-				report_id,
-				SENSOR_HUB_SYNC);
+				report_id);
 		else {
 			*val = 0;
-			hid_sensor_power_state(
-				&magn_state->magn_flux_attributes,
-				false);
+			hid_sensor_power_state(&magn_state->common_attributes,
+						false);
 			return -EINVAL;
 		}
-		hid_sensor_power_state(&magn_state->magn_flux_attributes,
-					false);
+		hid_sensor_power_state(&magn_state->common_attributes, false);
 		ret_type = IIO_VAL_INT;
 		break;
 	case IIO_CHAN_INFO_SCALE:
-		switch (chan->type) {
-		case IIO_MAGN:
-			*val = magn_state->magn_flux_attr.scale_pre_decml;
-			*val2 = magn_state->magn_flux_attr.scale_post_decml;
-			ret_type = magn_state->magn_flux_attr.scale_precision;
-			break;
-		case IIO_ROT:
-			*val = magn_state->rot_attr.scale_pre_decml;
-			*val2 = magn_state->rot_attr.scale_post_decml;
-			ret_type = magn_state->rot_attr.scale_precision;
-			break;
-		default:
-			ret_type = -EINVAL;
-		}
+		*val = magn_state->scale_pre_decml;
+		*val2 = magn_state->scale_post_decml;
+		ret_type = magn_state->scale_precision;
 		break;
 	case IIO_CHAN_INFO_OFFSET:
-		switch (chan->type) {
-		case IIO_MAGN:
-			*val = magn_state->magn_flux_attr.value_offset;
-			ret_type = IIO_VAL_INT;
-			break;
-		case IIO_ROT:
-			*val = magn_state->rot_attr.value_offset;
-			ret_type = IIO_VAL_INT;
-			break;
-		default:
-			ret_type = -EINVAL;
-		}
+		*val = magn_state->value_offset;
+		ret_type = IIO_VAL_INT;
 		break;
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		ret_type = hid_sensor_read_samp_freq_value(
-			&magn_state->magn_flux_attributes, val, val2);
+			&magn_state->common_attributes, val, val2);
 		break;
 	case IIO_CHAN_INFO_HYSTERESIS:
-		switch (chan->type) {
-		case IIO_MAGN:
-			ret_type = hid_sensor_read_raw_hyst_value(
-				&magn_state->magn_flux_attributes, val, val2);
-			break;
-		case IIO_ROT:
-			ret_type = hid_sensor_read_raw_hyst_value(
-				&magn_state->rot_attributes, val, val2);
-			break;
-		default:
-			ret_type = -EINVAL;
-		}
+		ret_type = hid_sensor_read_raw_hyst_value(
+			&magn_state->common_attributes, val, val2);
 		break;
 	default:
 		ret_type = -EINVAL;
@@ -258,21 +180,11 @@ static int magn_3d_write_raw(struct iio_dev *indio_dev,
 	switch (mask) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		ret = hid_sensor_write_samp_freq_value(
-				&magn_state->magn_flux_attributes, val, val2);
+				&magn_state->common_attributes, val, val2);
 		break;
 	case IIO_CHAN_INFO_HYSTERESIS:
-		switch (chan->type) {
-		case IIO_MAGN:
-			ret = hid_sensor_write_raw_hyst_value(
-				&magn_state->magn_flux_attributes, val, val2);
-			break;
-		case IIO_ROT:
-			ret = hid_sensor_write_raw_hyst_value(
-				&magn_state->rot_attributes, val, val2);
-			break;
-		default:
-			ret = -EINVAL;
-		}
+		ret = hid_sensor_write_raw_hyst_value(
+				&magn_state->common_attributes, val, val2);
 		break;
 	default:
 		ret = -EINVAL;
@@ -288,7 +200,8 @@ static const struct iio_info magn_3d_info = {
 };
 
 /* Function to push data to buffer */
-static void hid_sensor_push_data(struct iio_dev *indio_dev, const void *data)
+static void hid_sensor_push_data(struct iio_dev *indio_dev, const void *data,
+	int len)
 {
 	dev_dbg(&indio_dev->dev, "hid_sensor_push_data\n");
 	iio_push_to_buffers(indio_dev, data);
@@ -303,8 +216,10 @@ static int magn_3d_proc_event(struct hid_sensor_hub_device *hsdev,
 	struct magn_3d_state *magn_state = iio_priv(indio_dev);
 
 	dev_dbg(&indio_dev->dev, "magn_3d_proc_event\n");
-	if (atomic_read(&magn_state->magn_flux_attributes.data_ready))
-		hid_sensor_push_data(indio_dev, magn_state->iio_vals);
+	if (atomic_read(&magn_state->common_attributes.data_ready))
+		hid_sensor_push_data(indio_dev,
+				magn_state->magn_val,
+				sizeof(magn_state->magn_val));
 
 	return 0;
 }
@@ -318,33 +233,20 @@ static int magn_3d_capture_sample(struct hid_sensor_hub_device *hsdev,
 	struct iio_dev *indio_dev = platform_get_drvdata(priv);
 	struct magn_3d_state *magn_state = iio_priv(indio_dev);
 	int offset;
-	int ret = 0;
-	u32 *iio_val = NULL;
+	int ret = -EINVAL;
 
 	switch (usage_id) {
 	case HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_X_AXIS:
 	case HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_Y_AXIS:
 	case HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_Z_AXIS:
-		offset = (usage_id - HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_X_AXIS)
-				+ CHANNEL_SCAN_INDEX_X;
-	break;
-	case HID_USAGE_SENSOR_ORIENT_COMP_MAGN_NORTH:
-	case HID_USAGE_SENSOR_ORIENT_COMP_TRUE_NORTH:
-	case HID_USAGE_SENSOR_ORIENT_MAGN_NORTH:
-	case HID_USAGE_SENSOR_ORIENT_TRUE_NORTH:
-		offset = (usage_id - HID_USAGE_SENSOR_ORIENT_COMP_MAGN_NORTH)
-				+ CHANNEL_SCAN_INDEX_NORTH_MAGN_TILT_COMP;
+		offset = usage_id - HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_X_AXIS;
+		magn_state->magn_val[CHANNEL_SCAN_INDEX_X + offset] =
+						*(u32 *)raw_data;
+		ret = 0;
 	break;
 	default:
-		return -EINVAL;
+		break;
 	}
-
-	iio_val = magn_state->magn_val_addr[offset];
-
-	if (iio_val != NULL)
-		*iio_val = *((u32 *)raw_data);
-	else
-		ret = -EINVAL;
 
 	return ret;
 }
@@ -352,137 +254,49 @@ static int magn_3d_capture_sample(struct hid_sensor_hub_device *hsdev,
 /* Parse report which is specific to an usage id*/
 static int magn_3d_parse_report(struct platform_device *pdev,
 				struct hid_sensor_hub_device *hsdev,
-				struct iio_chan_spec **channels,
-				int *chan_count,
+				struct iio_chan_spec *channels,
 				unsigned usage_id,
 				struct magn_3d_state *st)
 {
+	int ret;
 	int i;
-	int attr_count = 0;
-	struct iio_chan_spec *_channels;
 
-	/* Scan for each usage attribute supported */
-	for (i = 0; i < MAGN_3D_CHANNEL_MAX; i++) {
-		int status;
-		u32 address = magn_3d_addresses[i];
-
-		/* Check if usage attribute exists in the sensor hub device */
-		status = sensor_hub_input_get_attribute_info(hsdev,
-			HID_INPUT_REPORT,
-			usage_id,
-			address,
-			&(st->magn[i]));
-		if (!status)
-			attr_count++;
+	for (i = 0; i <= CHANNEL_SCAN_INDEX_Z; ++i) {
+		ret = sensor_hub_input_get_attribute_info(hsdev,
+				HID_INPUT_REPORT,
+				usage_id,
+				HID_USAGE_SENSOR_ORIENT_MAGN_FLUX_X_AXIS + i,
+				&st->magn[CHANNEL_SCAN_INDEX_X + i]);
+		if (ret < 0)
+			break;
+		magn_3d_adjust_channel_bit_mask(channels,
+				CHANNEL_SCAN_INDEX_X + i,
+				st->magn[CHANNEL_SCAN_INDEX_X + i].size);
 	}
-
-	if (attr_count <= 0) {
-		dev_err(&pdev->dev,
-			"failed to find any supported usage attributes in report\n");
-		return  -EINVAL;
-	}
-
-	dev_dbg(&pdev->dev, "magn_3d Found %d usage attributes\n",
-			attr_count);
-	dev_dbg(&pdev->dev, "magn_3d X: %x:%x Y: %x:%x Z: %x:%x\n",
+	dev_dbg(&pdev->dev, "magn_3d %x:%x, %x:%x, %x:%x\n",
 			st->magn[0].index,
 			st->magn[0].report_id,
 			st->magn[1].index, st->magn[1].report_id,
 			st->magn[2].index, st->magn[2].report_id);
 
-	/* Setup IIO channel array */
-	_channels = devm_kcalloc(&pdev->dev, attr_count,
-				sizeof(struct iio_chan_spec),
-				GFP_KERNEL);
-	if (!_channels) {
-		dev_err(&pdev->dev,
-			"failed to allocate space for iio channels\n");
-		return -ENOMEM;
-	}
-
-	st->iio_vals = devm_kcalloc(&pdev->dev, attr_count,
-				sizeof(u32),
-				GFP_KERNEL);
-	if (!st->iio_vals) {
-		dev_err(&pdev->dev,
-			"failed to allocate space for iio values array\n");
-		return -ENOMEM;
-	}
-
-	for (i = 0, *chan_count = 0;
-	i < MAGN_3D_CHANNEL_MAX && *chan_count < attr_count;
-	i++){
-		if (st->magn[i].index >= 0) {
-			/* Setup IIO channel struct */
-			(_channels[*chan_count]) = magn_3d_channels[i];
-			(_channels[*chan_count]).scan_index = *chan_count;
-			(_channels[*chan_count]).address = i;
-
-			/* Set magn_val_addr to iio value address */
-			st->magn_val_addr[i] = &(st->iio_vals[*chan_count]);
-			magn_3d_adjust_channel_bit_mask(_channels,
-							*chan_count,
-							st->magn[i].size);
-			(*chan_count)++;
-		}
-	}
-
-	if (*chan_count <= 0) {
-		dev_err(&pdev->dev,
-			"failed to find any magnetic channels setup\n");
-		return -EINVAL;
-	}
-
-	*channels = _channels;
-
-	dev_dbg(&pdev->dev, "magn_3d Setup %d IIO channels\n",
-			*chan_count);
-
-	st->magn_flux_attr.scale_precision = hid_sensor_format_scale(
+	st->scale_precision = hid_sensor_format_scale(
 				HID_USAGE_SENSOR_COMPASS_3D,
 				&st->magn[CHANNEL_SCAN_INDEX_X],
-				&st->magn_flux_attr.scale_pre_decml,
-				&st->magn_flux_attr.scale_post_decml);
-	st->rot_attr.scale_precision
-		= hid_sensor_format_scale(
-			HID_USAGE_SENSOR_ORIENT_COMP_MAGN_NORTH,
-			&st->magn[CHANNEL_SCAN_INDEX_NORTH_MAGN_TILT_COMP],
-			&st->rot_attr.scale_pre_decml,
-			&st->rot_attr.scale_post_decml);
+				&st->scale_pre_decml, &st->scale_post_decml);
 
 	/* Set Sensitivity field ids, when there is no individual modifier */
-	if (st->magn_flux_attributes.sensitivity.index < 0) {
+	if (st->common_attributes.sensitivity.index < 0) {
 		sensor_hub_input_get_attribute_info(hsdev,
 			HID_FEATURE_REPORT, usage_id,
 			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS |
 			HID_USAGE_SENSOR_DATA_ORIENTATION,
-			&st->magn_flux_attributes.sensitivity);
+			&st->common_attributes.sensitivity);
 		dev_dbg(&pdev->dev, "Sensitivity index:report %d:%d\n",
-			st->magn_flux_attributes.sensitivity.index,
-			st->magn_flux_attributes.sensitivity.report_id);
-	}
-	if (st->magn_flux_attributes.sensitivity.index < 0) {
-		sensor_hub_input_get_attribute_info(hsdev,
-			HID_FEATURE_REPORT, usage_id,
-			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS |
-			HID_USAGE_SENSOR_ORIENT_MAGN_FLUX,
-			&st->magn_flux_attributes.sensitivity);
-		dev_dbg(&pdev->dev, "Sensitivity index:report %d:%d\n",
-			st->magn_flux_attributes.sensitivity.index,
-			st->magn_flux_attributes.sensitivity.report_id);
-	}
-	if (st->rot_attributes.sensitivity.index < 0) {
-		sensor_hub_input_get_attribute_info(hsdev,
-			HID_FEATURE_REPORT, usage_id,
-			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS |
-			HID_USAGE_SENSOR_ORIENT_COMP_MAGN_NORTH,
-			&st->rot_attributes.sensitivity);
-		dev_dbg(&pdev->dev, "Sensitivity index:report %d:%d\n",
-			st->rot_attributes.sensitivity.index,
-			st->rot_attributes.sensitivity.report_id);
+			st->common_attributes.sensitivity.index,
+			st->common_attributes.sensitivity.report_id);
 	}
 
-	return 0;
+	return ret;
 }
 
 /* Function to initialize the processing for usage id */
@@ -494,7 +308,6 @@ static int hid_magn_3d_probe(struct platform_device *pdev)
 	struct magn_3d_state *magn_state;
 	struct hid_sensor_hub_device *hsdev = pdev->dev.platform_data;
 	struct iio_chan_spec *channels;
-	int chan_count = 0;
 
 	indio_dev = devm_iio_device_alloc(&pdev->dev,
 					  sizeof(struct magn_3d_state));
@@ -504,28 +317,33 @@ static int hid_magn_3d_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, indio_dev);
 
 	magn_state = iio_priv(indio_dev);
-	magn_state->magn_flux_attributes.hsdev = hsdev;
-	magn_state->magn_flux_attributes.pdev = pdev;
+	magn_state->common_attributes.hsdev = hsdev;
+	magn_state->common_attributes.pdev = pdev;
 
 	ret = hid_sensor_parse_common_attributes(hsdev,
 				HID_USAGE_SENSOR_COMPASS_3D,
-				&magn_state->magn_flux_attributes);
+				&magn_state->common_attributes);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to setup common attributes\n");
 		return ret;
 	}
-	magn_state->rot_attributes = magn_state->magn_flux_attributes;
 
-	ret = magn_3d_parse_report(pdev, hsdev,
-				&channels, &chan_count,
+	channels = kmemdup(magn_3d_channels, sizeof(magn_3d_channels),
+			   GFP_KERNEL);
+	if (!channels) {
+		dev_err(&pdev->dev, "failed to duplicate channels\n");
+		return -ENOMEM;
+	}
+
+	ret = magn_3d_parse_report(pdev, hsdev, channels,
 				HID_USAGE_SENSOR_COMPASS_3D, magn_state);
 	if (ret) {
-		dev_err(&pdev->dev, "failed to parse report\n");
-		return ret;
+		dev_err(&pdev->dev, "failed to setup attributes\n");
+		goto error_free_dev_mem;
 	}
 
 	indio_dev->channels = channels;
-	indio_dev->num_channels = chan_count;
+	indio_dev->num_channels = ARRAY_SIZE(magn_3d_channels);
 	indio_dev->dev.parent = &pdev->dev;
 	indio_dev->info = &magn_3d_info;
 	indio_dev->name = name;
@@ -535,11 +353,11 @@ static int hid_magn_3d_probe(struct platform_device *pdev)
 		NULL, NULL);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to initialize trigger buffer\n");
-		return ret;
+		goto error_free_dev_mem;
 	}
-	atomic_set(&magn_state->magn_flux_attributes.data_ready, 0);
+	atomic_set(&magn_state->common_attributes.data_ready, 0);
 	ret = hid_sensor_setup_trigger(indio_dev, name,
-					&magn_state->magn_flux_attributes);
+					&magn_state->common_attributes);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "trigger setup failed\n");
 		goto error_unreg_buffer_funcs;
@@ -566,9 +384,11 @@ static int hid_magn_3d_probe(struct platform_device *pdev)
 error_iio_unreg:
 	iio_device_unregister(indio_dev);
 error_remove_trigger:
-	hid_sensor_remove_trigger(&magn_state->magn_flux_attributes);
+	hid_sensor_remove_trigger(&magn_state->common_attributes);
 error_unreg_buffer_funcs:
 	iio_triggered_buffer_cleanup(indio_dev);
+error_free_dev_mem:
+	kfree(indio_dev->channels);
 	return ret;
 }
 
@@ -581,13 +401,14 @@ static int hid_magn_3d_remove(struct platform_device *pdev)
 
 	sensor_hub_remove_callback(hsdev, HID_USAGE_SENSOR_COMPASS_3D);
 	iio_device_unregister(indio_dev);
-	hid_sensor_remove_trigger(&magn_state->magn_flux_attributes);
+	hid_sensor_remove_trigger(&magn_state->common_attributes);
 	iio_triggered_buffer_cleanup(indio_dev);
+	kfree(indio_dev->channels);
 
 	return 0;
 }
 
-static const struct platform_device_id hid_magn_3d_ids[] = {
+static struct platform_device_id hid_magn_3d_ids[] = {
 	{
 		/* Format: HID-SENSOR-usage_id_in_hex_lowercase */
 		.name = "HID-SENSOR-200083",
@@ -600,7 +421,7 @@ static struct platform_driver hid_magn_3d_platform_driver = {
 	.id_table = hid_magn_3d_ids,
 	.driver = {
 		.name	= KBUILD_MODNAME,
-		.pm	= &hid_sensor_pm_ops,
+		.owner	= THIS_MODULE,
 	},
 	.probe		= hid_magn_3d_probe,
 	.remove		= hid_magn_3d_remove,

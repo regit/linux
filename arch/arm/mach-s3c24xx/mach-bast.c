@@ -299,7 +299,6 @@ static struct s3c2410_platform_nand __initdata bast_nand_info = {
 	.nr_sets	= ARRAY_SIZE(bast_nand_sets),
 	.sets		= bast_nand_sets,
 	.select_chip	= bast_nand_select,
-	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 /* DM9000 */
@@ -592,4 +591,5 @@ MACHINE_START(BAST, "Simtec-BAST")
 	.init_irq	= s3c2410_init_irq,
 	.init_machine	= bast_init,
 	.init_time	= bast_init_time,
+	.restart	= s3c2410_restart,
 MACHINE_END

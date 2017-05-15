@@ -42,11 +42,9 @@ SECTIONS
   .text : AT (ADDR(.text) - LOAD_OFFSET) {
     HEAD_TEXT
     SCHED_TEXT
-    CPUIDLE_TEXT
     LOCK_TEXT
     KPROBES_TEXT
     IRQENTRY_TEXT
-    SOFTIRQENTRY_TEXT
     __fix_text_end = .;   /* tile-cpack won't rearrange before this */
     ALIGN_FUNCTION();
     *(.hottext*)
@@ -61,18 +59,6 @@ SECTIONS
   /* "Init" is divided into two areas with very different virtual addresses. */
   INIT_TEXT_SECTION(PAGE_SIZE)
 
-  /*
-   * Some things, like the __jump_table, may contain symbol references
-   * to __exit text, so include such text in the final image if so.
-   * In that case we also override the _einittext from INIT_TEXT_SECTION.
-   */
-#ifdef CONFIG_JUMP_LABEL
-  .exit.text : {
-    EXIT_TEXT
-    _einittext = .;
-  }
-#endif
-
   /* Now we skip back to PAGE_OFFSET for the data. */
   . = (. - TEXT_OFFSET + PAGE_OFFSET);
   #undef LOAD_OFFSET
@@ -80,9 +66,11 @@ SECTIONS
 
   . = ALIGN(PAGE_SIZE);
   __init_begin = .;
+  VMLINUX_SYMBOL(_sinitdata) = .;
   INIT_DATA_SECTION(16) :data =0
   PERCPU_SECTION(L2_CACHE_BYTES)
   . = ALIGN(PAGE_SIZE);
+  VMLINUX_SYMBOL(_einitdata) = .;
   __init_end = .;
 
   _sdata = .;                   /* Start of data section */

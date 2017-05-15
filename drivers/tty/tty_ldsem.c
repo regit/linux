@@ -299,8 +299,7 @@ down_write_failed(struct ld_semaphore *sem, long count, long timeout)
 		timeout = schedule_timeout(timeout);
 		raw_spin_lock_irq(&sem->wait_lock);
 		set_task_state(tsk, TASK_UNINTERRUPTIBLE);
-		locked = writer_trylock(sem);
-		if (locked)
+		if ((locked = writer_trylock(sem)))
 			break;
 	}
 
@@ -319,7 +318,7 @@ down_write_failed(struct ld_semaphore *sem, long count, long timeout)
 
 
 
-static int __ldsem_down_read_nested(struct ld_semaphore *sem,
+static inline int __ldsem_down_read_nested(struct ld_semaphore *sem,
 					   int subclass, long timeout)
 {
 	long count;
@@ -338,7 +337,7 @@ static int __ldsem_down_read_nested(struct ld_semaphore *sem,
 	return 1;
 }
 
-static int __ldsem_down_write_nested(struct ld_semaphore *sem,
+static inline int __ldsem_down_write_nested(struct ld_semaphore *sem,
 					    int subclass, long timeout)
 {
 	long count;

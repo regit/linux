@@ -157,4 +157,5 @@ MACHINE_START(TCT_HAMMER, "TCT_HAMMER")
 	.init_irq	= s3c2410_init_irq,
 	.init_machine	= tct_hammer_init,
 	.init_time	= tct_hammer_init_time,
+	.restart	= s3c2410_restart,
 MACHINE_END

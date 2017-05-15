@@ -15,11 +15,11 @@
 /* The protocol version */
 #define IPSET_PROTOCOL		6
 
-/* The max length of strings including NUL: set and type identifiers */
-#define IPSET_MAXNAMELEN	32
-
 /* The maximum permissible comment length we will accept over netlink */
 #define IPSET_MAX_COMMENT_SIZE	255
+
+/* The max length of strings including NUL: set and type identifiers */
+#define IPSET_MAXNAMELEN	32
 
 /* Message types and commands */
 enum ipset_cmd {
@@ -115,10 +115,6 @@ enum {
 	IPSET_ATTR_BYTES,
 	IPSET_ATTR_PACKETS,
 	IPSET_ATTR_COMMENT,
-	IPSET_ATTR_SKBMARK,
-	IPSET_ATTR_SKBPRIO,
-	IPSET_ATTR_SKBQUEUE,
-	IPSET_ATTR_PAD,
 	__IPSET_ATTR_ADT_MAX,
 };
 #define IPSET_ATTR_ADT_MAX	(__IPSET_ATTR_ADT_MAX - 1)
@@ -151,7 +147,6 @@ enum ipset_errno {
 	IPSET_ERR_COUNTER,
 	IPSET_ERR_COMMENT,
 	IPSET_ERR_INVALID_MARKMASK,
-	IPSET_ERR_SKBINFO,
 
 	/* Type specific error codes */
 	IPSET_ERR_TYPE_SPECIFIC = 4352,
@@ -175,12 +170,6 @@ enum ipset_cmd_flags {
 	IPSET_FLAG_MATCH_COUNTERS = (1 << IPSET_FLAG_BIT_MATCH_COUNTERS),
 	IPSET_FLAG_BIT_RETURN_NOMATCH = 7,
 	IPSET_FLAG_RETURN_NOMATCH = (1 << IPSET_FLAG_BIT_RETURN_NOMATCH),
-	IPSET_FLAG_BIT_MAP_SKBMARK = 8,
-	IPSET_FLAG_MAP_SKBMARK = (1 << IPSET_FLAG_BIT_MAP_SKBMARK),
-	IPSET_FLAG_BIT_MAP_SKBPRIO = 9,
-	IPSET_FLAG_MAP_SKBPRIO = (1 << IPSET_FLAG_BIT_MAP_SKBPRIO),
-	IPSET_FLAG_BIT_MAP_SKBQUEUE = 10,
-	IPSET_FLAG_MAP_SKBQUEUE = (1 << IPSET_FLAG_BIT_MAP_SKBQUEUE),
 	IPSET_FLAG_CMD_MAX = 15,
 };
 
@@ -198,8 +187,6 @@ enum ipset_cadt_flags {
 	IPSET_FLAG_WITH_COMMENT = (1 << IPSET_FLAG_BIT_WITH_COMMENT),
 	IPSET_FLAG_BIT_WITH_FORCEADD = 5,
 	IPSET_FLAG_WITH_FORCEADD = (1 << IPSET_FLAG_BIT_WITH_FORCEADD),
-	IPSET_FLAG_BIT_WITH_SKBINFO = 6,
-	IPSET_FLAG_WITH_SKBINFO = (1 << IPSET_FLAG_BIT_WITH_SKBINFO),
 	IPSET_FLAG_CADT_MAX	= 15,
 };
 
@@ -257,15 +244,9 @@ enum {
 	IPSET_COUNTER_GT,
 };
 
-/* Backward compatibility for set match v3 */
-struct ip_set_counter_match0 {
+struct ip_set_counter_match {
 	__u8 op;
 	__u64 value;
-};
-
-struct ip_set_counter_match {
-	__aligned_u64 value;
-	__u8 op;
 };
 
 /* Interface to iptables/ip6tables */

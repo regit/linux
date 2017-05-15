@@ -103,7 +103,7 @@ struct htb_class {
 	u32			prio;		/* these two are used only by leaves... */
 	int			quantum;	/* but stored for parent-to-leaf return */
 
-	struct tcf_proto __rcu	*filter_list;	/* class attached filters */
+	struct tcf_proto	*filter_list;	/* class attached filters */
 	int			filter_cnt;
 	int			refcnt;		/* usage count of this class */
 
@@ -111,12 +111,13 @@ struct htb_class {
 	unsigned int		children;
 	struct htb_class	*parent;	/* parent class */
 
-	struct net_rate_estimator __rcu *rate_est;
+	struct gnet_stats_rate_est64 rate_est;
 
 	/*
 	 * Written often fields
 	 */
 	struct gnet_stats_basic_packed bstats;
+	struct gnet_stats_queue	qstats;
 	struct tc_htb_xstats	xstats;	/* our special stats */
 
 	/* token bucket parameters */
@@ -139,8 +140,6 @@ struct htb_class {
 	enum htb_cmode		cmode;		/* current mode of the class */
 	struct rb_node		pq_node;	/* node for event queue */
 	struct rb_node		node[TC_HTB_NUMPRIO];	/* node for self or feed tree */
-
-	unsigned int drops ____cacheline_aligned_in_smp;
 };
 
 struct htb_level {
@@ -154,7 +153,7 @@ struct htb_sched {
 	int			rate2quantum;	/* quant = rate / rate2quantum */
 
 	/* filters for qdisc itself */
-	struct tcf_proto __rcu	*filter_list;
+	struct tcf_proto	*filter_list;
 
 #define HTB_WARN_TOOMANYEVENTS	0x1
 	unsigned int		warned;	/* only one warning */
@@ -162,7 +161,7 @@ struct htb_sched {
 	struct work_struct	work;
 
 	/* non shaped skbs; let them go directly thru */
-	struct qdisc_skb_head	direct_queue;
+	struct sk_buff_head	direct_queue;
 	long			direct_pkts;
 
 	struct qdisc_watchdog	watchdog;
@@ -224,13 +223,13 @@ static struct htb_class *htb_classify(struct sk_buff *skb, struct Qdisc *sch,
 		if (cl->level == 0)
 			return cl;
 		/* Start with inner filter chain if a non-leaf class is selected */
-		tcf = rcu_dereference_bh(cl->filter_list);
+		tcf = cl->filter_list;
 	} else {
-		tcf = rcu_dereference_bh(q->filter_list);
+		tcf = q->filter_list;
 	}
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	while (tcf && (result = tc_classify(skb, tcf, &res, false)) >= 0) {
+	while (tcf && (result = tc_classify(skb, tcf, &res)) >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
 		switch (result) {
 		case TC_ACT_QUEUED:
@@ -252,7 +251,7 @@ static struct htb_class *htb_classify(struct sk_buff *skb, struct Qdisc *sch,
 			return cl;	/* we hit leaf; return it */
 
 		/* we have got inner class; apply inner filter chain */
-		tcf = rcu_dereference_bh(cl->filter_list);
+		tcf = cl->filter_list;
 	}
 	/* classification failed; try to use default class */
 	cl = htb_find(TC_H_MAKE(TC_H_MAJ(sch->handle), q->defcls), sch);
@@ -570,24 +569,7 @@ static inline void htb_deactivate(struct htb_sched *q, struct htb_class *cl)
 	list_del_init(&cl->un.leaf.drop_list);
 }
 
-static void htb_enqueue_tail(struct sk_buff *skb, struct Qdisc *sch,
-			     struct qdisc_skb_head *qh)
-{
-	struct sk_buff *last = qh->tail;
-
-	if (last) {
-		skb->next = NULL;
-		last->next = skb;
-		qh->tail = skb;
-	} else {
-		qh->tail = skb;
-		qh->head = skb;
-	}
-	qh->qlen++;
-}
-
-static int htb_enqueue(struct sk_buff *skb, struct Qdisc *sch,
-		       struct sk_buff **to_free)
+static int htb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	int uninitialized_var(ret);
 	struct htb_sched *q = qdisc_priv(sch);
@@ -596,30 +578,28 @@ static int htb_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (cl == HTB_DIRECT) {
 		/* enqueue to helper queue */
 		if (q->direct_queue.qlen < q->direct_qlen) {
-			htb_enqueue_tail(skb, sch, &q->direct_queue);
+			__skb_queue_tail(&q->direct_queue, skb);
 			q->direct_pkts++;
 		} else {
-			return qdisc_drop(skb, sch, to_free);
+			return qdisc_drop(skb, sch);
 		}
 #ifdef CONFIG_NET_CLS_ACT
 	} else if (!cl) {
 		if (ret & __NET_XMIT_BYPASS)
-			qdisc_qstats_drop(sch);
-		__qdisc_drop(skb, to_free);
+			sch->qstats.drops++;
+		kfree_skb(skb);
 		return ret;
 #endif
-	} else if ((ret = qdisc_enqueue(skb, cl->un.leaf.q,
-					to_free)) != NET_XMIT_SUCCESS) {
+	} else if ((ret = qdisc_enqueue(skb, cl->un.leaf.q)) != NET_XMIT_SUCCESS) {
 		if (net_xmit_drop_count(ret)) {
-			qdisc_qstats_drop(sch);
-			cl->drops++;
+			sch->qstats.drops++;
+			cl->qstats.drops++;
 		}
 		return ret;
 	} else {
 		htb_activate(q, cl);
 	}
 
-	qdisc_qstats_backlog_inc(sch, skb);
 	sch->q.qlen++;
 	return NET_XMIT_SUCCESS;
 }
@@ -904,18 +884,18 @@ static struct sk_buff *htb_dequeue(struct Qdisc *sch)
 	unsigned long start_at;
 
 	/* try to dequeue direct packets as high prio (!) to minimize cpu work */
-	skb = __qdisc_dequeue_head(&q->direct_queue);
+	skb = __skb_dequeue(&q->direct_queue);
 	if (skb != NULL) {
 ok:
 		qdisc_bstats_update(sch, skb);
-		qdisc_qstats_backlog_dec(sch, skb);
+		qdisc_unthrottled(sch);
 		sch->q.qlen--;
 		return skb;
 	}
 
 	if (!sch->q.qlen)
 		goto fin;
-	q->now = ktime_get_ns();
+	q->now = ktime_to_ns(ktime_get());
 	start_at = jiffies;
 
 	next_event = q->now + 5LLU * NSEC_PER_SEC;
@@ -945,13 +925,44 @@ ok:
 				goto ok;
 		}
 	}
-	qdisc_qstats_overlimit(sch);
-	if (likely(next_event > q->now))
-		qdisc_watchdog_schedule_ns(&q->watchdog, next_event);
-	else
+	sch->qstats.overlimits++;
+	if (likely(next_event > q->now)) {
+		if (!test_bit(__QDISC_STATE_DEACTIVATED,
+			      &qdisc_root_sleeping(q->watchdog.qdisc)->state)) {
+			ktime_t time = ns_to_ktime(next_event);
+			qdisc_throttled(q->watchdog.qdisc);
+			hrtimer_start(&q->watchdog.timer, time,
+				      HRTIMER_MODE_ABS);
+		}
+	} else {
 		schedule_work(&q->work);
+	}
 fin:
 	return skb;
+}
+
+/* try to drop from each class (by prio) until one succeed */
+static unsigned int htb_drop(struct Qdisc *sch)
+{
+	struct htb_sched *q = qdisc_priv(sch);
+	int prio;
+
+	for (prio = TC_HTB_NUMPRIO - 1; prio >= 0; prio--) {
+		struct list_head *p;
+		list_for_each(p, q->drops + prio) {
+			struct htb_class *cl = list_entry(p, struct htb_class,
+							  un.leaf.drop_list);
+			unsigned int len;
+			if (cl->un.leaf.q->ops->drop &&
+			    (len = cl->un.leaf.q->ops->drop(cl->un.leaf.q))) {
+				sch->q.qlen--;
+				if (!cl->un.leaf.q->q.qlen)
+					htb_deactivate(q, cl);
+				return len;
+			}
+		}
+	}
+	return 0;
 }
 
 /* reset all classes */
@@ -973,12 +984,12 @@ static void htb_reset(struct Qdisc *sch)
 			}
 			cl->prio_activity = 0;
 			cl->cmode = HTB_CAN_SEND;
+
 		}
 	}
 	qdisc_watchdog_cancel(&q->watchdog);
-	__qdisc_reset_queue(&q->direct_queue);
+	__skb_queue_purge(&q->direct_queue);
 	sch->q.qlen = 0;
-	sch->qstats.backlog = 0;
 	memset(q->hlevel, 0, sizeof(q->hlevel));
 	memset(q->row_mask, 0, sizeof(q->row_mask));
 	for (i = 0; i < TC_HTB_NUMPRIO; i++)
@@ -1000,9 +1011,7 @@ static void htb_work_func(struct work_struct *work)
 	struct htb_sched *q = container_of(work, struct htb_sched, work);
 	struct Qdisc *sch = q->watchdog.qdisc;
 
-	rcu_read_lock();
 	__netif_schedule(qdisc_root(sch));
-	rcu_read_unlock();
 }
 
 static int htb_init(struct Qdisc *sch, struct nlattr *opt)
@@ -1035,13 +1044,15 @@ static int htb_init(struct Qdisc *sch, struct nlattr *opt)
 
 	qdisc_watchdog_init(&q->watchdog, sch);
 	INIT_WORK(&q->work, htb_work_func);
-	qdisc_skb_head_init(&q->direct_queue);
+	skb_queue_head_init(&q->direct_queue);
 
 	if (tb[TCA_HTB_DIRECT_QLEN])
 		q->direct_qlen = nla_get_u32(tb[TCA_HTB_DIRECT_QLEN]);
-	else
+	else {
 		q->direct_qlen = qdisc_dev(sch)->tx_queue_len;
-
+		if (q->direct_qlen < 2)	/* some devices have zero tx_queue_len */
+			q->direct_qlen = 2;
+	}
 	if ((q->rate2quantum = gopt->rate2quantum) < 1)
 		q->rate2quantum = 1;
 	q->defcls = gopt->defcls;
@@ -1110,12 +1121,10 @@ static int htb_dump_class(struct Qdisc *sch, unsigned long arg,
 	if (nla_put(skb, TCA_HTB_PARMS, sizeof(opt), &opt))
 		goto nla_put_failure;
 	if ((cl->rate.rate_bytes_ps >= (1ULL << 32)) &&
-	    nla_put_u64_64bit(skb, TCA_HTB_RATE64, cl->rate.rate_bytes_ps,
-			      TCA_HTB_PAD))
+	    nla_put_u64(skb, TCA_HTB_RATE64, cl->rate.rate_bytes_ps))
 		goto nla_put_failure;
 	if ((cl->ceil.rate_bytes_ps >= (1ULL << 32)) &&
-	    nla_put_u64_64bit(skb, TCA_HTB_CEIL64, cl->ceil.rate_bytes_ps,
-			      TCA_HTB_PAD))
+	    nla_put_u64(skb, TCA_HTB_CEIL64, cl->ceil.rate_bytes_ps))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, nest);
@@ -1129,24 +1138,15 @@ static int
 htb_dump_class_stats(struct Qdisc *sch, unsigned long arg, struct gnet_dump *d)
 {
 	struct htb_class *cl = (struct htb_class *)arg;
-	struct gnet_stats_queue qs = {
-		.drops = cl->drops,
-	};
-	__u32 qlen = 0;
 
-	if (!cl->level && cl->un.leaf.q) {
-		qlen = cl->un.leaf.q->q.qlen;
-		qs.backlog = cl->un.leaf.q->qstats.backlog;
-	}
-	cl->xstats.tokens = clamp_t(s64, PSCHED_NS2TICKS(cl->tokens),
-				    INT_MIN, INT_MAX);
-	cl->xstats.ctokens = clamp_t(s64, PSCHED_NS2TICKS(cl->ctokens),
-				     INT_MIN, INT_MAX);
+	if (!cl->level && cl->un.leaf.q)
+		cl->qstats.qlen = cl->un.leaf.q->q.qlen;
+	cl->xstats.tokens = PSCHED_NS2TICKS(cl->tokens);
+	cl->xstats.ctokens = PSCHED_NS2TICKS(cl->ctokens);
 
-	if (gnet_stats_copy_basic(qdisc_root_sleeping_running(sch),
-				  d, NULL, &cl->bstats) < 0 ||
-	    gnet_stats_copy_rate_est(d, &cl->rate_est) < 0 ||
-	    gnet_stats_copy_queue(d, NULL, &qs, qlen) < 0)
+	if (gnet_stats_copy_basic(d, &cl->bstats) < 0 ||
+	    gnet_stats_copy_rate_est(d, NULL, &cl->rate_est) < 0 ||
+	    gnet_stats_copy_queue(d, &cl->qstats) < 0)
 		return -1;
 
 	return gnet_stats_copy_app(d, &cl->xstats, sizeof(cl->xstats));
@@ -1164,7 +1164,14 @@ static int htb_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
 				     cl->common.classid)) == NULL)
 		return -ENOBUFS;
 
-	*old = qdisc_replace(sch, new, &cl->un.leaf.q);
+	sch_tree_lock(sch);
+	*old = cl->un.leaf.q;
+	cl->un.leaf.q = new;
+	if (*old != NULL) {
+		qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
+		qdisc_reset(*old);
+	}
+	sch_tree_unlock(sch);
 	return 0;
 }
 
@@ -1218,7 +1225,7 @@ static void htb_parent_to_leaf(struct htb_sched *q, struct htb_class *cl,
 	parent->un.leaf.q = new_q ? new_q : &noop_qdisc;
 	parent->tokens = parent->buffer;
 	parent->ctokens = parent->cbuffer;
-	parent->t_c = ktime_get_ns();
+	parent->t_c = ktime_to_ns(ktime_get());
 	parent->cmode = HTB_CAN_SEND;
 }
 
@@ -1228,7 +1235,7 @@ static void htb_destroy_class(struct Qdisc *sch, struct htb_class *cl)
 		WARN_ON(!cl->un.leaf.q);
 		qdisc_destroy(cl->un.leaf.q);
 	}
-	gen_kill_estimator(&cl->rate_est);
+	gen_kill_estimator(&cl->bstats, &cl->rate_est);
 	tcf_destroy_chain(&cl->filter_list);
 	kfree(cl);
 }
@@ -1259,13 +1266,14 @@ static void htb_destroy(struct Qdisc *sch)
 			htb_destroy_class(sch, cl);
 	}
 	qdisc_class_hash_destroy(&q->clhash);
-	__qdisc_reset_queue(&q->direct_queue);
+	__skb_queue_purge(&q->direct_queue);
 }
 
 static int htb_delete(struct Qdisc *sch, unsigned long arg)
 {
 	struct htb_sched *q = qdisc_priv(sch);
 	struct htb_class *cl = (struct htb_class *)arg;
+	unsigned int qlen;
 	struct Qdisc *new_q = NULL;
 	int last_child = 0;
 
@@ -1285,11 +1293,9 @@ static int htb_delete(struct Qdisc *sch, unsigned long arg)
 	sch_tree_lock(sch);
 
 	if (!cl->level) {
-		unsigned int qlen = cl->un.leaf.q->q.qlen;
-		unsigned int backlog = cl->un.leaf.q->qstats.backlog;
-
+		qlen = cl->un.leaf.q->q.qlen;
 		qdisc_reset(cl->un.leaf.q);
-		qdisc_tree_reduce_backlog(cl->un.leaf.q, qlen, backlog);
+		qdisc_tree_decrease_qlen(cl->un.leaf.q, qlen);
 	}
 
 	/* delete from hash and active; remainder in destroy_class */
@@ -1396,10 +1402,8 @@ static int htb_change_class(struct Qdisc *sch, u32 classid,
 			goto failure;
 
 		if (htb_rate_est || tca[TCA_RATE]) {
-			err = gen_new_estimator(&cl->bstats, NULL,
-						&cl->rate_est,
-						NULL,
-						qdisc_root_sleeping_running(sch),
+			err = gen_new_estimator(&cl->bstats, &cl->rate_est,
+						qdisc_root_sleeping_lock(sch),
 						tca[TCA_RATE] ? : &est.nla);
 			if (err) {
 				kfree(cl);
@@ -1424,11 +1428,10 @@ static int htb_change_class(struct Qdisc *sch, u32 classid,
 		sch_tree_lock(sch);
 		if (parent && !parent->level) {
 			unsigned int qlen = parent->un.leaf.q->q.qlen;
-			unsigned int backlog = parent->un.leaf.q->qstats.backlog;
 
 			/* turn parent into inner node */
 			qdisc_reset(parent->un.leaf.q);
-			qdisc_tree_reduce_backlog(parent->un.leaf.q, qlen, backlog);
+			qdisc_tree_decrease_qlen(parent->un.leaf.q, qlen);
 			qdisc_destroy(parent->un.leaf.q);
 			if (parent->prio_activity)
 				htb_deactivate(q, parent);
@@ -1452,7 +1455,7 @@ static int htb_change_class(struct Qdisc *sch, u32 classid,
 		cl->tokens = PSCHED_TICKS2NS(hopt->buffer);
 		cl->ctokens = PSCHED_TICKS2NS(hopt->cbuffer);
 		cl->mbuffer = 60ULL * NSEC_PER_SEC;	/* 1min */
-		cl->t_c = ktime_get_ns();
+		cl->t_c = ktime_to_ns(ktime_get());
 		cl->cmode = HTB_CAN_SEND;
 
 		/* attach to the hash list and parent's family */
@@ -1461,10 +1464,8 @@ static int htb_change_class(struct Qdisc *sch, u32 classid,
 			parent->children++;
 	} else {
 		if (tca[TCA_RATE]) {
-			err = gen_replace_estimator(&cl->bstats, NULL,
-						    &cl->rate_est,
-						    NULL,
-						    qdisc_root_sleeping_running(sch),
+			err = gen_replace_estimator(&cl->bstats, &cl->rate_est,
+						    qdisc_root_sleeping_lock(sch),
 						    tca[TCA_RATE]);
 			if (err)
 				return err;
@@ -1518,12 +1519,11 @@ failure:
 	return err;
 }
 
-static struct tcf_proto __rcu **htb_find_tcf(struct Qdisc *sch,
-					     unsigned long arg)
+static struct tcf_proto **htb_find_tcf(struct Qdisc *sch, unsigned long arg)
 {
 	struct htb_sched *q = qdisc_priv(sch);
 	struct htb_class *cl = (struct htb_class *)arg;
-	struct tcf_proto __rcu **fl = cl ? &cl->filter_list : &q->filter_list;
+	struct tcf_proto **fl = cl ? &cl->filter_list : &q->filter_list;
 
 	return fl;
 }
@@ -1602,6 +1602,7 @@ static struct Qdisc_ops htb_qdisc_ops __read_mostly = {
 	.enqueue	=	htb_enqueue,
 	.dequeue	=	htb_dequeue,
 	.peek		=	qdisc_peek_dequeued,
+	.drop		=	htb_drop,
 	.init		=	htb_init,
 	.reset		=	htb_reset,
 	.destroy	=	htb_destroy,

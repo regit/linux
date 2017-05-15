@@ -15,8 +15,7 @@
 #include <linux/buffer_head.h>
 #include <linux/vfs.h>
 #include <linux/writeback.h>
-#include <linux/uio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "bfs.h"
 
 MODULE_AUTHOR("Tigran Aivazian <tigran@aivazian.fsnet.co.uk>");
@@ -30,6 +29,8 @@ MODULE_LICENSE("GPL");
 #else
 #define dprintf(x...)
 #endif
+
+void dump_imap(const char *prefix, struct super_block *s);
 
 struct inode *bfs_iget(struct super_block *sb, unsigned long ino)
 {
@@ -193,7 +194,7 @@ static void bfs_evict_inode(struct inode *inode)
 			info->si_freeb += bi->i_eblock + 1 - bi->i_sblock;
 		info->si_freei++;
 		clear_bit(ino, info->si_imap);
-		bfs_dump_imap("delete_inode", s);
+		dump_imap("delete_inode", s);
         }
 
 	/*
@@ -270,7 +271,7 @@ static int __init init_inodecache(void)
 	bfs_inode_cachep = kmem_cache_create("bfs_inode_cache",
 					     sizeof(struct bfs_inode_info),
 					     0, (SLAB_RECLAIM_ACCOUNT|
-						SLAB_MEM_SPREAD|SLAB_ACCOUNT),
+						SLAB_MEM_SPREAD),
 					     init_once);
 	if (bfs_inode_cachep == NULL)
 		return -ENOMEM;
@@ -296,7 +297,7 @@ static const struct super_operations bfs_sops = {
 	.statfs		= bfs_statfs,
 };
 
-void bfs_dump_imap(const char *prefix, struct super_block *s)
+void dump_imap(const char *prefix, struct super_block *s)
 {
 #ifdef DEBUG
 	int i;
@@ -442,7 +443,7 @@ static int bfs_fill_super(struct super_block *s, void *data, int silent)
 	}
 	brelse(bh);
 	brelse(sbh);
-	bfs_dump_imap("read_super", s);
+	dump_imap("read_super", s);
 	return 0;
 
 out3:

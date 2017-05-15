@@ -28,7 +28,7 @@
 		usbphy0: usbphy@0 {
 			compatible = "usb-nop-xceiv";
 			reg = <0>;
-			clocks = <&clks IMX27_CLK_DUMMY>;
+			clocks = <&clks 0>;
 			clock-names = "main_clk";
 		};
 	};
@@ -106,7 +106,7 @@
 };
 
 &uart1 {
-	uart-has-rtscts;
+	fsl,uart-has-rtscts;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart1>;
 	status = "okay";

@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -36,11 +40,17 @@
 #ifndef __FID_INTERNAL_H
 #define __FID_INTERNAL_H
 
-#include "../include/lustre/lustre_idl.h"
-#include "../../include/linux/libcfs/libcfs.h"
+#include <lustre/lustre_idl.h>
+#include <linux/libcfs/libcfs.h>
 
 /* Functions used internally in module. */
+int seq_client_alloc_super(struct lu_client_seq *seq,
+			   const struct lu_env *env);
 
-extern struct lprocfs_vars seq_client_debugfs_list[];
+# ifdef LPROCFS
+extern struct lprocfs_vars seq_client_proc_list[];
+# endif
+
+extern struct proc_dir_entry *seq_type_proc_dir;
 
 #endif /* __FID_INTERNAL_H */

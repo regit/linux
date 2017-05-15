@@ -370,13 +370,7 @@ static int efm32_i2c_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-
-	ret = of_property_read_u32(np, "energymicro,location", &location);
-
-	if (ret)
-		/* fall back to wrongly namespaced property */
-		ret = of_property_read_u32(np, "efm32,location", &location);
-
+	ret = of_property_read_u32(np, "efm32,location", &location);
 	if (!ret) {
 		dev_dbg(&pdev->dev, "using location %u\n", location);
 	} else {
@@ -433,11 +427,12 @@ static int efm32_i2c_probe(struct platform_device *pdev)
 	ret = request_irq(ddata->irq, efm32_i2c_irq, 0, DRIVER_NAME, ddata);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to request irq (%d)\n", ret);
-		goto err_disable_clk;
+		return ret;
 	}
 
 	ret = i2c_add_adapter(&ddata->adapter);
 	if (ret) {
+		dev_err(&pdev->dev, "failed to add i2c adapter (%d)\n", ret);
 		free_irq(ddata->irq, ddata);
 
 err_disable_clk:
@@ -472,6 +467,7 @@ static struct platform_driver efm32_i2c_driver = {
 
 	.driver = {
 		.name = DRIVER_NAME,
+		.owner = THIS_MODULE,
 		.of_match_table = efm32_i2c_dt_ids,
 	},
 };

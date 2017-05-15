@@ -19,15 +19,13 @@ extern struct udp_table		udplite_table;
 static __inline__ int udplite_getfrag(void *from, char *to, int  offset,
 				      int len, int odd, struct sk_buff *skb)
 {
-	struct msghdr *msg = from;
-	return copy_from_iter_full(to, len, &msg->msg_iter) ? 0 : -EFAULT;
+	return memcpy_fromiovecend(to, (struct iovec *) from, offset, len);
 }
 
 /* Designate sk as UDP-Lite socket */
 static inline int udplite_sk_init(struct sock *sk)
 {
 	udp_sk(sk)->pcflag = UDPLITE_BIT;
-	sk->sk_destruct = udp_destruct_sock;
 	return 0;
 }
 
@@ -42,7 +40,7 @@ static inline int udplite_checksum_init(struct sk_buff *skb, struct udphdr *uh)
          * checksum. UDP-Lite (like IPv6) mandates checksums, hence packets
          * with a zero checksum field are illegal.                            */
 	if (uh->check == 0) {
-		net_dbg_ratelimited("UDPLite: zeroed checksum field\n");
+		LIMIT_NETDEBUG(KERN_DEBUG "UDPLite: zeroed checksum field\n");
 		return 1;
 	}
 
@@ -54,8 +52,8 @@ static inline int udplite_checksum_init(struct sk_buff *skb, struct udphdr *uh)
 		/*
 		 * Coverage length violates RFC 3828: log and discard silently.
 		 */
-		net_dbg_ratelimited("UDPLite: bad csum coverage %d/%d\n",
-				    cscov, skb->len);
+		LIMIT_NETDEBUG(KERN_DEBUG "UDPLite: bad csum coverage %d/%d\n",
+			       cscov, skb->len);
 		return 1;
 
 	} else if (cscov < skb->len) {

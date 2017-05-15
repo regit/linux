@@ -57,7 +57,7 @@
 				flash: m25p80@0 {
 					#address-cells = <1>;
 					#size-cells = <1>;
-					compatible = "sst,sst25vf016b", "jedec,spi-nor";
+					compatible = "sst,sst25vf016b";
 					spi-max-frequency = <40000000>;
 					reg = <0>;
 				};
@@ -124,10 +124,10 @@
 				pinctrl-0 = <&lcdif_24bit_pins_a
 					     &lcdif_pins_evk>;
 				lcd-supply = <&reg_lcd_3v3>;
-				display = <&display0>;
+				display = <&display>;
 				status = "okay";
 
-				display0: display0 {
+				display: display {
 					bits-per-pixel = <32>;
 					bus-width = <24>;
 
@@ -182,6 +182,7 @@
 			};
 
 			lradc@80050000 {
+				fsl,lradc-touchscreen-wires = <4>;
 				status = "okay";
 				fsl,lradc-touchscreen-wires = <4>;
 				fsl,ave-ctrl = <4>;
@@ -192,6 +193,7 @@
 			i2c0: i2c@80058000 {
 				pinctrl-names = "default";
 				pinctrl-0 = <&i2c0_pins_a>;
+				clock-frequency = <400000>;
 				status = "okay";
 
 				sgtl5000: codec@0a {
@@ -224,7 +226,7 @@
 			auart0: serial@8006a000 {
 				pinctrl-names = "default";
 				pinctrl-0 = <&auart0_pins_a>;
-				uart-has-rtscts;
+				fsl,uart-has-rtscts;
 				status = "okay";
 			};
 

@@ -14,13 +14,14 @@
 #include <linux/regulator/consumer.h>
 #include <linux/err.h>
 #include <linux/module.h>
-#include <linux/bitops.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/triggered_buffer.h>
+
+#define RES_MASK(bits)	((1 << (bits)) - 1)
 
 struct ad7476_state;
 
@@ -70,7 +71,7 @@ static irqreturn_t ad7476_trigger_handler(int irq, void  *p)
 		goto done;
 
 	iio_push_to_buffers_with_timestamp(indio_dev, st->data,
-		iio_get_time_ns(indio_dev));
+		iio_get_time_ns());
 done:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -106,16 +107,17 @@ static int ad7476_read_raw(struct iio_dev *indio_dev,
 
 	switch (m) {
 	case IIO_CHAN_INFO_RAW:
-		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
-			return ret;
-		ret = ad7476_scan_direct(st);
-		iio_device_release_direct_mode(indio_dev);
+		mutex_lock(&indio_dev->mlock);
+		if (iio_buffer_enabled(indio_dev))
+			ret = -EBUSY;
+		else
+			ret = ad7476_scan_direct(st);
+		mutex_unlock(&indio_dev->mlock);
 
 		if (ret < 0)
 			return ret;
 		*val = (ret >> st->chip_info->channel[0].scan_type.shift) &
-			GENMASK(st->chip_info->channel[0].scan_type.realbits - 1, 0);
+			RES_MASK(st->chip_info->channel[0].scan_type.realbits);
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		if (!st->chip_info->int_vref_uv) {
@@ -227,7 +229,6 @@ static int ad7476_probe(struct spi_device *spi)
 
 	/* Establish that the iio_dev is a child of the spi device */
 	indio_dev->dev.parent = &spi->dev;
-	indio_dev->dev.of_node = spi->dev.of_node;
 	indio_dev->name = spi_get_device_id(spi)->name;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = st->chip_info->channel;
@@ -302,6 +303,7 @@ MODULE_DEVICE_TABLE(spi, ad7476_id);
 static struct spi_driver ad7476_driver = {
 	.driver = {
 		.name	= "ad7476",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= ad7476_probe,
 	.remove		= ad7476_remove,

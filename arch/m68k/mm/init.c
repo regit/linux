@@ -20,7 +20,7 @@
 #include <linux/gfp.h>
 
 #include <asm/setup.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/page.h>
 #include <asm/pgalloc.h>
 #include <asm/traps.h>
@@ -94,6 +94,7 @@ void __init paging_init(void)
 	high_memory = (void *) end_mem;
 
 	empty_zero_page = alloc_bootmem_pages(PAGE_SIZE);
+	memset(empty_zero_page, 0, PAGE_SIZE);
 
 	/*
 	 * Set up SFC/DFC registers (user data space).

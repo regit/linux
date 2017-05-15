@@ -114,10 +114,11 @@ static struct device_node *find_dlpar_node(char *drc_name, int *node_type)
  */
 static struct slot *find_php_slot(struct device_node *dn)
 {
-	struct slot *slot, *next;
+	struct list_head *tmp, *n;
+	struct slot *slot;
 
-	list_for_each_entry_safe(slot, next, &rpaphp_slot_head,
-				 rpaphp_slot_list) {
+	list_for_each_safe(tmp, n, &rpaphp_slot_head) {
+		slot = list_entry(tmp, struct slot, rpaphp_slot_list);
 		if (slot->dn == dn)
 			return slot;
 	}
@@ -145,7 +146,7 @@ static void dlpar_pci_add_bus(struct device_node *dn)
 	struct pci_controller *phb = pdn->phb;
 	struct pci_dev *dev = NULL;
 
-	eeh_add_device_tree_early(pdn);
+	eeh_add_device_tree_early(dn);
 
 	/* Add EADS device to PHB bus, adding new entry to bus->devices */
 	dev = of_create_pci_dev(dn, phb->bus, pdn->devfn);
@@ -175,7 +176,7 @@ static int dlpar_add_pci_slot(char *drc_name, struct device_node *dn)
 	struct pci_dev *dev;
 	struct pci_controller *phb;
 
-	if (pci_find_bus_by_node(dn))
+	if (pcibios_find_pci_bus(dn))
 		return -EINVAL;
 
 	/* Add pci bus */
@@ -212,7 +213,7 @@ static int dlpar_remove_phb(char *drc_name, struct device_node *dn)
 	struct pci_dn *pdn;
 	int rc = 0;
 
-	if (!pci_find_bus_by_node(dn))
+	if (!pcibios_find_pci_bus(dn))
 		return -EINVAL;
 
 	/* If pci slot is hotpluggable, use hotplug to remove it */
@@ -257,13 +258,8 @@ static int dlpar_add_phb(char *drc_name, struct device_node *dn)
 
 static int dlpar_add_vio_slot(char *drc_name, struct device_node *dn)
 {
-	struct vio_dev *vio_dev;
-
-	vio_dev = vio_find_node(dn);
-	if (vio_dev) {
-		put_device(&vio_dev->dev);
+	if (vio_find_node(dn))
 		return -EINVAL;
-	}
 
 	if (!vio_register_device_node(dn)) {
 		printk(KERN_ERR
@@ -339,9 +335,6 @@ static int dlpar_remove_vio_slot(char *drc_name, struct device_node *dn)
 		return -EINVAL;
 
 	vio_unregister_device(vio_dev);
-
-	put_device(&vio_dev->dev);
-
 	return 0;
 }
 
@@ -364,7 +357,7 @@ int dlpar_remove_pci_slot(char *drc_name, struct device_node *dn)
 
 	pci_lock_rescan_remove();
 
-	bus = pci_find_bus_by_node(dn);
+	bus = pcibios_find_pci_bus(dn);
 	if (!bus) {
 		ret = -EINVAL;
 		goto out;
@@ -388,7 +381,7 @@ int dlpar_remove_pci_slot(char *drc_name, struct device_node *dn)
 	}
 
 	/* Remove all devices below slot */
-	pci_hp_remove_devices(bus);
+	pcibios_remove_pci_devices(bus);
 
 	/* Unmap PCI IO space */
 	if (pcibios_unmap_io_space(bus)) {

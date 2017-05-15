@@ -9,6 +9,7 @@
  *
  */
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/sysctl.h>
 #include <linux/spinlock.h>
@@ -383,18 +384,25 @@ dccp_state_table[CT_DCCP_ROLE_MAX + 1][DCCP_PKT_SYNCACK + 1][CT_DCCP_MAX + 1] = 
 	},
 };
 
-static inline struct nf_dccp_net *dccp_pernet(struct net *net)
+/* this module per-net specifics */
+static int dccp_net_id __read_mostly;
+struct dccp_net {
+	struct nf_proto_net pn;
+	int dccp_loose;
+	unsigned int dccp_timeout[CT_DCCP_MAX + 1];
+};
+
+static inline struct dccp_net *dccp_pernet(struct net *net)
 {
-	return &net->ct.nf_ct_proto.dccp;
+	return net_generic(net, dccp_net_id);
 }
 
 static bool dccp_pkt_to_tuple(const struct sk_buff *skb, unsigned int dataoff,
-			      struct net *net, struct nf_conntrack_tuple *tuple)
+			      struct nf_conntrack_tuple *tuple)
 {
 	struct dccp_hdr _hdr, *dh;
 
-	/* Actually only need first 4 bytes to get ports. */
-	dh = skb_header_pointer(skb, dataoff, 4, &_hdr);
+	dh = skb_header_pointer(skb, dataoff, sizeof(_hdr), &_hdr);
 	if (dh == NULL)
 		return false;
 
@@ -415,7 +423,7 @@ static bool dccp_new(struct nf_conn *ct, const struct sk_buff *skb,
 		     unsigned int dataoff, unsigned int *timeouts)
 {
 	struct net *net = nf_ct_net(ct);
-	struct nf_dccp_net *dn;
+	struct dccp_net *dn;
 	struct dccp_hdr _dh, *dh;
 	const char *msg;
 	u_int8_t state;
@@ -610,17 +618,17 @@ out_invalid:
 	return -NF_ACCEPT;
 }
 
-static void dccp_print_tuple(struct seq_file *s,
-			     const struct nf_conntrack_tuple *tuple)
+static int dccp_print_tuple(struct seq_file *s,
+			    const struct nf_conntrack_tuple *tuple)
 {
-	seq_printf(s, "sport=%hu dport=%hu ",
-		   ntohs(tuple->src.u.dccp.port),
-		   ntohs(tuple->dst.u.dccp.port));
+	return seq_printf(s, "sport=%hu dport=%hu ",
+			  ntohs(tuple->src.u.dccp.port),
+			  ntohs(tuple->dst.u.dccp.port));
 }
 
-static void dccp_print_conntrack(struct seq_file *s, struct nf_conn *ct)
+static int dccp_print_conntrack(struct seq_file *s, struct nf_conn *ct)
 {
-	seq_printf(s, "%s ", dccp_state_names[ct->proto.dccp.state]);
+	return seq_printf(s, "%s ", dccp_state_names[ct->proto.dccp.state]);
 }
 
 #if IS_ENABLED(CONFIG_NF_CT_NETLINK)
@@ -637,8 +645,7 @@ static int dccp_to_nlattr(struct sk_buff *skb, struct nlattr *nla,
 	    nla_put_u8(skb, CTA_PROTOINFO_DCCP_ROLE,
 		       ct->proto.dccp.role[IP_CT_DIR_ORIGINAL]) ||
 	    nla_put_be64(skb, CTA_PROTOINFO_DCCP_HANDSHAKE_SEQ,
-			 cpu_to_be64(ct->proto.dccp.handshake_seq),
-			 CTA_PROTOINFO_DCCP_PAD))
+			 cpu_to_be64(ct->proto.dccp.handshake_seq)))
 		goto nla_put_failure;
 	nla_nest_end(skb, nest_parms);
 	spin_unlock_bh(&ct->lock);
@@ -653,7 +660,6 @@ static const struct nla_policy dccp_nla_policy[CTA_PROTOINFO_DCCP_MAX + 1] = {
 	[CTA_PROTOINFO_DCCP_STATE]	= { .type = NLA_U8 },
 	[CTA_PROTOINFO_DCCP_ROLE]	= { .type = NLA_U8 },
 	[CTA_PROTOINFO_DCCP_HANDSHAKE_SEQ] = { .type = NLA_U64 },
-	[CTA_PROTOINFO_DCCP_PAD]	= { .type = NLA_UNSPEC },
 };
 
 static int nlattr_to_dccp(struct nlattr *cda[], struct nf_conn *ct)
@@ -710,7 +716,7 @@ static int dccp_nlattr_size(void)
 static int dccp_timeout_nlattr_to_obj(struct nlattr *tb[],
 				      struct net *net, void *data)
 {
-	struct nf_dccp_net *dn = dccp_pernet(net);
+	struct dccp_net *dn = dccp_pernet(net);
 	unsigned int *timeouts = data;
 	int i;
 
@@ -811,7 +817,7 @@ static struct ctl_table dccp_sysctl_table[] = {
 #endif /* CONFIG_SYSCTL */
 
 static int dccp_kmemdup_sysctl_table(struct net *net, struct nf_proto_net *pn,
-				     struct nf_dccp_net *dn)
+				     struct dccp_net *dn)
 {
 #ifdef CONFIG_SYSCTL
 	if (pn->ctl_table)
@@ -841,7 +847,7 @@ static int dccp_kmemdup_sysctl_table(struct net *net, struct nf_proto_net *pn,
 
 static int dccp_init_net(struct net *net, u_int16_t proto)
 {
-	struct nf_dccp_net *dn = dccp_pernet(net);
+	struct dccp_net *dn = dccp_pernet(net);
 	struct nf_proto_net *pn = &dn->pn;
 
 	if (!pn->users) {
@@ -859,7 +865,7 @@ static int dccp_init_net(struct net *net, u_int16_t proto)
 	return dccp_kmemdup_sysctl_table(net, pn, dn);
 }
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_dccp4 __read_mostly = {
+static struct nf_conntrack_l4proto dccp_proto4 __read_mostly = {
 	.l3proto		= AF_INET,
 	.l4proto		= IPPROTO_DCCP,
 	.name			= "dccp",
@@ -889,11 +895,11 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_dccp4 __read_mostly = {
 		.nla_policy	= dccp_timeout_nla_policy,
 	},
 #endif /* CONFIG_NF_CT_NETLINK_TIMEOUT */
+	.net_id			= &dccp_net_id,
 	.init_net		= dccp_init_net,
 };
-EXPORT_SYMBOL_GPL(nf_conntrack_l4proto_dccp4);
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_dccp6 __read_mostly = {
+static struct nf_conntrack_l4proto dccp_proto6 __read_mostly = {
 	.l3proto		= AF_INET6,
 	.l4proto		= IPPROTO_DCCP,
 	.name			= "dccp",
@@ -923,6 +929,78 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_dccp6 __read_mostly = {
 		.nla_policy	= dccp_timeout_nla_policy,
 	},
 #endif /* CONFIG_NF_CT_NETLINK_TIMEOUT */
+	.net_id			= &dccp_net_id,
 	.init_net		= dccp_init_net,
 };
-EXPORT_SYMBOL_GPL(nf_conntrack_l4proto_dccp6);
+
+static __net_init int dccp_net_init(struct net *net)
+{
+	int ret = 0;
+	ret = nf_ct_l4proto_pernet_register(net, &dccp_proto4);
+	if (ret < 0) {
+		pr_err("nf_conntrack_dccp4: pernet registration failed.\n");
+		goto out;
+	}
+	ret = nf_ct_l4proto_pernet_register(net, &dccp_proto6);
+	if (ret < 0) {
+		pr_err("nf_conntrack_dccp6: pernet registration failed.\n");
+		goto cleanup_dccp4;
+	}
+	return 0;
+cleanup_dccp4:
+	nf_ct_l4proto_pernet_unregister(net, &dccp_proto4);
+out:
+	return ret;
+}
+
+static __net_exit void dccp_net_exit(struct net *net)
+{
+	nf_ct_l4proto_pernet_unregister(net, &dccp_proto6);
+	nf_ct_l4proto_pernet_unregister(net, &dccp_proto4);
+}
+
+static struct pernet_operations dccp_net_ops = {
+	.init = dccp_net_init,
+	.exit = dccp_net_exit,
+	.id   = &dccp_net_id,
+	.size = sizeof(struct dccp_net),
+};
+
+static int __init nf_conntrack_proto_dccp_init(void)
+{
+	int ret;
+
+	ret = register_pernet_subsys(&dccp_net_ops);
+	if (ret < 0)
+		goto out_pernet;
+
+	ret = nf_ct_l4proto_register(&dccp_proto4);
+	if (ret < 0)
+		goto out_dccp4;
+
+	ret = nf_ct_l4proto_register(&dccp_proto6);
+	if (ret < 0)
+		goto out_dccp6;
+
+	return 0;
+out_dccp6:
+	nf_ct_l4proto_unregister(&dccp_proto4);
+out_dccp4:
+	unregister_pernet_subsys(&dccp_net_ops);
+out_pernet:
+	return ret;
+}
+
+static void __exit nf_conntrack_proto_dccp_fini(void)
+{
+	nf_ct_l4proto_unregister(&dccp_proto6);
+	nf_ct_l4proto_unregister(&dccp_proto4);
+	unregister_pernet_subsys(&dccp_net_ops);
+}
+
+module_init(nf_conntrack_proto_dccp_init);
+module_exit(nf_conntrack_proto_dccp_fini);
+
+MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
+MODULE_DESCRIPTION("DCCP connection tracking protocol helper");
+MODULE_LICENSE("GPL");

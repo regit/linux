@@ -19,72 +19,23 @@
 
 #include "core.h"
 
-static int dwc3_host_get_irq(struct dwc3 *dwc)
-{
-	struct platform_device	*dwc3_pdev = to_platform_device(dwc->dev);
-	int irq;
-
-	irq = platform_get_irq_byname(dwc3_pdev, "host");
-	if (irq > 0)
-		goto out;
-
-	if (irq == -EPROBE_DEFER)
-		goto out;
-
-	irq = platform_get_irq_byname(dwc3_pdev, "dwc_usb3");
-	if (irq > 0)
-		goto out;
-
-	if (irq == -EPROBE_DEFER)
-		goto out;
-
-	irq = platform_get_irq(dwc3_pdev, 0);
-	if (irq > 0)
-		goto out;
-
-	if (irq != -EPROBE_DEFER)
-		dev_err(dwc->dev, "missing host IRQ\n");
-
-	if (!irq)
-		irq = -EINVAL;
-
-out:
-	return irq;
-}
-
 int dwc3_host_init(struct dwc3 *dwc)
 {
-	struct property_entry	props[2];
 	struct platform_device	*xhci;
-	int			ret, irq;
-	struct resource		*res;
-	struct platform_device	*dwc3_pdev = to_platform_device(dwc->dev);
-
-	irq = dwc3_host_get_irq(dwc);
-	if (irq < 0)
-		return irq;
-
-	res = platform_get_resource_byname(dwc3_pdev, IORESOURCE_IRQ, "host");
-	if (!res)
-		res = platform_get_resource_byname(dwc3_pdev, IORESOURCE_IRQ,
-				"dwc_usb3");
-	if (!res)
-		res = platform_get_resource(dwc3_pdev, IORESOURCE_IRQ, 0);
-	if (!res)
-		return -ENOMEM;
-
-	dwc->xhci_resources[1].start = irq;
-	dwc->xhci_resources[1].end = irq;
-	dwc->xhci_resources[1].flags = res->flags;
-	dwc->xhci_resources[1].name = res->name;
+	int			ret;
 
 	xhci = platform_device_alloc("xhci-hcd", PLATFORM_DEVID_AUTO);
 	if (!xhci) {
 		dev_err(dwc->dev, "couldn't allocate xHCI device\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err0;
 	}
 
+	dma_set_coherent_mask(&xhci->dev, dwc->dev->coherent_dma_mask);
+
 	xhci->dev.parent	= dwc->dev;
+	xhci->dev.dma_mask	= dwc->dev->dma_mask;
+	xhci->dev.dma_parms	= dwc->dev->dma_parms;
 
 	dwc->xhci = xhci;
 
@@ -95,44 +46,22 @@ int dwc3_host_init(struct dwc3 *dwc)
 		goto err1;
 	}
 
-	memset(props, 0, sizeof(struct property_entry) * ARRAY_SIZE(props));
-
-	if (dwc->usb3_lpm_capable) {
-		props[0].name = "usb3-lpm-capable";
-		ret = platform_device_add_properties(xhci, props);
-		if (ret) {
-			dev_err(dwc->dev, "failed to add properties to xHCI\n");
-			goto err1;
-		}
-	}
-
-	phy_create_lookup(dwc->usb2_generic_phy, "usb2-phy",
-			  dev_name(dwc->dev));
-	phy_create_lookup(dwc->usb3_generic_phy, "usb3-phy",
-			  dev_name(dwc->dev));
-
 	ret = platform_device_add(xhci);
 	if (ret) {
 		dev_err(dwc->dev, "failed to register xHCI device\n");
-		goto err2;
+		goto err1;
 	}
 
 	return 0;
-err2:
-	phy_remove_lookup(dwc->usb2_generic_phy, "usb2-phy",
-			  dev_name(dwc->dev));
-	phy_remove_lookup(dwc->usb3_generic_phy, "usb3-phy",
-			  dev_name(dwc->dev));
+
 err1:
 	platform_device_put(xhci);
+
+err0:
 	return ret;
 }
 
 void dwc3_host_exit(struct dwc3 *dwc)
 {
-	phy_remove_lookup(dwc->usb2_generic_phy, "usb2-phy",
-			  dev_name(dwc->dev));
-	phy_remove_lookup(dwc->usb3_generic_phy, "usb3-phy",
-			  dev_name(dwc->dev));
 	platform_device_unregister(dwc->xhci);
 }

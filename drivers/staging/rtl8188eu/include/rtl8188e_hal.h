@@ -11,6 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 #ifndef __RTL8188E_HAL_H__
 #define __RTL8188E_HAL_H__
@@ -20,13 +25,15 @@
 #include "rtl8188e_spec.h"
 #include "Hal8188EPhyReg.h"
 #include "Hal8188EPhyCfg.h"
+#include "rtl8188e_rf.h"
 #include "rtl8188e_dm.h"
 #include "rtl8188e_recv.h"
 #include "rtl8188e_xmit.h"
 #include "rtl8188e_cmd.h"
-#include "pwrseq.h"
+#include "Hal8188EPwrSeq.h"
+#include "rtl8188e_sreset.h"
 #include "rtw_efuse.h"
-#include "rtw_sreset.h"
+
 #include "odm_precomp.h"
 
 /*  Fw Array */
@@ -64,10 +71,45 @@
 #define MAX_PAGE_SIZE			4096	/*  @ page : 4k bytes */
 
 #define IS_FW_HEADER_EXIST(_pFwHdr)				\
-	((le16_to_cpu(_pFwHdr->signature)&0xFFF0) == 0x92C0 ||	\
-	(le16_to_cpu(_pFwHdr->signature)&0xFFF0) == 0x88C0 ||	\
-	(le16_to_cpu(_pFwHdr->signature)&0xFFF0) == 0x2300 ||	\
-	(le16_to_cpu(_pFwHdr->signature)&0xFFF0) == 0x88E0)
+	((le16_to_cpu(_pFwHdr->Signature)&0xFFF0) == 0x92C0 ||	\
+	(le16_to_cpu(_pFwHdr->Signature)&0xFFF0) == 0x88C0 ||	\
+	(le16_to_cpu(_pFwHdr->Signature)&0xFFF0) == 0x2300 ||	\
+	(le16_to_cpu(_pFwHdr->Signature)&0xFFF0) == 0x88E0)
+
+/*  This structure must be careful with byte-ordering */
+
+struct rt_firmware_hdr {
+	/*  8-byte alinment required */
+	/*  LONG WORD 0 ---- */
+	__le16		Signature;	/* 92C0: test chip; 92C,
+					 * 88C0: test chip; 88C1: MP A-cut;
+					 * 92C1: MP A-cut */
+	u8		Category;	/*  AP/NIC and USB/PCI */
+	u8		Function;	/*  Reserved for different FW function
+					 *  indcation, for further use when
+					 *  driver needs to download different
+					 *  FW for different conditions */
+	__le16		Version;	/*  FW Version */
+	u8		Subversion;	/*  FW Subversion, default 0x00 */
+	u16		Rsvd1;
+
+	/*  LONG WORD 1 ---- */
+	u8		Month;	/*  Release time Month field */
+	u8		Date;	/*  Release time Date field */
+	u8		Hour;	/*  Release time Hour field */
+	u8		Minute;	/*  Release time Minute field */
+	__le16		RamCodeSize;	/*  The size of RAM code */
+	u8		Foundry;
+	u8		Rsvd2;
+
+	/*  LONG WORD 2 ---- */
+	__le32		SvnIdx;	/*  The SVN entry index */
+	u32		Rsvd3;
+
+	/*  LONG WORD 3 ---- */
+	u32		Rsvd4;
+	u32		Rsvd5;
+};
 
 #define DRIVER_EARLY_INT_TIME		0x05
 #define BCN_DMA_ATIME_INT_TIME		0x02
@@ -154,7 +196,7 @@ struct txpowerinfo24g {
 /*  | 1byte|----8bytes----|1byte|--5bytes--| */
 /*  |         |            Reserved(14bytes)	      | */
 
-/*  PG data exclude header, dummy 6 bytes from CP test and reserved 1byte. */
+/*  PG data exclude header, dummy 6 bytes frome CP test and reserved 1byte. */
 #define EFUSE_OOB_PROTECT_BYTES			15
 
 #define		HWSET_MAX_SIZE_88E		512
@@ -172,7 +214,7 @@ struct txpowerinfo24g {
 /*  9bytes + 1byt + 5bytes and pre 1byte. */
 /*  For worst case: */
 /*  | 2byte|----8bytes----|1byte|--7bytes--| 92D */
-/*  PG data exclude header, dummy 7 bytes from CP test and reserved 1byte. */
+/*  PG data exclude header, dummy 7 bytes frome CP test and reserved 1byte. */
 #define		EFUSE_OOB_PROTECT_BYTES_88E	18
 #define		EFUSE_PROTECT_BYTES_BANK_88E	16
 
@@ -183,9 +225,26 @@ struct txpowerinfo24g {
 
 #define EFUSE_PROTECT_BYTES_BANK	16
 
+/*  For RTL8723 WiFi/BT/GPS multi-function configuration. */
+enum rt_multi_func {
+	RT_MULTI_FUNC_NONE = 0x00,
+	RT_MULTI_FUNC_WIFI = 0x01,
+	RT_MULTI_FUNC_BT = 0x02,
+	RT_MULTI_FUNC_GPS = 0x04,
+};
+
+/*  For RTL8723 regulator mode. */
+enum rt_regulator_mode {
+	RT_SWITCHING_REGULATOR = 0,
+	RT_LDO_REGULATOR = 1,
+};
+
 struct hal_data_8188e {
 	struct HAL_VERSION	VersionID;
+	enum rt_multi_func MultiFunc; /*  For multi-function consideration. */
+	enum rt_regulator_mode RegulatorMode; /*  switching regulator or LDO */
 	u16	CustomerID;
+
 	u16	FirmwareVersion;
 	u16	FirmwareVersionRev;
 	u16	FirmwareSubVersion;
@@ -199,6 +258,11 @@ struct hal_data_8188e {
 	u8	nCur40MhzPrimeSC;/*  Control channel sub-carrier */
 
 	u16	BasicRateSet;
+
+	/* rf_ctrl */
+	u8	rf_chip;
+	u8	rf_type;
+	u8	NumTotalRFPath;
 
 	u8	BoardType;
 
@@ -261,6 +325,14 @@ struct hal_data_8188e {
 	u32	CCKTxPowerLevelOriginalOffset;
 
 	u8	CrystalCap;
+	u32	AntennaTxPath;			/*  Antenna path Tx */
+	u32	AntennaRxPath;			/*  Antenna path Rx */
+	u8	BluetoothCoexist;
+	u8	ExternalPA;
+
+	u8	bLedOpenDrain; /* Open-drain support for controlling the LED.*/
+
+	u8	b1x1RecvCombine;	/*  for 1T1R receive combining */
 
 	u32	AcParam_BE; /* Original parameter for BE, use for EDCA turbo. */
 
@@ -274,6 +346,7 @@ struct hal_data_8188e {
 	/* for host message to fw */
 	u8	LastHMEBoxNum;
 
+	u8	fw_ractrl;
 	u8	RegTxPause;
 	/*  Beacon function related global variable. */
 	u32	RegBcnCtrlVal;
@@ -304,7 +377,19 @@ struct hal_data_8188e {
 	u8	OutEpQueueSel;
 	u8	OutEpNumber;
 
+	/*  Add for USB aggreation mode dynamic shceme. */
+	bool		UsbRxHighSpeedMode;
+
+	/*  2010/11/22 MH Add for slim combo debug mode selective. */
+	/*  This is used for fix the drawback of CU TSMC-A/UMC-A cut.
+	 * HW auto suspend ability. Close BT clock. */
+	bool		SlimComboDbg;
+
 	u16	EfuseUsedBytes;
+
+#ifdef CONFIG_88EU_P2P
+	struct P2P_PS_Offload_t	p2p_ps_offload;
+#endif
 
 	/*  Auto FSM to Turn On, include clock, isolation, power control
 	 *  for MAC only */
@@ -330,7 +415,17 @@ struct hal_data_8188e {
 	u8	UsbRxAggPageTimeout;
 };
 
+#define GET_HAL_DATA(__pAdapter)				\
+	((struct hal_data_8188e *)((__pAdapter)->HalData))
+#define GET_RF_TYPE(priv)		(GET_HAL_DATA(priv)->rf_type)
+
+#define INCLUDE_MULTI_FUNC_BT(_Adapter)				\
+	(GET_HAL_DATA(_Adapter)->MultiFunc & RT_MULTI_FUNC_BT)
+#define INCLUDE_MULTI_FUNC_GPS(_Adapter)			\
+	(GET_HAL_DATA(_Adapter)->MultiFunc & RT_MULTI_FUNC_GPS)
+
 /*  rtl8188e_hal_init.c */
+s32 rtl8188e_FirmwareDownload(struct adapter *padapter);
 void _8051Reset88E(struct adapter *padapter);
 void rtl8188e_InitializeFirmwareVars(struct adapter *padapter);
 
@@ -338,6 +433,7 @@ void rtl8188e_InitializeFirmwareVars(struct adapter *padapter);
 s32 InitLLTTable(struct adapter *padapter, u8 txpktbuf_bndy);
 
 /*  EFuse */
+u8 GetEEPROMSize8188E(struct adapter *padapter);
 void Hal_InitPGData88E(struct adapter *padapter);
 void Hal_EfuseParseIDCode88E(struct adapter *padapter, u8 *hwinfo);
 void Hal_ReadTxPowerInfo88E(struct adapter *padapter, u8 *hwinfo,
@@ -360,13 +456,19 @@ void Hal_EfuseParseBoardType88E(struct adapter *pAdapter, u8 *hwinfo,
 void Hal_ReadPowerSavingMode88E(struct adapter *pAdapter, u8 *hwinfo,
 				bool AutoLoadFail);
 
-/*  register */
+bool HalDetectPwrDownMode88E(struct adapter *Adapter);
 
+void Hal_InitChannelPlan(struct adapter *padapter);
+void rtl8188e_set_hal_ops(struct hal_ops *pHalFunc);
+
+/*  register */
+void SetBcnCtrlReg(struct adapter *padapter, u8 SetBits, u8 ClearBits);
+
+void rtl8188e_clone_haldata(struct adapter *dst, struct adapter *src);
 void rtl8188e_start_thread(struct adapter *padapter);
 void rtl8188e_stop_thread(struct adapter *padapter);
 
-s32 iol_execute(struct adapter *padapter, u8 control);
-void iol_mode_enable(struct adapter *padapter, u8 enable);
+void rtw_IOL_cmd_tx_pkt_buf_dump(struct adapter  *Adapter, int len);
 s32 rtl8188e_iol_efuse_patch(struct adapter *padapter);
 void rtw_cancel_all_timer(struct adapter *padapter);
 

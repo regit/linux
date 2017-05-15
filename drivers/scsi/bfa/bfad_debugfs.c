@@ -1,10 +1,9 @@
 /*
- * Copyright (c) 2005-2014 Brocade Communications Systems, Inc.
- * Copyright (c) 2014- QLogic Corporation.
+ * Copyright (c) 2005-2010 Brocade Communications Systems, Inc.
  * All rights reserved
- * www.qlogic.com
+ * www.brocade.com
  *
- * Linux driver for QLogic BR-series Fibre Channel Host Bus Adapter.
+ * Linux driver for Brocade Fibre Channel Host Bus Adapter.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License (GPL) Version 2 as
@@ -261,9 +260,18 @@ bfad_debugfs_write_regrd(struct file *file, const char __user *buf,
 	unsigned long flags;
 	void *kern_buf;
 
-	kern_buf = memdup_user(buf, nbytes);
-	if (IS_ERR(kern_buf))
-		return PTR_ERR(kern_buf);
+	kern_buf = kzalloc(nbytes, GFP_KERNEL);
+
+	if (!kern_buf) {
+		printk(KERN_INFO "bfad[%d]: Failed to allocate buffer\n",
+				bfad->inst_no);
+		return -ENOMEM;
+	}
+
+	if (copy_from_user(kern_buf, (void  __user *)buf, nbytes)) {
+		kfree(kern_buf);
+		return -ENOMEM;
+	}
 
 	rc = sscanf(kern_buf, "%x:%x", &addr, &len);
 	if (rc < 2) {
@@ -328,9 +336,18 @@ bfad_debugfs_write_regwr(struct file *file, const char __user *buf,
 	unsigned long flags;
 	void *kern_buf;
 
-	kern_buf = memdup_user(buf, nbytes);
-	if (IS_ERR(kern_buf))
-		return PTR_ERR(kern_buf);
+	kern_buf = kzalloc(nbytes, GFP_KERNEL);
+
+	if (!kern_buf) {
+		printk(KERN_INFO "bfad[%d]: Failed to allocate buffer\n",
+				bfad->inst_no);
+		return -ENOMEM;
+	}
+
+	if (copy_from_user(kern_buf, (void  __user *)buf, nbytes)) {
+		kfree(kern_buf);
+		return -ENOMEM;
+	}
 
 	rc = sscanf(kern_buf, "%x:%x", &addr, &val);
 	if (rc < 2) {

@@ -31,7 +31,7 @@ struct multiq_sched_data {
 	u16 bands;
 	u16 max_bands;
 	u16 curband;
-	struct tcf_proto __rcu *filter_list;
+	struct tcf_proto *filter_list;
 	struct Qdisc **queues;
 };
 
@@ -42,11 +42,10 @@ multiq_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 	struct multiq_sched_data *q = qdisc_priv(sch);
 	u32 band;
 	struct tcf_result res;
-	struct tcf_proto *fl = rcu_dereference_bh(q->filter_list);
 	int err;
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	err = tc_classify(skb, fl, &res, false);
+	err = tc_classify(skb, q->filter_list, &res);
 #ifdef CONFIG_NET_CLS_ACT
 	switch (err) {
 	case TC_ACT_STOLEN:
@@ -65,8 +64,7 @@ multiq_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 }
 
 static int
-multiq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
-	       struct sk_buff **to_free)
+multiq_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct Qdisc *qdisc;
 	int ret;
@@ -76,19 +74,19 @@ multiq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (qdisc == NULL) {
 
 		if (ret & __NET_XMIT_BYPASS)
-			qdisc_qstats_drop(sch);
-		__qdisc_drop(skb, to_free);
+			sch->qstats.drops++;
+		kfree_skb(skb);
 		return ret;
 	}
 #endif
 
-	ret = qdisc_enqueue(skb, qdisc, to_free);
+	ret = qdisc_enqueue(skb, qdisc);
 	if (ret == NET_XMIT_SUCCESS) {
 		sch->q.qlen++;
 		return NET_XMIT_SUCCESS;
 	}
 	if (net_xmit_drop_count(ret))
-		qdisc_qstats_drop(sch);
+		sch->qstats.drops++;
 	return ret;
 }
 
@@ -152,6 +150,27 @@ static struct sk_buff *multiq_peek(struct Qdisc *sch)
 
 }
 
+static unsigned int multiq_drop(struct Qdisc *sch)
+{
+	struct multiq_sched_data *q = qdisc_priv(sch);
+	int band;
+	unsigned int len;
+	struct Qdisc *qdisc;
+
+	for (band = q->bands - 1; band >= 0; band--) {
+		qdisc = q->queues[band];
+		if (qdisc->ops->drop) {
+			len = qdisc->ops->drop(qdisc);
+			if (len != 0) {
+				sch->q.qlen--;
+				return len;
+			}
+		}
+	}
+	return 0;
+}
+
+
 static void
 multiq_reset(struct Qdisc *sch)
 {
@@ -198,8 +217,7 @@ static int multiq_tune(struct Qdisc *sch, struct nlattr *opt)
 		if (q->queues[i] != &noop_qdisc) {
 			struct Qdisc *child = q->queues[i];
 			q->queues[i] = &noop_qdisc;
-			qdisc_tree_reduce_backlog(child, child->q.qlen,
-						  child->qstats.backlog);
+			qdisc_tree_decrease_qlen(child, child->q.qlen);
 			qdisc_destroy(child);
 		}
 	}
@@ -219,9 +237,8 @@ static int multiq_tune(struct Qdisc *sch, struct nlattr *opt)
 				q->queues[i] = child;
 
 				if (old != &noop_qdisc) {
-					qdisc_tree_reduce_backlog(old,
-								  old->q.qlen,
-								  old->qstats.backlog);
+					qdisc_tree_decrease_qlen(old,
+								 old->q.qlen);
 					qdisc_destroy(old);
 				}
 				sch_tree_unlock(sch);
@@ -285,7 +302,13 @@ static int multiq_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
 	if (new == NULL)
 		new = &noop_qdisc;
 
-	*old = qdisc_replace(sch, new, &q->queues[band]);
+	sch_tree_lock(sch);
+	*old = q->queues[band];
+	q->queues[band] = new;
+	qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
+	qdisc_reset(*old);
+	sch_tree_unlock(sch);
+
 	return 0;
 }
 
@@ -336,9 +359,9 @@ static int multiq_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	struct Qdisc *cl_q;
 
 	cl_q = q->queues[cl - 1];
-	if (gnet_stats_copy_basic(qdisc_root_sleeping_running(sch),
-				  d, NULL, &cl_q->bstats) < 0 ||
-	    gnet_stats_copy_queue(d, NULL, &cl_q->qstats, cl_q->q.qlen) < 0)
+	cl_q->qstats.qlen = cl_q->q.qlen;
+	if (gnet_stats_copy_basic(d, &cl_q->bstats) < 0 ||
+	    gnet_stats_copy_queue(d, &cl_q->qstats) < 0)
 		return -1;
 
 	return 0;
@@ -365,8 +388,7 @@ static void multiq_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 	}
 }
 
-static struct tcf_proto __rcu **multiq_find_tcf(struct Qdisc *sch,
-						unsigned long cl)
+static struct tcf_proto **multiq_find_tcf(struct Qdisc *sch, unsigned long cl)
 {
 	struct multiq_sched_data *q = qdisc_priv(sch);
 
@@ -396,6 +418,7 @@ static struct Qdisc_ops multiq_qdisc_ops __read_mostly = {
 	.enqueue	=	multiq_enqueue,
 	.dequeue	=	multiq_dequeue,
 	.peek		=	multiq_peek,
+	.drop		=	multiq_drop,
 	.init		=	multiq_init,
 	.reset		=	multiq_reset,
 	.destroy	=	multiq_destroy,

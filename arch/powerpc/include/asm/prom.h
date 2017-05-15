@@ -76,6 +76,8 @@ void of_parse_dma_window(struct device_node *dn, const __be32 *dma_window,
 			 unsigned long *busno, unsigned long *phys,
 			 unsigned long *size);
 
+extern void kdump_move_device_tree(void);
+
 extern void of_instantiate_rtc(void);
 
 extern int of_get_ibm_chip_id(struct device_node *np);
@@ -158,6 +160,12 @@ struct of_drconf_cell {
 
 /* Option Vector 6: IBM PAPR hints */
 #define OV6_LINUX		0x02	/* Linux is our OS */
+
+/*
+ * The architecture vector has an array of PVR mask/value pairs,
+ * followed by # option vectors - 1, followed by the option vectors.
+ */
+extern unsigned char ibm_architecture_vec[];
 
 #endif /* __KERNEL__ */
 #endif /* _POWERPC_PROM_H */

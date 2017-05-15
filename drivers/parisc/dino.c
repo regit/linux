@@ -599,10 +599,8 @@ dino_fixup_bus(struct pci_bus *bus)
 		** P2PB's only have 2 BARs, no IRQs.
 		** I'd like to just ignore them for now.
 		*/
-		if ((dev->class >> 8) == PCI_CLASS_BRIDGE_PCI)  {
-			pcibios_init_bridge(dev);
+		if ((dev->class >> 8) == PCI_CLASS_BRIDGE_PCI)
 			continue;
-		}
 
 		/* null out the ROM resource if there is one (we don't
 		 * care about an expansion rom on parisc, since it
@@ -915,7 +913,7 @@ static int __init dino_probe(struct parisc_device *dev)
 	printk("%s version %s found at 0x%lx\n", name, version, hpa);
 
 	if (!request_mem_region(hpa, PAGE_SIZE, name)) {
-		printk(KERN_ERR "DINO: Hey! Someone took my MMIO space (0x%lx)!\n",
+		printk(KERN_ERR "DINO: Hey! Someone took my MMIO space (0x%ld)!\n",
 			hpa);
 		return 1;
 	}

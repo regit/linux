@@ -65,15 +65,17 @@ static int kempld_gpio_get_bit(struct kempld_device_data *pld, u8 reg, u8 bit)
 
 static int kempld_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct kempld_gpio_data *gpio = gpiochip_get_data(chip);
+	struct kempld_gpio_data *gpio
+		= container_of(chip, struct kempld_gpio_data, chip);
 	struct kempld_device_data *pld = gpio->pld;
 
-	return !!kempld_gpio_get_bit(pld, KEMPLD_GPIO_LVL_NUM(offset), offset);
+	return kempld_gpio_get_bit(pld, KEMPLD_GPIO_LVL_NUM(offset), offset);
 }
 
 static void kempld_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct kempld_gpio_data *gpio = gpiochip_get_data(chip);
+	struct kempld_gpio_data *gpio
+		= container_of(chip, struct kempld_gpio_data, chip);
 	struct kempld_device_data *pld = gpio->pld;
 
 	kempld_get_mutex(pld);
@@ -83,7 +85,8 @@ static void kempld_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 
 static int kempld_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct kempld_gpio_data *gpio = gpiochip_get_data(chip);
+	struct kempld_gpio_data *gpio
+		= container_of(chip, struct kempld_gpio_data, chip);
 	struct kempld_device_data *pld = gpio->pld;
 
 	kempld_get_mutex(pld);
@@ -96,7 +99,8 @@ static int kempld_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 static int kempld_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 					int value)
 {
-	struct kempld_gpio_data *gpio = gpiochip_get_data(chip);
+	struct kempld_gpio_data *gpio
+		= container_of(chip, struct kempld_gpio_data, chip);
 	struct kempld_device_data *pld = gpio->pld;
 
 	kempld_get_mutex(pld);
@@ -109,10 +113,11 @@ static int kempld_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 
 static int kempld_gpio_get_direction(struct gpio_chip *chip, unsigned offset)
 {
-	struct kempld_gpio_data *gpio = gpiochip_get_data(chip);
+	struct kempld_gpio_data *gpio
+		= container_of(chip, struct kempld_gpio_data, chip);
 	struct kempld_device_data *pld = gpio->pld;
 
-	return !kempld_gpio_get_bit(pld, KEMPLD_GPIO_DIR_NUM(offset), offset);
+	return kempld_gpio_get_bit(pld, KEMPLD_GPIO_DIR_NUM(offset), offset);
 }
 
 static int kempld_gpio_pincount(struct kempld_device_data *pld)
@@ -151,7 +156,7 @@ static int kempld_gpio_probe(struct platform_device *pdev)
 	}
 
 	gpio = devm_kzalloc(dev, sizeof(*gpio), GFP_KERNEL);
-	if (!gpio)
+	if (gpio == NULL)
 		return -ENOMEM;
 
 	gpio->pld = pld;
@@ -161,7 +166,7 @@ static int kempld_gpio_probe(struct platform_device *pdev)
 	chip = &gpio->chip;
 	chip->label = "gpio-kempld";
 	chip->owner = THIS_MODULE;
-	chip->parent = dev;
+	chip->dev = dev;
 	chip->can_sleep = true;
 	if (pdata && pdata->gpio_base)
 		chip->base = pdata->gpio_base;
@@ -178,7 +183,7 @@ static int kempld_gpio_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	ret = devm_gpiochip_add_data(dev, chip, gpio);
+	ret = gpiochip_add(chip);
 	if (ret) {
 		dev_err(dev, "Could not register GPIO chip\n");
 		return ret;
@@ -190,11 +195,20 @@ static int kempld_gpio_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int kempld_gpio_remove(struct platform_device *pdev)
+{
+	struct kempld_gpio_data *gpio = platform_get_drvdata(pdev);
+
+	return gpiochip_remove(&gpio->chip);
+}
+
 static struct platform_driver kempld_gpio_driver = {
 	.driver = {
 		.name = "kempld-gpio",
+		.owner = THIS_MODULE,
 	},
 	.probe		= kempld_gpio_probe,
+	.remove		= kempld_gpio_remove,
 };
 
 module_platform_driver(kempld_gpio_driver);

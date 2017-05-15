@@ -2,7 +2,7 @@
  * Copyright (C) 2005, 2006
  * Avishay Traeger (avishay@gmail.com)
  * Copyright (C) 2008, 2009
- * Boaz Harrosh <ooo@electrozaur.com>
+ * Boaz Harrosh <bharrosh@panasas.com>
  *
  * This file is part of exofs.
  *
@@ -29,7 +29,7 @@
 
 #include "ore_raid.h"
 
-MODULE_AUTHOR("Boaz Harrosh <ooo@electrozaur.com>");
+MODULE_AUTHOR("Boaz Harrosh <bharrosh@panasas.com>");
 MODULE_DESCRIPTION("Objects Raid Engine ore.ko");
 MODULE_LICENSE("GPL");
 
@@ -878,7 +878,7 @@ static int _write_mirror(struct ore_io_state *ios, int cur_comp)
 			} else {
 				bio = master_dev->bio;
 				/* FIXME: bio_set_dir() */
-				bio_set_op_attrs(bio, REQ_OP_WRITE, 0);
+				bio->bi_rw |= REQ_WRITE;
 			}
 
 			osd_req_write(or, _ios_obj(ios, cur_comp),

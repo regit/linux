@@ -32,14 +32,15 @@ static __be32 rpfilter_get_saddr(__be32 addr)
 	return addr;
 }
 
-static bool rpfilter_lookup_reverse(struct net *net, struct flowi4 *fl4,
+static bool rpfilter_lookup_reverse(struct flowi4 *fl4,
 				const struct net_device *dev, u8 flags)
 {
 	struct fib_result res;
 	bool dev_match;
+	struct net *net = dev_net(dev);
 	int ret __maybe_unused;
 
-	if (fib_lookup(net, fl4, &res, FIB_LOOKUP_IGNORE_LINKSTATE))
+	if (fib_lookup(net, fl4, &res))
 		return false;
 
 	if (res.type != RTN_UNICAST) {
@@ -60,13 +61,15 @@ static bool rpfilter_lookup_reverse(struct net *net, struct flowi4 *fl4,
 	if (FIB_RES_DEV(res) == dev)
 		dev_match = true;
 #endif
-	return dev_match || flags & XT_RPFILTER_LOOSE;
+	if (dev_match || flags & XT_RPFILTER_LOOSE)
+		return FIB_RES_NH(res).nh_scope <= RT_SCOPE_HOST;
+	return dev_match;
 }
 
-static bool
-rpfilter_is_loopback(const struct sk_buff *skb, const struct net_device *in)
+static bool rpfilter_is_local(const struct sk_buff *skb)
 {
-	return skb->pkt_type == PACKET_LOOPBACK || in->flags & IFF_LOOPBACK;
+	const struct rtable *rt = skb_rtable(skb);
+	return rt && (rt->rt_flags & RTCF_LOCAL);
 }
 
 static bool rpfilter_mt(const struct sk_buff *skb, struct xt_action_param *par)
@@ -79,16 +82,14 @@ static bool rpfilter_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	info = par->matchinfo;
 	invert = info->flags & XT_RPFILTER_INVERT;
 
-	if (rpfilter_is_loopback(skb, xt_in(par)))
+	if (rpfilter_is_local(skb))
 		return true ^ invert;
 
 	iph = ip_hdr(skb);
-	if (ipv4_is_zeronet(iph->saddr)) {
-		if (ipv4_is_lbcast(iph->daddr) ||
-		    ipv4_is_local_multicast(iph->daddr))
-			return true ^ invert;
+	if (ipv4_is_multicast(iph->daddr)) {
+		if (ipv4_is_zeronet(iph->saddr))
+			return ipv4_is_local_multicast(iph->daddr) ^ invert;
 	}
-
 	flow.flowi4_iif = LOOPBACK_IFINDEX;
 	flow.daddr = iph->saddr;
 	flow.saddr = rpfilter_get_saddr(iph->daddr);
@@ -97,7 +98,7 @@ static bool rpfilter_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	flow.flowi4_tos = RT_TOS(iph->tos);
 	flow.flowi4_scope = RT_SCOPE_UNIVERSE;
 
-	return rpfilter_lookup_reverse(xt_net(par), &flow, xt_in(par), info->flags) ^ invert;
+	return rpfilter_lookup_reverse(&flow, par->in, info->flags) ^ invert;
 }
 
 static int rpfilter_check(const struct xt_mtchk_param *par)

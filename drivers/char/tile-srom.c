@@ -27,6 +27,7 @@
 #include <linux/types.h>	/* size_t */
 #include <linux/proc_fs.h>
 #include <linux/fcntl.h>	/* O_ACCMODE */
+#include <linux/aio.h>
 #include <linux/pagemap.h>
 #include <linux/hugetlb.h>
 #include <linux/uaccess.h>
@@ -75,7 +76,6 @@ MODULE_LICENSE("GPL");
 
 static int srom_devs;			/* Number of SROM partitions */
 static struct cdev srom_cdev;
-static struct platform_device *srom_parent;
 static struct class *srom_class;
 static struct srom_dev *srom_devices;
 
@@ -312,8 +312,7 @@ ATTRIBUTE_GROUPS(srom_dev);
 
 static char *srom_devnode(struct device *dev, umode_t *mode)
 {
-	if (mode)
-		*mode = 0644;
+	*mode = S_IRUGO | S_IWUSR;
 	return kasprintf(GFP_KERNEL, "srom/%s", dev_name(dev));
 }
 
@@ -332,11 +331,13 @@ static const struct file_operations srom_fops = {
 /**
  * srom_setup_minor() - Initialize per-minor information.
  * @srom: Per-device SROM state.
- * @devhdl: Partition device handle.
+ * @index: Device to set up.
  */
-static int srom_setup_minor(struct srom_dev *srom, int devhdl)
+static int srom_setup_minor(struct srom_dev *srom, int index)
 {
-	srom->hv_devhdl = devhdl;
+	struct device *dev;
+	int devhdl = srom->hv_devhdl;
+
 	mutex_init(&srom->lock);
 
 	if (_srom_read(devhdl, &srom->total_size,
@@ -349,7 +350,9 @@ static int srom_setup_minor(struct srom_dev *srom, int devhdl)
 		       SROM_PAGE_SIZE_OFF, sizeof(srom->page_size)) < 0)
 		return -EIO;
 
-	return 0;
+	dev = device_create(srom_class, &platform_bus,
+			    MKDEV(srom_major, index), srom, "%d", index);
+	return PTR_ERR_OR_ZERO(dev);
 }
 
 /** srom_init() - Initialize the driver's module. */
@@ -362,7 +365,7 @@ static int srom_init(void)
 	 * Start with a plausible number of partitions; the krealloc() call
 	 * below will yield about log(srom_devs) additional allocations.
 	 */
-	srom_devices = kmalloc(4 * sizeof(struct srom_dev), GFP_KERNEL);
+	srom_devices = kzalloc(4 * sizeof(struct srom_dev), GFP_KERNEL);
 
 	/* Discover the number of srom partitions. */
 	for (i = 0; ; i++) {
@@ -370,7 +373,7 @@ static int srom_init(void)
 		char buf[20];
 		struct srom_dev *new_srom_devices =
 			krealloc(srom_devices, (i+1) * sizeof(struct srom_dev),
-				 GFP_KERNEL);
+				 GFP_KERNEL | __GFP_ZERO);
 		if (!new_srom_devices) {
 			result = -ENOMEM;
 			goto fail_mem;
@@ -384,9 +387,7 @@ static int srom_init(void)
 					  i, devhdl);
 			break;
 		}
-		result = srom_setup_minor(&srom_devices[i], devhdl);
-		if (result != 0)
-			goto fail_mem;
+		srom_devices[i].hv_devhdl = devhdl;
 	}
 	srom_devs = i;
 
@@ -414,13 +415,6 @@ static int srom_init(void)
 	if (result < 0)
 		goto fail_chrdev;
 
-	/* Create a parent device */
-	srom_parent = platform_device_register_simple("srom", -1, NULL, 0);
-	if (IS_ERR(srom_parent)) {
-		result = PTR_ERR(srom_parent);
-		goto fail_pdev;
-	}
-
 	/* Create a sysfs class. */
 	srom_class = class_create(THIS_MODULE, "srom");
 	if (IS_ERR(srom_class)) {
@@ -430,13 +424,9 @@ static int srom_init(void)
 	srom_class->dev_groups = srom_dev_groups;
 	srom_class->devnode = srom_devnode;
 
-	/* Create per-partition devices */
+	/* Do per-partition initialization */
 	for (i = 0; i < srom_devs; i++) {
-		struct device *dev =
-			device_create(srom_class, &srom_parent->dev,
-				      MKDEV(srom_major, i), srom_devices + i,
-				      "%d", i);
-		result = PTR_ERR_OR_ZERO(dev);
+		result = srom_setup_minor(srom_devices + i, i);
 		if (result < 0)
 			goto fail_class;
 	}
@@ -448,8 +438,6 @@ fail_class:
 		device_destroy(srom_class, MKDEV(srom_major, i));
 	class_destroy(srom_class);
 fail_cdev:
-	platform_device_unregister(srom_parent);
-fail_pdev:
 	cdev_del(&srom_cdev);
 fail_chrdev:
 	unregister_chrdev_region(dev, srom_devs);
@@ -466,7 +454,6 @@ static void srom_cleanup(void)
 		device_destroy(srom_class, MKDEV(srom_major, i));
 	class_destroy(srom_class);
 	cdev_del(&srom_cdev);
-	platform_device_unregister(srom_parent);
 	unregister_chrdev_region(MKDEV(srom_major, 0), srom_devs);
 	kfree(srom_devices);
 }

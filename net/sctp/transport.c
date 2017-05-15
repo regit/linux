@@ -72,7 +72,7 @@ static struct sctp_transport *sctp_transport_init(struct net *net,
 	 */
 	peer->rto = msecs_to_jiffies(net->sctp.rto_initial);
 
-	peer->last_time_heard = 0;
+	peer->last_time_heard = ktime_get();
 	peer->last_time_ecne_reduced = jiffies;
 
 	peer->param_flags = SPP_HB_DISABLE |
@@ -132,6 +132,8 @@ fail:
  */
 void sctp_transport_free(struct sctp_transport *transport)
 {
+	transport->dead = 1;
+
 	/* Try to delete the heartbeat timer.  */
 	if (del_timer(&transport->hb_timer))
 		sctp_transport_put(transport);
@@ -167,7 +169,7 @@ static void sctp_transport_destroy_rcu(struct rcu_head *head)
  */
 static void sctp_transport_destroy(struct sctp_transport *transport)
 {
-	if (unlikely(atomic_read(&transport->refcnt))) {
+	if (unlikely(!transport->dead)) {
 		WARN(1, "Attempt to destroy undead transport %p!\n", transport);
 		return;
 	}
@@ -183,7 +185,7 @@ static void sctp_transport_destroy(struct sctp_transport *transport)
 /* Start T3_rtx timer if it is not already running and update the heartbeat
  * timer.  This routine is called every time a DATA chunk is sent.
  */
-void sctp_transport_reset_t3_rtx(struct sctp_transport *transport)
+void sctp_transport_reset_timers(struct sctp_transport *transport)
 {
 	/* RFC 2960 6.3.2 Retransmission Timer Rules
 	 *
@@ -197,18 +199,11 @@ void sctp_transport_reset_t3_rtx(struct sctp_transport *transport)
 		if (!mod_timer(&transport->T3_rtx_timer,
 			       jiffies + transport->rto))
 			sctp_transport_hold(transport);
-}
-
-void sctp_transport_reset_hb_timer(struct sctp_transport *transport)
-{
-	unsigned long expires;
 
 	/* When a data chunk is sent, reset the heartbeat interval.  */
-	expires = jiffies + sctp_transport_timeout(transport);
-	if (time_before(transport->hb_timer.expires, expires) &&
-	    !mod_timer(&transport->hb_timer,
-		       expires + prandom_u32_max(transport->rto)))
-		sctp_transport_hold(transport);
+	if (!mod_timer(&transport->hb_timer,
+		       sctp_transport_timeout(transport)))
+	    sctp_transport_hold(transport);
 }
 
 /* This transport has been assigned to an association.
@@ -233,7 +228,7 @@ void sctp_transport_pmtu(struct sctp_transport *transport, struct sock *sk)
 	}
 
 	if (transport->dst) {
-		transport->pathmtu = SCTP_TRUNC4(dst_mtu(transport->dst));
+		transport->pathmtu = dst_mtu(transport->dst);
 	} else
 		transport->pathmtu = SCTP_DEFAULT_MAXSEGMENT;
 }
@@ -287,23 +282,23 @@ void sctp_transport_route(struct sctp_transport *transport,
 		return;
 	}
 	if (transport->dst) {
-		transport->pathmtu = SCTP_TRUNC4(dst_mtu(transport->dst));
+		transport->pathmtu = dst_mtu(transport->dst);
 
 		/* Initialize sk->sk_rcv_saddr, if the transport is the
 		 * association's active path for getsockname().
 		 */
 		if (asoc && (!asoc->peer.primary_path ||
 				(transport == asoc->peer.active_path)))
-			opt->pf->to_sk_saddr(&transport->saddr,
-					     asoc->base.sk);
+			opt->pf->af->to_sk_saddr(&transport->saddr,
+						 asoc->base.sk);
 	} else
 		transport->pathmtu = SCTP_DEFAULT_MAXSEGMENT;
 }
 
 /* Hold a reference to a transport.  */
-int sctp_transport_hold(struct sctp_transport *transport)
+void sctp_transport_hold(struct sctp_transport *transport)
 {
-	return atomic_add_unless(&transport->refcnt, 1, 0);
+	atomic_inc(&transport->refcnt);
 }
 
 /* Release a reference to a transport and clean up
@@ -336,7 +331,7 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 		 * 1/8, rto_alpha would be expressed as 3.
 		 */
 		tp->rttvar = tp->rttvar - (tp->rttvar >> net->sctp.rto_beta)
-			+ (((__u32)abs((__s64)tp->srtt - (__s64)rtt)) >> net->sctp.rto_beta);
+			+ (((__u32)abs64((__s64)tp->srtt - (__s64)rtt)) >> net->sctp.rto_beta);
 		tp->srtt = tp->srtt - (tp->srtt >> net->sctp.rto_alpha)
 			+ (rtt >> net->sctp.rto_alpha);
 	} else {
@@ -599,15 +594,14 @@ void sctp_transport_burst_reset(struct sctp_transport *t)
 }
 
 /* What is the next timeout value for this transport? */
-unsigned long sctp_transport_timeout(struct sctp_transport *trans)
+unsigned long sctp_transport_timeout(struct sctp_transport *t)
 {
-	/* RTO + timer slack +/- 50% of RTO */
-	unsigned long timeout = trans->rto >> 1;
-
-	if (trans->state != SCTP_UNCONFIRMED &&
-	    trans->state != SCTP_PF)
-		timeout += trans->hbinterval;
-
+	unsigned long timeout;
+	timeout = t->rto + sctp_jitter(t->rto);
+	if ((t->state != SCTP_UNCONFIRMED) &&
+	    (t->state != SCTP_PF))
+		timeout += t->hbinterval;
+	timeout += jiffies;
 	return timeout;
 }
 

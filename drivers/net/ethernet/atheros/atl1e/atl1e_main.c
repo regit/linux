@@ -35,7 +35,7 @@ char atl1e_driver_version[] = DRV_VERSION;
  * { Vendor ID, Device ID, SubVendor ID, SubDevice ID,
  *   Class, Class Mask, private data (not used) }
  */
-static const struct pci_device_id atl1e_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(atl1e_pci_tbl) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_ATTANSIC, PCI_DEVICE_ID_ATTANSIC_L1E)},
 	{PCI_DEVICE(PCI_VENDOR_ID_ATTANSIC, 0x1066)},
 	/* required last entry */
@@ -439,10 +439,16 @@ static int atl1e_set_features(struct net_device *netdev,
 static int atl1e_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct atl1e_adapter *adapter = netdev_priv(netdev);
+	int old_mtu   = netdev->mtu;
 	int max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN;
 
+	if ((max_frame < ETH_ZLEN + ETH_FCS_LEN) ||
+			(max_frame > MAX_JUMBO_FRAME_SIZE)) {
+		netdev_warn(adapter->netdev, "invalid MTU setting\n");
+		return -EINVAL;
+	}
 	/* set MTU */
-	if (netif_running(netdev)) {
+	if (old_mtu != new_mtu && netif_running(netdev)) {
 		while (test_and_set_bit(__AT_RESETTING, &adapter->flags))
 			msleep(1);
 		netdev->mtu = new_mtu;
@@ -642,6 +648,7 @@ static int atl1e_sw_init(struct atl1e_adapter *adapter)
 
 	atomic_set(&adapter->irq_sem, 1);
 	spin_lock_init(&adapter->mdio_lock);
+	spin_lock_init(&adapter->tx_lock);
 
 	set_bit(__AT_DOWN, &adapter->flags);
 
@@ -824,13 +831,16 @@ static int atl1e_setup_ring_resources(struct atl1e_adapter *adapter)
 	/* real ring DMA buffer */
 
 	size = adapter->ring_size;
-	adapter->ring_vir_addr = pci_zalloc_consistent(pdev, adapter->ring_size,
-						       &adapter->ring_dma);
+	adapter->ring_vir_addr = pci_alloc_consistent(pdev,
+			adapter->ring_size, &adapter->ring_dma);
+
 	if (adapter->ring_vir_addr == NULL) {
 		netdev_err(adapter->netdev,
 			   "pci_alloc_consistent failed, size = D%d\n", size);
 		return -ENOMEM;
 	}
+
+	memset(adapter->ring_vir_addr, 0, adapter->ring_size);
 
 	rx_page_desc = rx_ring->rx_page_desc;
 
@@ -1859,6 +1869,7 @@ static netdev_tx_t atl1e_xmit_frame(struct sk_buff *skb,
 					  struct net_device *netdev)
 {
 	struct atl1e_adapter *adapter = netdev_priv(netdev);
+	unsigned long flags;
 	u16 tpd_req = 1;
 	struct atl1e_tpd_desc *tpd;
 
@@ -1872,17 +1883,20 @@ static netdev_tx_t atl1e_xmit_frame(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 	}
 	tpd_req = atl1e_cal_tdp_req(skb);
+	if (!spin_trylock_irqsave(&adapter->tx_lock, flags))
+		return NETDEV_TX_LOCKED;
 
 	if (atl1e_tpd_avail(adapter) < tpd_req) {
 		/* no enough descriptor, just stop queue */
 		netif_stop_queue(netdev);
+		spin_unlock_irqrestore(&adapter->tx_lock, flags);
 		return NETDEV_TX_BUSY;
 	}
 
 	tpd = atl1e_get_tpd(adapter);
 
-	if (skb_vlan_tag_present(skb)) {
-		u16 vlan_tag = skb_vlan_tag_get(skb);
+	if (vlan_tx_tag_present(skb)) {
+		u16 vlan_tag = vlan_tx_tag_get(skb);
 		u16 atl1e_vlan_tag;
 
 		tpd->word3 |= 1 << TPD_INS_VL_TAG_SHIFT;
@@ -1899,6 +1913,7 @@ static netdev_tx_t atl1e_xmit_frame(struct sk_buff *skb,
 
 	/* do TSO and check sum */
 	if (atl1e_tso_csum(adapter, skb, tpd) != 0) {
+		spin_unlock_irqrestore(&adapter->tx_lock, flags);
 		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
@@ -1909,7 +1924,10 @@ static netdev_tx_t atl1e_xmit_frame(struct sk_buff *skb,
 	}
 
 	atl1e_tx_queue(adapter, tpd_req, tpd);
+
+	netdev->trans_start = jiffies; /* NETIF_F_LLTX driver :( */
 out:
+	spin_unlock_irqrestore(&adapter->tx_lock, flags);
 	return NETDEV_TX_OK;
 }
 
@@ -2266,15 +2284,12 @@ static int atl1e_init_netdev(struct net_device *netdev, struct pci_dev *pdev)
 	netdev->netdev_ops = &atl1e_netdev_ops;
 
 	netdev->watchdog_timeo = AT_TX_WATCHDOG;
-	/* MTU range: 42 - 8170 */
-	netdev->min_mtu = ETH_ZLEN - (ETH_HLEN + VLAN_HLEN);
-	netdev->max_mtu = MAX_JUMBO_FRAME_SIZE -
-			  (ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN);
 	atl1e_set_ethtool_ops(netdev);
 
 	netdev->hw_features = NETIF_F_SG | NETIF_F_HW_CSUM | NETIF_F_TSO |
 			      NETIF_F_HW_VLAN_CTAG_RX;
-	netdev->features = netdev->hw_features | NETIF_F_HW_VLAN_CTAG_TX;
+	netdev->features = netdev->hw_features | NETIF_F_LLTX |
+			   NETIF_F_HW_VLAN_CTAG_TX;
 	/* not enabled by default */
 	netdev->hw_features |= NETIF_F_RXALL | NETIF_F_RXFCS;
 	return 0;
@@ -2361,8 +2376,9 @@ static int atl1e_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	netif_napi_add(netdev, &adapter->napi, atl1e_clean, 64);
 
-	setup_timer(&adapter->phy_config_timer, atl1e_phy_config,
-		    (unsigned long)adapter);
+	init_timer(&adapter->phy_config_timer);
+	adapter->phy_config_timer.function = atl1e_phy_config;
+	adapter->phy_config_timer.data = (unsigned long) adapter;
 
 	/* get user settings */
 	atl1e_check_options(adapter);

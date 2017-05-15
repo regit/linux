@@ -93,6 +93,11 @@ static int ipw_open(struct tty_struct *linux_tty, struct file *filp)
 		return -ENODEV;
 
 	mutex_lock(&tty->ipw_tty_mutex);
+
+	if (tty->closing) {
+		mutex_unlock(&tty->ipw_tty_mutex);
+		return -ENODEV;
+	}
 	if (tty->port.count == 0)
 		tty->tx_bytes_queued = 0;
 
@@ -252,11 +257,20 @@ static int ipwireless_get_serial_info(struct ipw_tty *tty,
 {
 	struct serial_struct tmp;
 
+	if (!retinfo)
+		return (-EFAULT);
+
 	memset(&tmp, 0, sizeof(tmp));
 	tmp.type = PORT_UNKNOWN;
 	tmp.line = tty->index;
+	tmp.port = 0;
+	tmp.irq = 0;
+	tmp.flags = 0;
 	tmp.baud_base = 115200;
-
+	tmp.close_delay = 0;
+	tmp.closing_wait = 0;
+	tmp.custom_divisor = 0;
+	tmp.hub6 = 0;
 	if (copy_to_user(retinfo, &tmp, sizeof(*retinfo)))
 		return -EFAULT;
 

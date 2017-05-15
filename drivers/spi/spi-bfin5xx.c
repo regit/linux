@@ -67,6 +67,8 @@ struct bfin_spi_master_data {
 	/* BFIN hookup */
 	struct bfin5xx_spi_master *master_info;
 
+	/* Driver message queue */
+	struct workqueue_struct *workqueue;
 	struct work_struct pump_messages;
 	spinlock_t lock;
 	struct list_head queue;
@@ -357,7 +359,7 @@ static void bfin_spi_giveback(struct bfin_spi_master_data *drv_data)
 	drv_data->cur_msg = NULL;
 	drv_data->cur_transfer = NULL;
 	drv_data->cur_chip = NULL;
-	schedule_work(&drv_data->pump_messages);
+	queue_work(drv_data->workqueue, &drv_data->pump_messages);
 	spin_unlock_irqrestore(&drv_data->lock, flags);
 
 	msg->state = NULL;
@@ -557,7 +559,7 @@ static void bfin_spi_pump_transfers(unsigned long data)
 	struct spi_transfer *previous = NULL;
 	struct bfin_spi_slave_data *chip = NULL;
 	unsigned int bits_per_word;
-	u16 cr, cr_width = 0, dma_width, dma_config;
+	u16 cr, cr_width, dma_width, dma_config;
 	u32 tranf_success = 1;
 	u8 full_duplex = 0;
 
@@ -646,6 +648,7 @@ static void bfin_spi_pump_transfers(unsigned long data)
 	} else if (bits_per_word == 8) {
 		drv_data->n_bytes = bits_per_word/8;
 		drv_data->len = transfer->len;
+		cr_width = 0;
 		drv_data->ops = &bfin_bfin_spi_transfer_ops_u8;
 	}
 	cr = bfin_read(&drv_data->regs->ctl) & ~(BIT_CTL_TIMOD | BIT_CTL_WORDSIZE);
@@ -659,7 +662,11 @@ static void bfin_spi_pump_transfers(unsigned long data)
 	message->state = RUNNING_STATE;
 	dma_config = 0;
 
-	bfin_write(&drv_data->regs->baud, hz_to_spi_baud(transfer->speed_hz));
+	/* Speed setup (surely valid because already checked) */
+	if (transfer->speed_hz)
+		bfin_write(&drv_data->regs->baud, hz_to_spi_baud(transfer->speed_hz));
+	else
+		bfin_write(&drv_data->regs->baud, chip->baud);
 
 	bfin_write(&drv_data->regs->stat, BIT_STAT_CLR);
 	bfin_spi_cs_active(drv_data, chip);
@@ -944,7 +951,7 @@ static int bfin_spi_transfer(struct spi_device *spi, struct spi_message *msg)
 	list_add_tail(&msg->queue, &drv_data->queue);
 
 	if (drv_data->running && !drv_data->busy)
-		schedule_work(&drv_data->pump_messages);
+		queue_work(drv_data->workqueue, &drv_data->pump_messages);
 
 	spin_unlock_irqrestore(&drv_data->lock, flags);
 
@@ -1175,7 +1182,12 @@ static int bfin_spi_init_queue(struct bfin_spi_master_data *drv_data)
 	tasklet_init(&drv_data->pump_transfers,
 		     bfin_spi_pump_transfers, (unsigned long)drv_data);
 
+	/* init messages workqueue */
 	INIT_WORK(&drv_data->pump_messages, bfin_spi_pump_messages);
+	drv_data->workqueue = create_singlethread_workqueue(
+				dev_name(drv_data->master->dev.parent));
+	if (drv_data->workqueue == NULL)
+		return -EBUSY;
 
 	return 0;
 }
@@ -1197,7 +1209,7 @@ static int bfin_spi_start_queue(struct bfin_spi_master_data *drv_data)
 	drv_data->cur_chip = NULL;
 	spin_unlock_irqrestore(&drv_data->lock, flags);
 
-	schedule_work(&drv_data->pump_messages);
+	queue_work(drv_data->workqueue, &drv_data->pump_messages);
 
 	return 0;
 }
@@ -1239,7 +1251,7 @@ static int bfin_spi_destroy_queue(struct bfin_spi_master_data *drv_data)
 	if (status != 0)
 		return status;
 
-	flush_work(&drv_data->pump_messages);
+	destroy_workqueue(drv_data->workqueue);
 
 	return 0;
 }
@@ -1443,6 +1455,7 @@ MODULE_ALIAS("platform:bfin-spi");
 static struct platform_driver bfin_spi_driver = {
 	.driver	= {
 		.name	= DRV_NAME,
+		.owner	= THIS_MODULE,
 		.pm	= BFIN_SPI_PM_OPS,
 	},
 	.probe		= bfin_spi_probe,

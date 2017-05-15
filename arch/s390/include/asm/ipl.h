@@ -17,12 +17,12 @@
 #define IPL_PARM_BLK_FCP_LEN (sizeof(struct ipl_list_hdr) + \
 			      sizeof(struct ipl_block_fcp))
 
-#define IPL_PARM_BLK0_FCP_LEN (sizeof(struct ipl_block_fcp) + 16)
+#define IPL_PARM_BLK0_FCP_LEN (sizeof(struct ipl_block_fcp) + 8)
 
 #define IPL_PARM_BLK_CCW_LEN (sizeof(struct ipl_list_hdr) + \
 			      sizeof(struct ipl_block_ccw))
 
-#define IPL_PARM_BLK0_CCW_LEN (sizeof(struct ipl_block_ccw) + 16)
+#define IPL_PARM_BLK0_CCW_LEN (sizeof(struct ipl_block_ccw) + 8)
 
 #define IPL_MAX_SUPPORTED_VERSION (0)
 
@@ -38,11 +38,10 @@ struct ipl_list_hdr {
 	u8  pbt;
 	u8  flags;
 	u16 reserved2;
-	u8  loadparm[8];
 } __attribute__((packed));
 
 struct ipl_block_fcp {
-	u8  reserved1[305-1];
+	u8  reserved1[313-1];
 	u8  opt;
 	u8  reserved2[3];
 	u16 reserved3;
@@ -63,9 +62,9 @@ struct ipl_block_fcp {
 				 offsetof(struct ipl_block_fcp, scp_data)))
 
 struct ipl_block_ccw {
+	u8  load_parm[8];
 	u8  reserved1[84];
-	u16 reserved2 : 13;
-	u8  ssid : 3;
+	u8  reserved2[2];
 	u16 devno;
 	u8  vm_flags;
 	u8  reserved3[3];
@@ -87,17 +86,20 @@ struct ipl_parameter_block {
  * IPL validity flags
  */
 extern u32 ipl_flags;
+extern u32 dump_prefix_page;
 
-struct save_area;
-struct save_area * __init save_area_alloc(bool is_boot_cpu);
-struct save_area * __init save_area_boot_cpu(void);
-void __init save_area_add_regs(struct save_area *, void *regs);
-void __init save_area_add_vxrs(struct save_area *, __vector128 *vxrs);
+struct dump_save_areas {
+	struct save_area **areas;
+	int count;
+};
+
+extern struct dump_save_areas dump_save_areas;
+struct save_area *dump_save_area_create(int cpu);
 
 extern void do_reipl(void);
 extern void do_halt(void);
 extern void do_poff(void);
-extern void ipl_verify_parameters(void);
+extern void ipl_save_parameters(void);
 extern void ipl_update_parameters(void);
 extern size_t append_ipl_vmparm(char *, size_t);
 extern size_t append_ipl_scpdata(char *, size_t);
@@ -141,11 +143,11 @@ extern void setup_ipl(void);
  * DIAG 308 support
  */
 enum diag308_subcode  {
-	DIAG308_REL_HSA = 2,
-	DIAG308_LOAD_CLEAR = 3,
-	DIAG308_LOAD_NORMAL_DUMP = 4,
-	DIAG308_SET = 5,
-	DIAG308_STORE = 6,
+	DIAG308_REL_HSA	= 2,
+	DIAG308_IPL	= 3,
+	DIAG308_DUMP	= 4,
+	DIAG308_SET	= 5,
+	DIAG308_STORE	= 6,
 };
 
 enum diag308_ipl_type {
@@ -174,7 +176,7 @@ enum diag308_rc {
 
 extern int diag308(unsigned long subcode, void *addr);
 extern void diag308_reset(void);
-extern void store_status(void (*fn)(void *), void *data);
+extern void store_status(void);
 extern void lgr_info_log(void);
 
 #endif /* _ASM_S390_IPL_H */

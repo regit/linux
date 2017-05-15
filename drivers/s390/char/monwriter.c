@@ -21,7 +21,7 @@
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/ebcdic.h>
 #include <asm/io.h>
 #include <asm/appldata.h>
@@ -334,6 +334,7 @@ static const struct dev_pm_ops monwriter_pm_ops = {
 static struct platform_driver monwriter_pdrv = {
 	.driver = {
 		.name	= "monwriter",
+		.owner	= THIS_MODULE,
 		.pm	= &monwriter_pm_ops,
 	},
 };

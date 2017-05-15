@@ -55,10 +55,9 @@ static void ttm_tt_alloc_page_directory(struct ttm_tt *ttm)
 
 static void ttm_dma_tt_alloc_page_directory(struct ttm_dma_tt *ttm)
 {
-	ttm->ttm.pages = drm_calloc_large(ttm->ttm.num_pages,
-					  sizeof(*ttm->ttm.pages) +
-					  sizeof(*ttm->dma_address));
-	ttm->dma_address = (void *) (ttm->ttm.pages + ttm->ttm.num_pages);
+	ttm->ttm.pages = drm_calloc_large(ttm->ttm.num_pages, sizeof(void*));
+	ttm->dma_address = drm_calloc_large(ttm->ttm.num_pages,
+					    sizeof(*ttm->dma_address));
 }
 
 #ifdef CONFIG_X86
@@ -164,10 +163,12 @@ EXPORT_SYMBOL(ttm_tt_set_placement_caching);
 
 void ttm_tt_destroy(struct ttm_tt *ttm)
 {
-	if (ttm == NULL)
+	if (unlikely(ttm == NULL))
 		return;
 
-	ttm_tt_unbind(ttm);
+	if (ttm->state == tt_bound) {
+		ttm_tt_unbind(ttm);
+	}
 
 	if (ttm->state == tt_unbound)
 		ttm_tt_unpopulate(ttm);
@@ -227,7 +228,7 @@ int ttm_dma_tt_init(struct ttm_dma_tt *ttm_dma, struct ttm_bo_device *bdev,
 
 	INIT_LIST_HEAD(&ttm_dma->pages_list);
 	ttm_dma_tt_alloc_page_directory(ttm_dma);
-	if (!ttm->pages) {
+	if (!ttm->pages || !ttm_dma->dma_address) {
 		ttm_tt_destroy(ttm);
 		pr_err("Failed allocating page table\n");
 		return -ENOMEM;
@@ -242,6 +243,7 @@ void ttm_dma_tt_fini(struct ttm_dma_tt *ttm_dma)
 
 	drm_free_large(ttm->pages);
 	ttm->pages = NULL;
+	drm_free_large(ttm_dma->dma_address);
 	ttm_dma->dma_address = NULL;
 }
 EXPORT_SYMBOL(ttm_dma_tt_fini);
@@ -293,7 +295,7 @@ int ttm_tt_swapin(struct ttm_tt *ttm)
 	swap_storage = ttm->swap_storage;
 	BUG_ON(swap_storage == NULL);
 
-	swap_space = swap_storage->f_mapping;
+	swap_space = file_inode(swap_storage)->i_mapping;
 
 	for (i = 0; i < ttm->num_pages; ++i) {
 		from_page = shmem_read_mapping_page(swap_space, i);
@@ -306,7 +308,7 @@ int ttm_tt_swapin(struct ttm_tt *ttm)
 			goto out_err;
 
 		copy_highpage(to_page, from_page);
-		put_page(from_page);
+		page_cache_release(from_page);
 	}
 
 	if (!(ttm->page_flags & TTM_PAGE_FLAG_PERSISTENT_SWAP))
@@ -335,28 +337,28 @@ int ttm_tt_swapout(struct ttm_tt *ttm, struct file *persistent_swap_storage)
 		swap_storage = shmem_file_setup("ttm swap",
 						ttm->num_pages << PAGE_SHIFT,
 						0);
-		if (IS_ERR(swap_storage)) {
+		if (unlikely(IS_ERR(swap_storage))) {
 			pr_err("Failed allocating swap storage\n");
 			return PTR_ERR(swap_storage);
 		}
 	} else
 		swap_storage = persistent_swap_storage;
 
-	swap_space = swap_storage->f_mapping;
+	swap_space = file_inode(swap_storage)->i_mapping;
 
 	for (i = 0; i < ttm->num_pages; ++i) {
 		from_page = ttm->pages[i];
 		if (unlikely(from_page == NULL))
 			continue;
 		to_page = shmem_read_mapping_page(swap_space, i);
-		if (IS_ERR(to_page)) {
+		if (unlikely(IS_ERR(to_page))) {
 			ret = PTR_ERR(to_page);
 			goto out_err;
 		}
 		copy_highpage(to_page, from_page);
 		set_page_dirty(to_page);
 		mark_page_accessed(to_page);
-		put_page(to_page);
+		page_cache_release(to_page);
 	}
 
 	ttm_tt_unpopulate(ttm);

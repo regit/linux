@@ -20,22 +20,24 @@
 static void ci_hdrc_msm_notify_event(struct ci_hdrc *ci, unsigned event)
 {
 	struct device *dev = ci->gadget.dev.parent;
+	int val;
 
 	switch (event) {
 	case CI_HDRC_CONTROLLER_RESET_EVENT:
 		dev_dbg(dev, "CI_HDRC_CONTROLLER_RESET_EVENT received\n");
 		writel(0, USB_AHBBURST);
-		/* use AHB transactor, allow posted data writes */
-		writel(0x8, USB_AHBMODE);
-		usb_phy_init(ci->usb_phy);
+		writel(0, USB_AHBMODE);
 		break;
 	case CI_HDRC_CONTROLLER_STOPPED_EVENT:
 		dev_dbg(dev, "CI_HDRC_CONTROLLER_STOPPED_EVENT received\n");
 		/*
-		 * Put the phy in non-driving mode. Otherwise host
+		 * Put the transceiver in non-driving mode. Otherwise host
 		 * may not detect soft-disconnection.
 		 */
-		usb_phy_notify_disconnect(ci->usb_phy, USB_SPEED_UNKNOWN);
+		val = usb_phy_io_read(ci->transceiver, ULPI_FUNC_CTRL);
+		val &= ~ULPI_FUNC_CTRL_OPMODE_MASK;
+		val |= ULPI_FUNC_CTRL_OPMODE_NONDRIVING;
+		usb_phy_io_write(ci->transceiver, val, ULPI_FUNC_CTRL);
 		break;
 	default:
 		dev_dbg(dev, "unknown ci_hdrc event\n");
@@ -47,6 +49,7 @@ static struct ci_hdrc_platform_data ci_hdrc_msm_platdata = {
 	.name			= "ci_hdrc_msm",
 	.capoffset		= DEF_CAPOFFSET,
 	.flags			= CI_HDRC_REGS_SHARED |
+				  CI_HDRC_REQUIRE_TRANSCEIVER |
 				  CI_HDRC_DISABLE_STREAMING,
 
 	.notify_event		= ci_hdrc_msm_notify_event,
@@ -68,7 +71,7 @@ static int ci_hdrc_msm_probe(struct platform_device *pdev)
 	if (IS_ERR(phy))
 		return PTR_ERR(phy);
 
-	ci_hdrc_msm_platdata.usb_phy = phy;
+	ci_hdrc_msm_platdata.phy = phy;
 
 	plat_ci = ci_hdrc_add_device(&pdev->dev,
 				pdev->resource, pdev->num_resources,

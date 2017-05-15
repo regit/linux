@@ -10,43 +10,45 @@
 #include <linux/sched.h>
 #include <linux/export.h>
 #include <linux/pm_runtime.h>
-#include <linux/pm_wakeirq.h>
 #include <trace/events/rpm.h>
-
-#include "../base.h"
 #include "power.h"
 
-typedef int (*pm_callback_t)(struct device *);
+#define RPM_GET_CALLBACK(dev, cb)				\
+({								\
+	int (*__rpm_cb)(struct device *__d);			\
+								\
+	if (dev->pm_domain)					\
+		__rpm_cb = dev->pm_domain->ops.cb;		\
+	else if (dev->type && dev->type->pm)			\
+		__rpm_cb = dev->type->pm->cb;			\
+	else if (dev->class && dev->class->pm)			\
+		__rpm_cb = dev->class->pm->cb;			\
+	else if (dev->bus && dev->bus->pm)			\
+		__rpm_cb = dev->bus->pm->cb;			\
+	else							\
+		__rpm_cb = NULL;				\
+								\
+	if (!__rpm_cb && dev->driver && dev->driver->pm)	\
+		__rpm_cb = dev->driver->pm->cb;			\
+								\
+	__rpm_cb;						\
+})
 
-static pm_callback_t __rpm_get_callback(struct device *dev, size_t cb_offset)
+static int (*rpm_get_suspend_cb(struct device *dev))(struct device *)
 {
-	pm_callback_t cb;
-	const struct dev_pm_ops *ops;
-
-	if (dev->pm_domain)
-		ops = &dev->pm_domain->ops;
-	else if (dev->type && dev->type->pm)
-		ops = dev->type->pm;
-	else if (dev->class && dev->class->pm)
-		ops = dev->class->pm;
-	else if (dev->bus && dev->bus->pm)
-		ops = dev->bus->pm;
-	else
-		ops = NULL;
-
-	if (ops)
-		cb = *(pm_callback_t *)((void *)ops + cb_offset);
-	else
-		cb = NULL;
-
-	if (!cb && dev->driver && dev->driver->pm)
-		cb = *(pm_callback_t *)((void *)dev->driver->pm + cb_offset);
-
-	return cb;
+	return RPM_GET_CALLBACK(dev, runtime_suspend);
 }
 
-#define RPM_GET_CALLBACK(dev, callback) \
-		__rpm_get_callback(dev, offsetof(struct dev_pm_ops, callback))
+static int (*rpm_get_resume_cb(struct device *dev))(struct device *)
+{
+	return RPM_GET_CALLBACK(dev, runtime_resume);
+}
+
+#ifdef CONFIG_PM_RUNTIME
+static int (*rpm_get_idle_cb(struct device *dev))(struct device *)
+{
+	return RPM_GET_CALLBACK(dev, runtime_idle);
+}
 
 static int rpm_resume(struct device *dev, int rpmflags);
 static int rpm_suspend(struct device *dev, int rpmflags);
@@ -243,8 +245,7 @@ static int rpm_check_suspend_allowed(struct device *dev)
 		retval = -EACCES;
 	else if (atomic_read(&dev->power.usage_count) > 0)
 		retval = -EAGAIN;
-	else if (!dev->power.ignore_children &&
-			atomic_read(&dev->power.child_count))
+	else if (!pm_children_suspended(dev))
 		retval = -EBUSY;
 
 	/* Pending resume requests take precedence over suspends. */
@@ -261,42 +262,6 @@ static int rpm_check_suspend_allowed(struct device *dev)
 	return retval;
 }
 
-static int rpm_get_suppliers(struct device *dev)
-{
-	struct device_link *link;
-
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node) {
-		int retval;
-
-		if (!(link->flags & DL_FLAG_PM_RUNTIME))
-			continue;
-
-		if (READ_ONCE(link->status) == DL_STATE_SUPPLIER_UNBIND ||
-		    link->rpm_active)
-			continue;
-
-		retval = pm_runtime_get_sync(link->supplier);
-		if (retval < 0) {
-			pm_runtime_put_noidle(link->supplier);
-			return retval;
-		}
-		link->rpm_active = true;
-	}
-	return 0;
-}
-
-static void rpm_put_suppliers(struct device *dev)
-{
-	struct device_link *link;
-
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node)
-		if (link->rpm_active &&
-		    READ_ONCE(link->status) != DL_STATE_SUPPLIER_UNBIND) {
-			pm_runtime_put(link->supplier);
-			link->rpm_active = false;
-		}
-}
-
 /**
  * __rpm_callback - Run a given runtime PM callback for a given device.
  * @cb: Runtime PM callback to run.
@@ -305,57 +270,19 @@ static void rpm_put_suppliers(struct device *dev)
 static int __rpm_callback(int (*cb)(struct device *), struct device *dev)
 	__releases(&dev->power.lock) __acquires(&dev->power.lock)
 {
-	int retval, idx;
-	bool use_links = dev->power.links_count > 0;
+	int retval;
 
-	if (dev->power.irq_safe) {
+	if (dev->power.irq_safe)
 		spin_unlock(&dev->power.lock);
-	} else {
+	else
 		spin_unlock_irq(&dev->power.lock);
-
-		/*
-		 * Resume suppliers if necessary.
-		 *
-		 * The device's runtime PM status cannot change until this
-		 * routine returns, so it is safe to read the status outside of
-		 * the lock.
-		 */
-		if (use_links && dev->power.runtime_status == RPM_RESUMING) {
-			idx = device_links_read_lock();
-
-			retval = rpm_get_suppliers(dev);
-			if (retval)
-				goto fail;
-
-			device_links_read_unlock(idx);
-		}
-	}
 
 	retval = cb(dev);
 
-	if (dev->power.irq_safe) {
+	if (dev->power.irq_safe)
 		spin_lock(&dev->power.lock);
-	} else {
-		/*
-		 * If the device is suspending and the callback has returned
-		 * success, drop the usage counters of the suppliers that have
-		 * been reference counted on its resume.
-		 *
-		 * Do that if resume fails too.
-		 */
-		if (use_links
-		    && ((dev->power.runtime_status == RPM_SUSPENDING && !retval)
-		    || (dev->power.runtime_status == RPM_RESUMING && retval))) {
-			idx = device_links_read_lock();
-
- fail:
-			rpm_put_suppliers(dev);
-
-			device_links_read_unlock(idx);
-		}
-
+	else
 		spin_lock_irq(&dev->power.lock);
-	}
 
 	return retval;
 }
@@ -378,7 +305,7 @@ static int rpm_idle(struct device *dev, int rpmflags)
 	int (*callback)(struct device *);
 	int retval;
 
-	trace_rpm_idle_rcuidle(dev, rpmflags);
+	trace_rpm_idle(dev, rpmflags);
 	retval = rpm_check_suspend_allowed(dev);
 	if (retval < 0)
 		;	/* Conditions are wrong. */
@@ -414,13 +341,13 @@ static int rpm_idle(struct device *dev, int rpmflags)
 			dev->power.request_pending = true;
 			queue_work(pm_wq, &dev->power.work);
 		}
-		trace_rpm_return_int_rcuidle(dev, _THIS_IP_, 0);
+		trace_rpm_return_int(dev, _THIS_IP_, 0);
 		return 0;
 	}
 
 	dev->power.idle_notification = true;
 
-	callback = RPM_GET_CALLBACK(dev, runtime_idle);
+	callback = rpm_get_idle_cb(dev);
 
 	if (callback)
 		retval = __rpm_callback(callback, dev);
@@ -429,7 +356,7 @@ static int rpm_idle(struct device *dev, int rpmflags)
 	wake_up_all(&dev->power.wait_queue);
 
  out:
-	trace_rpm_return_int_rcuidle(dev, _THIS_IP_, retval);
+	trace_rpm_return_int(dev, _THIS_IP_, retval);
 	return retval ? retval : rpm_suspend(dev, rpmflags | RPM_AUTO);
 }
 
@@ -496,7 +423,7 @@ static int rpm_suspend(struct device *dev, int rpmflags)
 	struct device *parent = NULL;
 	int retval;
 
-	trace_rpm_suspend_rcuidle(dev, rpmflags);
+	trace_rpm_suspend(dev, rpmflags);
 
  repeat:
 	retval = rpm_check_suspend_allowed(dev);
@@ -590,9 +517,8 @@ static int rpm_suspend(struct device *dev, int rpmflags)
 
 	__update_runtime_status(dev, RPM_SUSPENDING);
 
-	callback = RPM_GET_CALLBACK(dev, runtime_suspend);
+	callback = rpm_get_suspend_cb(dev);
 
-	dev_pm_enable_wake_irq_check(dev, true);
 	retval = rpm_callback(callback, dev);
 	if (retval)
 		goto fail;
@@ -626,12 +552,11 @@ static int rpm_suspend(struct device *dev, int rpmflags)
 	}
 
  out:
-	trace_rpm_return_int_rcuidle(dev, _THIS_IP_, retval);
+	trace_rpm_return_int(dev, _THIS_IP_, retval);
 
 	return retval;
 
  fail:
-	dev_pm_disable_wake_irq_check(dev);
 	__update_runtime_status(dev, RPM_ACTIVE);
 	dev->power.deferred_resume = false;
 	wake_up_all(&dev->power.wait_queue);
@@ -678,7 +603,7 @@ static int rpm_resume(struct device *dev, int rpmflags)
 	struct device *parent = NULL;
 	int retval = 0;
 
-	trace_rpm_resume_rcuidle(dev, rpmflags);
+	trace_rpm_resume(dev, rpmflags);
 
  repeat:
 	if (dev->power.runtime_error)
@@ -789,8 +714,8 @@ static int rpm_resume(struct device *dev, int rpmflags)
 
 		spin_lock(&parent->power.lock);
 		/*
-		 * Resume the parent if it has runtime PM enabled and not been
-		 * set to ignore its children.
+		 * We can resume if the parent's runtime PM is disabled or it
+		 * is set to ignore children.
 		 */
 		if (!parent->power.disable_depth
 		    && !parent->power.ignore_children) {
@@ -812,18 +737,15 @@ static int rpm_resume(struct device *dev, int rpmflags)
 
 	__update_runtime_status(dev, RPM_RESUMING);
 
-	callback = RPM_GET_CALLBACK(dev, runtime_resume);
+	callback = rpm_get_resume_cb(dev);
 
-	dev_pm_disable_wake_irq_check(dev);
 	retval = rpm_callback(callback, dev);
 	if (retval) {
 		__update_runtime_status(dev, RPM_SUSPENDED);
 		pm_runtime_cancel_pending(dev);
-		dev_pm_enable_wake_irq_check(dev, false);
 	} else {
  no_callback:
 		__update_runtime_status(dev, RPM_ACTIVE);
-		pm_runtime_mark_last_busy(dev);
 		if (parent)
 			atomic_inc(&parent->power.child_count);
 	}
@@ -841,7 +763,7 @@ static int rpm_resume(struct device *dev, int rpmflags)
 		spin_lock_irq(&dev->power.lock);
 	}
 
-	trace_rpm_return_int_rcuidle(dev, _THIS_IP_, retval);
+	trace_rpm_return_int(dev, _THIS_IP_, retval);
 
 	return retval;
 }
@@ -966,12 +888,12 @@ int __pm_runtime_idle(struct device *dev, int rpmflags)
 	unsigned long flags;
 	int retval;
 
+	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe);
+
 	if (rpmflags & RPM_GET_PUT) {
 		if (!atomic_dec_and_test(&dev->power.usage_count))
 			return 0;
 	}
-
-	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe);
 
 	spin_lock_irqsave(&dev->power.lock, flags);
 	retval = rpm_idle(dev, rpmflags);
@@ -998,12 +920,12 @@ int __pm_runtime_suspend(struct device *dev, int rpmflags)
 	unsigned long flags;
 	int retval;
 
+	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe);
+
 	if (rpmflags & RPM_GET_PUT) {
 		if (!atomic_dec_and_test(&dev->power.usage_count))
 			return 0;
 	}
-
-	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe);
 
 	spin_lock_irqsave(&dev->power.lock, flags);
 	retval = rpm_suspend(dev, rpmflags);
@@ -1029,8 +951,7 @@ int __pm_runtime_resume(struct device *dev, int rpmflags)
 	unsigned long flags;
 	int retval;
 
-	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe &&
-			dev->power.runtime_status != RPM_ACTIVE);
+	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe);
 
 	if (rpmflags & RPM_GET_PUT)
 		atomic_inc(&dev->power.usage_count);
@@ -1042,30 +963,6 @@ int __pm_runtime_resume(struct device *dev, int rpmflags)
 	return retval;
 }
 EXPORT_SYMBOL_GPL(__pm_runtime_resume);
-
-/**
- * pm_runtime_get_if_in_use - Conditionally bump up the device's usage counter.
- * @dev: Device to handle.
- *
- * Return -EINVAL if runtime PM is disabled for the device.
- *
- * If that's not the case and if the device's runtime PM status is RPM_ACTIVE
- * and the runtime PM usage counter is nonzero, increment the counter and
- * return 1.  Otherwise return 0 without changing the counter.
- */
-int pm_runtime_get_if_in_use(struct device *dev)
-{
-	unsigned long flags;
-	int retval;
-
-	spin_lock_irqsave(&dev->power.lock, flags);
-	retval = dev->power.disable_depth > 0 ? -EINVAL :
-		dev->power.runtime_status == RPM_ACTIVE
-			&& atomic_inc_not_zero(&dev->power.usage_count);
-	spin_unlock_irqrestore(&dev->power.lock, flags);
-	return retval;
-}
-EXPORT_SYMBOL_GPL(pm_runtime_get_if_in_use);
 
 /**
  * __pm_runtime_set_status - Set runtime PM status of a device.
@@ -1105,17 +1002,7 @@ int __pm_runtime_set_status(struct device *dev, unsigned int status)
 		goto out_set;
 
 	if (status == RPM_SUSPENDED) {
-		/*
-		 * It is invalid to suspend a device with an active child,
-		 * unless it has been set to ignore its children.
-		 */
-		if (!dev->power.ignore_children &&
-			atomic_read(&dev->power.child_count)) {
-			dev_err(dev, "runtime PM trying to suspend device but active child\n");
-			error = -EBUSY;
-			goto out;
-		}
-
+		/* It always is possible to set the status to 'suspended'. */
 		if (parent) {
 			atomic_add_unless(&parent->power.child_count, -1, 0);
 			notify_parent = !parent->power.ignore_children;
@@ -1133,14 +1020,10 @@ int __pm_runtime_set_status(struct device *dev, unsigned int status)
 		 */
 		if (!parent->power.disable_depth
 		    && !parent->power.ignore_children
-		    && parent->power.runtime_status != RPM_ACTIVE) {
-			dev_err(dev, "runtime PM trying to activate child device %s but parent (%s) is not active\n",
-				dev_name(dev),
-				dev_name(parent));
+		    && parent->power.runtime_status != RPM_ACTIVE)
 			error = -EBUSY;
-		} else if (dev->power.runtime_status == RPM_SUSPENDED) {
+		else if (dev->power.runtime_status == RPM_SUSPENDED)
 			atomic_inc(&parent->power.child_count);
-		}
 
 		spin_unlock(&parent->power.lock);
 
@@ -1348,7 +1231,7 @@ void pm_runtime_allow(struct device *dev)
 
 	dev->power.runtime_auto = true;
 	if (atomic_dec_and_test(&dev->power.usage_count))
-		rpm_idle(dev, RPM_AUTO | RPM_ASYNC);
+		rpm_idle(dev, RPM_AUTO);
 
  out:
 	spin_unlock_irq(&dev->power.lock);
@@ -1506,121 +1389,20 @@ void pm_runtime_init(struct device *dev)
 }
 
 /**
- * pm_runtime_reinit - Re-initialize runtime PM fields in given device object.
- * @dev: Device object to re-initialize.
- */
-void pm_runtime_reinit(struct device *dev)
-{
-	if (!pm_runtime_enabled(dev)) {
-		if (dev->power.runtime_status == RPM_ACTIVE)
-			pm_runtime_set_suspended(dev);
-		if (dev->power.irq_safe) {
-			spin_lock_irq(&dev->power.lock);
-			dev->power.irq_safe = 0;
-			spin_unlock_irq(&dev->power.lock);
-			if (dev->parent)
-				pm_runtime_put(dev->parent);
-		}
-	}
-}
-
-/**
  * pm_runtime_remove - Prepare for removing a device from device hierarchy.
  * @dev: Device object being removed from device hierarchy.
  */
 void pm_runtime_remove(struct device *dev)
 {
 	__pm_runtime_disable(dev, false);
-	pm_runtime_reinit(dev);
+
+	/* Change the status back to 'suspended' to match the initial status. */
+	if (dev->power.runtime_status == RPM_ACTIVE)
+		pm_runtime_set_suspended(dev);
+	if (dev->power.irq_safe && dev->parent)
+		pm_runtime_put(dev->parent);
 }
-
-/**
- * pm_runtime_clean_up_links - Prepare links to consumers for driver removal.
- * @dev: Device whose driver is going to be removed.
- *
- * Check links from this device to any consumers and if any of them have active
- * runtime PM references to the device, drop the usage counter of the device
- * (once per link).
- *
- * Links with the DL_FLAG_STATELESS flag set are ignored.
- *
- * Since the device is guaranteed to be runtime-active at the point this is
- * called, nothing else needs to be done here.
- *
- * Moreover, this is called after device_links_busy() has returned 'false', so
- * the status of each link is guaranteed to be DL_STATE_SUPPLIER_UNBIND and
- * therefore rpm_active can't be manipulated concurrently.
- */
-void pm_runtime_clean_up_links(struct device *dev)
-{
-	struct device_link *link;
-	int idx;
-
-	idx = device_links_read_lock();
-
-	list_for_each_entry_rcu(link, &dev->links.consumers, s_node) {
-		if (link->flags & DL_FLAG_STATELESS)
-			continue;
-
-		if (link->rpm_active) {
-			pm_runtime_put_noidle(dev);
-			link->rpm_active = false;
-		}
-	}
-
-	device_links_read_unlock(idx);
-}
-
-/**
- * pm_runtime_get_suppliers - Resume and reference-count supplier devices.
- * @dev: Consumer device.
- */
-void pm_runtime_get_suppliers(struct device *dev)
-{
-	struct device_link *link;
-	int idx;
-
-	idx = device_links_read_lock();
-
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node)
-		if (link->flags & DL_FLAG_PM_RUNTIME)
-			pm_runtime_get_sync(link->supplier);
-
-	device_links_read_unlock(idx);
-}
-
-/**
- * pm_runtime_put_suppliers - Drop references to supplier devices.
- * @dev: Consumer device.
- */
-void pm_runtime_put_suppliers(struct device *dev)
-{
-	struct device_link *link;
-	int idx;
-
-	idx = device_links_read_lock();
-
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node)
-		if (link->flags & DL_FLAG_PM_RUNTIME)
-			pm_runtime_put(link->supplier);
-
-	device_links_read_unlock(idx);
-}
-
-void pm_runtime_new_link(struct device *dev)
-{
-	spin_lock_irq(&dev->power.lock);
-	dev->power.links_count++;
-	spin_unlock_irq(&dev->power.lock);
-}
-
-void pm_runtime_drop_link(struct device *dev)
-{
-	spin_lock_irq(&dev->power.lock);
-	WARN_ON(dev->power.links_count == 0);
-	dev->power.links_count--;
-	spin_unlock_irq(&dev->power.lock);
-}
+#endif
 
 /**
  * pm_runtime_force_suspend - Force a device into suspend state if needed.
@@ -1640,10 +1422,16 @@ int pm_runtime_force_suspend(struct device *dev)
 	int ret = 0;
 
 	pm_runtime_disable(dev);
+
+	/*
+	 * Note that pm_runtime_status_suspended() returns false while
+	 * !CONFIG_PM_RUNTIME, which means the device will be put into low
+	 * power state.
+	 */
 	if (pm_runtime_status_suspended(dev))
 		return 0;
 
-	callback = RPM_GET_CALLBACK(dev, runtime_suspend);
+	callback = rpm_get_suspend_cb(dev);
 
 	if (!callback) {
 		ret = -ENOSYS;
@@ -1653,16 +1441,6 @@ int pm_runtime_force_suspend(struct device *dev)
 	ret = callback(dev);
 	if (ret)
 		goto err;
-
-	/*
-	 * Increase the runtime PM usage count for the device's parent, in case
-	 * when we find the device being used when system suspend was invoked.
-	 * This informs pm_runtime_force_resume() to resume the parent
-	 * immediately, which is needed to be able to resume its children,
-	 * when not deferring the resume to be managed via runtime PM.
-	 */
-	if (dev->parent && atomic_read(&dev->power.usage_count) > 1)
-		pm_runtime_get_noresume(dev->parent);
 
 	pm_runtime_set_suspended(dev);
 	return 0;
@@ -1673,57 +1451,34 @@ err:
 EXPORT_SYMBOL_GPL(pm_runtime_force_suspend);
 
 /**
- * pm_runtime_force_resume - Force a device into resume state if needed.
+ * pm_runtime_force_resume - Force a device into resume state.
  * @dev: Device to resume.
  *
  * Prior invoking this function we expect the user to have brought the device
  * into low power state by a call to pm_runtime_force_suspend(). Here we reverse
- * those actions and brings the device into full power, if it is expected to be
- * used on system resume. To distinguish that, we check whether the runtime PM
- * usage count is greater than 1 (the PM core increases the usage count in the
- * system PM prepare phase), as that indicates a real user (such as a subsystem,
- * driver, userspace, etc.) is using it. If that is the case, the device is
- * expected to be used on system resume as well, so then we resume it. In the
- * other case, we defer the resume to be managed via runtime PM.
+ * those actions and brings the device into full power. We update the runtime PM
+ * status and re-enables runtime PM.
  *
- * Typically this function may be invoked from a system resume callback.
+ * Typically this function may be invoked from a system resume callback to make
+ * sure the device is put into full power state.
  */
 int pm_runtime_force_resume(struct device *dev)
 {
 	int (*callback)(struct device *);
 	int ret = 0;
 
-	callback = RPM_GET_CALLBACK(dev, runtime_resume);
+	callback = rpm_get_resume_cb(dev);
 
 	if (!callback) {
 		ret = -ENOSYS;
 		goto out;
 	}
 
-	if (!pm_runtime_status_suspended(dev))
-		goto out;
-
-	/*
-	 * Decrease the parent's runtime PM usage count, if we increased it
-	 * during system suspend in pm_runtime_force_suspend().
-	*/
-	if (atomic_read(&dev->power.usage_count) > 1) {
-		if (dev->parent)
-			pm_runtime_put_noidle(dev->parent);
-	} else {
-		goto out;
-	}
-
-	ret = pm_runtime_set_active(dev);
+	ret = callback(dev);
 	if (ret)
 		goto out;
 
-	ret = callback(dev);
-	if (ret) {
-		pm_runtime_set_suspended(dev);
-		goto out;
-	}
-
+	pm_runtime_set_active(dev);
 	pm_runtime_mark_last_busy(dev);
 out:
 	pm_runtime_enable(dev);

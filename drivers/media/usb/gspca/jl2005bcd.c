@@ -45,6 +45,7 @@ struct sd {
 	const struct v4l2_pix_format *cap_mode;
 	/* Driver stuff */
 	struct work_struct work_struct;
+	struct workqueue_struct *work_thread;
 	u8 frame_brightness;
 	int block_size;	/* block size of camera */
 	int vga;	/* 1 if vga cam, 0 if cif cam */
@@ -299,7 +300,10 @@ static int jl2005c_stream_start_cif_small(struct gspca_dev *gspca_dev)
 
 static int jl2005c_stop(struct gspca_dev *gspca_dev)
 {
-	return jl2005c_write_reg(gspca_dev, 0x07, 0x00);
+	int retval;
+
+	retval = jl2005c_write_reg(gspca_dev, 0x07, 0x00);
+	return retval;
 }
 
 /*
@@ -473,7 +477,9 @@ static int sd_start(struct gspca_dev *gspca_dev)
 		return -1;
 	}
 
-	schedule_work(&sd->work_struct);
+	/* Start the workqueue function to do the streaming */
+	sd->work_thread = create_singlethread_workqueue(MODULE_NAME);
+	queue_work(sd->work_thread, &sd->work_struct);
 
 	return 0;
 }
@@ -487,7 +493,8 @@ static void sd_stop0(struct gspca_dev *gspca_dev)
 	/* wait for the work queue to terminate */
 	mutex_unlock(&gspca_dev->usb_lock);
 	/* This waits for sq905c_dostream to finish */
-	flush_work(&dev->work_struct);
+	destroy_workqueue(dev->work_thread);
+	dev->work_thread = NULL;
 	mutex_lock(&gspca_dev->usb_lock);
 }
 

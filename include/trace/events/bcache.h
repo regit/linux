@@ -27,7 +27,7 @@ DECLARE_EVENT_CLASS(bcache_request,
 		__entry->sector		= bio->bi_iter.bi_sector;
 		__entry->orig_sector	= bio->bi_iter.bi_sector - 16;
 		__entry->nr_sector	= bio->bi_iter.bi_size >> 9;
-		blk_fill_rwbs(__entry->rwbs, bio->bi_opf, bio->bi_iter.bi_size);
+		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_iter.bi_size);
 	),
 
 	TP_printk("%d,%d %s %llu + %u (from %d,%d @ %llu)",
@@ -101,7 +101,7 @@ DECLARE_EVENT_CLASS(bcache_bio,
 		__entry->dev		= bio->bi_bdev->bd_dev;
 		__entry->sector		= bio->bi_iter.bi_sector;
 		__entry->nr_sector	= bio->bi_iter.bi_size >> 9;
-		blk_fill_rwbs(__entry->rwbs, bio->bi_opf, bio->bi_iter.bi_size);
+		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_iter.bi_size);
 	),
 
 	TP_printk("%d,%d  %s %llu + %u",
@@ -136,7 +136,7 @@ TRACE_EVENT(bcache_read,
 		__entry->dev		= bio->bi_bdev->bd_dev;
 		__entry->sector		= bio->bi_iter.bi_sector;
 		__entry->nr_sector	= bio->bi_iter.bi_size >> 9;
-		blk_fill_rwbs(__entry->rwbs, bio->bi_opf, bio->bi_iter.bi_size);
+		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_iter.bi_size);
 		__entry->cache_hit = hit;
 		__entry->bypass = bypass;
 	),
@@ -148,13 +148,11 @@ TRACE_EVENT(bcache_read,
 );
 
 TRACE_EVENT(bcache_write,
-	TP_PROTO(struct cache_set *c, u64 inode, struct bio *bio,
-		bool writeback, bool bypass),
-	TP_ARGS(c, inode, bio, writeback, bypass),
+	TP_PROTO(struct bio *bio, bool writeback, bool bypass),
+	TP_ARGS(bio, writeback, bypass),
 
 	TP_STRUCT__entry(
-		__array(char,		uuid,	16		)
-		__field(u64,		inode			)
+		__field(dev_t,		dev			)
 		__field(sector_t,	sector			)
 		__field(unsigned int,	nr_sector		)
 		__array(char,		rwbs,	6		)
@@ -163,17 +161,16 @@ TRACE_EVENT(bcache_write,
 	),
 
 	TP_fast_assign(
-		memcpy(__entry->uuid, c->sb.set_uuid, 16);
-		__entry->inode		= inode;
+		__entry->dev		= bio->bi_bdev->bd_dev;
 		__entry->sector		= bio->bi_iter.bi_sector;
 		__entry->nr_sector	= bio->bi_iter.bi_size >> 9;
-		blk_fill_rwbs(__entry->rwbs, bio->bi_opf, bio->bi_iter.bi_size);
+		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_iter.bi_size);
 		__entry->writeback = writeback;
 		__entry->bypass = bypass;
 	),
 
-	TP_printk("%pU inode %llu  %s %llu + %u hit %u bypass %u",
-		  __entry->uuid, __entry->inode,
+	TP_printk("%d,%d  %s %llu + %u hit %u bypass %u",
+		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  __entry->rwbs, (unsigned long long)__entry->sector,
 		  __entry->nr_sector, __entry->writeback, __entry->bypass)
 );
@@ -261,9 +258,9 @@ DEFINE_EVENT(btree_node, bcache_btree_node_alloc,
 	TP_ARGS(b)
 );
 
-DEFINE_EVENT(cache_set, bcache_btree_node_alloc_fail,
-	TP_PROTO(struct cache_set *c),
-	TP_ARGS(c)
+DEFINE_EVENT(btree_node, bcache_btree_node_alloc_fail,
+	TP_PROTO(struct btree *b),
+	TP_ARGS(b)
 );
 
 DEFINE_EVENT(btree_node, bcache_btree_node_free,

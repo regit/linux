@@ -26,52 +26,46 @@
 
 #include "atl1c.h"
 
-static int atl1c_get_link_ksettings(struct net_device *netdev,
-				    struct ethtool_link_ksettings *cmd)
+static int atl1c_get_settings(struct net_device *netdev,
+			      struct ethtool_cmd *ecmd)
 {
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 	struct atl1c_hw *hw = &adapter->hw;
-	u32 supported, advertising;
 
-	supported = (SUPPORTED_10baseT_Half  |
+	ecmd->supported = (SUPPORTED_10baseT_Half  |
 			   SUPPORTED_10baseT_Full  |
 			   SUPPORTED_100baseT_Half |
 			   SUPPORTED_100baseT_Full |
 			   SUPPORTED_Autoneg       |
 			   SUPPORTED_TP);
 	if (hw->link_cap_flags & ATL1C_LINK_CAP_1000M)
-		supported |= SUPPORTED_1000baseT_Full;
+		ecmd->supported |= SUPPORTED_1000baseT_Full;
 
-	advertising = ADVERTISED_TP;
+	ecmd->advertising = ADVERTISED_TP;
 
-	advertising |= hw->autoneg_advertised;
+	ecmd->advertising |= hw->autoneg_advertised;
 
-	cmd->base.port = PORT_TP;
-	cmd->base.phy_address = 0;
+	ecmd->port = PORT_TP;
+	ecmd->phy_address = 0;
+	ecmd->transceiver = XCVR_INTERNAL;
 
 	if (adapter->link_speed != SPEED_0) {
-		cmd->base.speed = adapter->link_speed;
+		ethtool_cmd_speed_set(ecmd, adapter->link_speed);
 		if (adapter->link_duplex == FULL_DUPLEX)
-			cmd->base.duplex = DUPLEX_FULL;
+			ecmd->duplex = DUPLEX_FULL;
 		else
-			cmd->base.duplex = DUPLEX_HALF;
+			ecmd->duplex = DUPLEX_HALF;
 	} else {
-		cmd->base.speed = SPEED_UNKNOWN;
-		cmd->base.duplex = DUPLEX_UNKNOWN;
+		ethtool_cmd_speed_set(ecmd, SPEED_UNKNOWN);
+		ecmd->duplex = DUPLEX_UNKNOWN;
 	}
 
-	cmd->base.autoneg = AUTONEG_ENABLE;
-
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported,
-						supported);
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.advertising,
-						advertising);
-
+	ecmd->autoneg = AUTONEG_ENABLE;
 	return 0;
 }
 
-static int atl1c_set_link_ksettings(struct net_device *netdev,
-				    const struct ethtool_link_ksettings *cmd)
+static int atl1c_set_settings(struct net_device *netdev,
+			      struct ethtool_cmd *ecmd)
 {
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 	struct atl1c_hw *hw = &adapter->hw;
@@ -80,12 +74,12 @@ static int atl1c_set_link_ksettings(struct net_device *netdev,
 	while (test_and_set_bit(__AT_RESETTING, &adapter->flags))
 		msleep(1);
 
-	if (cmd->base.autoneg == AUTONEG_ENABLE) {
+	if (ecmd->autoneg == AUTONEG_ENABLE) {
 		autoneg_advertised = ADVERTISED_Autoneg;
 	} else {
-		u32 speed = cmd->base.speed;
+		u32 speed = ethtool_cmd_speed(ecmd);
 		if (speed == SPEED_1000) {
-			if (cmd->base.duplex != DUPLEX_FULL) {
+			if (ecmd->duplex != DUPLEX_FULL) {
 				if (netif_msg_link(adapter))
 					dev_warn(&adapter->pdev->dev,
 						"1000M half is invalid\n");
@@ -94,12 +88,12 @@ static int atl1c_set_link_ksettings(struct net_device *netdev,
 			}
 			autoneg_advertised = ADVERTISED_1000baseT_Full;
 		} else if (speed == SPEED_100) {
-			if (cmd->base.duplex == DUPLEX_FULL)
+			if (ecmd->duplex == DUPLEX_FULL)
 				autoneg_advertised = ADVERTISED_100baseT_Full;
 			else
 				autoneg_advertised = ADVERTISED_100baseT_Half;
 		} else {
-			if (cmd->base.duplex == DUPLEX_FULL)
+			if (ecmd->duplex == DUPLEX_FULL)
 				autoneg_advertised = ADVERTISED_10baseT_Full;
 			else
 				autoneg_advertised = ADVERTISED_10baseT_Half;
@@ -239,6 +233,10 @@ static void atl1c_get_drvinfo(struct net_device *netdev,
 		sizeof(drvinfo->version));
 	strlcpy(drvinfo->bus_info, pci_name(adapter->pdev),
 		sizeof(drvinfo->bus_info));
+	drvinfo->n_stats = 0;
+	drvinfo->testinfo_len = 0;
+	drvinfo->regdump_len = atl1c_get_regs_len(netdev);
+	drvinfo->eedump_len = atl1c_get_eeprom_len(netdev);
 }
 
 static void atl1c_get_wol(struct net_device *netdev,
@@ -290,6 +288,8 @@ static int atl1c_nway_reset(struct net_device *netdev)
 }
 
 static const struct ethtool_ops atl1c_ethtool_ops = {
+	.get_settings           = atl1c_get_settings,
+	.set_settings           = atl1c_set_settings,
 	.get_drvinfo            = atl1c_get_drvinfo,
 	.get_regs_len           = atl1c_get_regs_len,
 	.get_regs               = atl1c_get_regs,
@@ -301,8 +301,6 @@ static const struct ethtool_ops atl1c_ethtool_ops = {
 	.get_link               = ethtool_op_get_link,
 	.get_eeprom_len         = atl1c_get_eeprom_len,
 	.get_eeprom             = atl1c_get_eeprom,
-	.get_link_ksettings     = atl1c_get_link_ksettings,
-	.set_link_ksettings     = atl1c_set_link_ksettings,
 };
 
 void atl1c_set_ethtool_ops(struct net_device *netdev)

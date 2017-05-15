@@ -1030,7 +1030,7 @@ static int atalk_create(struct net *net, struct socket *sock, int protocol,
 	if (sock->type != SOCK_RAW && sock->type != SOCK_DGRAM)
 		goto out;
 	rc = -ENOMEM;
-	sk = sk_alloc(net, PF_APPLETALK, GFP_KERNEL, &ddp_proto, kern);
+	sk = sk_alloc(net, PF_APPLETALK, GFP_KERNEL, &ddp_proto);
 	if (!sk)
 		goto out;
 	rc = 0;
@@ -1278,7 +1278,7 @@ out:
 	return err;
 }
 
-#if IS_ENABLED(CONFIG_IPDDP)
+#if defined(CONFIG_IPDDP) || defined(CONFIG_IPDDP_MODULE)
 static __inline__ int is_ip_over_ddp(struct sk_buff *skb)
 {
 	return skb->data[12] == 22;
@@ -1489,6 +1489,8 @@ static int atalk_rcv(struct sk_buff *skb, struct net_device *dev,
 		goto drop;
 
 	/* Queue packet (standard) */
+	skb->sk = sock;
+
 	if (sock_queue_rcv_skb(sock, skb) < 0)
 		goto drop;
 
@@ -1559,7 +1561,8 @@ freeit:
 	return 0;
 }
 
-static int atalk_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
+static int atalk_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
+			 size_t len)
 {
 	struct sock *sk = sock->sk;
 	struct atalk_sock *at = at_sk(sk);
@@ -1625,7 +1628,7 @@ static int atalk_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 
 		rt = atrtr_find(&at_hint);
 	}
-	err = -ENETUNREACH;
+	err = ENETUNREACH;
 	if (!rt)
 		goto out;
 
@@ -1641,6 +1644,7 @@ static int atalk_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 	if (!skb)
 		goto out;
 
+	skb->sk = sk;
 	skb_reserve(skb, ddp_dl->header_length);
 	skb_reserve(skb, dev->hard_header_len);
 	skb->dev = dev;
@@ -1658,7 +1662,7 @@ static int atalk_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 
 	SOCK_DEBUG(sk, "SK %p: Copy user data (%Zd bytes).\n", sk, len);
 
-	err = memcpy_from_msg(skb_put(skb, len), msg, len);
+	err = memcpy_fromiovec(skb_put(skb, len), msg->msg_iov, len);
 	if (err) {
 		kfree_skb(skb);
 		err = -EFAULT;
@@ -1727,8 +1731,8 @@ out:
 	return err ? : len;
 }
 
-static int atalk_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
-			 int flags)
+static int atalk_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
+			 size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
 	struct ddpehdr *ddp;
@@ -1757,7 +1761,7 @@ static int atalk_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		copied = size;
 		msg->msg_flags |= MSG_TRUNC;
 	}
-	err = skb_copy_datagram_msg(skb, offset, msg, copied);
+	err = skb_copy_datagram_iovec(skb, offset, msg->msg_iov, copied);
 
 	if (!err && msg->msg_name) {
 		DECLARE_SOCKADDR(struct sockaddr_at *, sat, msg->msg_name);
@@ -1804,7 +1808,7 @@ static int atalk_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		long amount = 0;
 
 		if (skb)
-			amount = skb->len - sizeof(struct ddpehdr);
+		amount = skb->len - sizeof(struct ddpehdr);
 		rc = put_user(amount, (int __user *)argp);
 		break;
 	}

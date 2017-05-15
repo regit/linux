@@ -6,6 +6,10 @@
  *		 and date_dos2unix for date==0 by Igor Zhbanov(bsg@uniyar.ac.ru)
  */
 
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/buffer_head.h>
+#include <linux/time.h>
 #include "fat.h"
 
 /*
@@ -160,6 +164,8 @@ int fat_chain_add(struct inode *inode, int new_dclus, int nr_cluster)
 	return 0;
 }
 
+extern struct timezone sys_tz;
+
 /*
  * The epoch of FAT timestamp is 1980.
  *     :  bits :     value
@@ -267,7 +273,7 @@ int fat_sync_bhs(struct buffer_head **bhs, int nr_bhs)
 	int i, err = 0;
 
 	for (i = 0; i < nr_bhs; i++)
-		write_dirty_buffer(bhs[i], 0);
+		write_dirty_buffer(bhs[i], WRITE);
 
 	for (i = 0; i < nr_bhs; i++) {
 		wait_on_buffer(bhs[i]);

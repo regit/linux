@@ -46,7 +46,7 @@
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define rr_if_busy(dev)     netif_queue_stopped(dev)
 #define rr_if_running(dev)  netif_running(dev)
@@ -68,6 +68,7 @@ static const struct net_device_ops rr_netdev_ops = {
 	.ndo_stop		= rr_close,
 	.ndo_do_ioctl		= rr_ioctl,
 	.ndo_start_xmit		= rr_start_xmit,
+	.ndo_change_mtu		= hippi_change_mtu,
 	.ndo_set_mac_address	= hippi_mac_addr,
 };
 
@@ -1667,7 +1668,7 @@ static int rr_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	}
 }
 
-static const struct pci_device_id rr_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(rr_pci_tbl) = {
 	{ PCI_VENDOR_ID_ESSENTIAL, PCI_DEVICE_ID_ESSENTIAL_ROADRUNNER,
 		PCI_ANY_ID, PCI_ANY_ID, },
 	{ 0,}

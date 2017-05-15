@@ -459,25 +459,14 @@ static void __wa_xfer_abort_cb(struct urb *urb)
 			__func__, urb->status);
 		if (xfer) {
 			unsigned long flags;
-			int done, seg_index = 0;
+			int done;
 			struct wa_rpipe *rpipe = xfer->ep->hcpriv;
 
 			dev_err(dev, "%s: cleaning up xfer %p ID 0x%08X.\n",
 				__func__, xfer, wa_xfer_id(xfer));
 			spin_lock_irqsave(&xfer->lock, flags);
-			/* skip done segs. */
-			while (seg_index < xfer->segs) {
-				struct wa_seg *seg = xfer->seg[seg_index];
-
-				if ((seg->status == WA_SEG_DONE) ||
-					(seg->status == WA_SEG_ERROR)) {
-					++seg_index;
-				} else {
-					break;
-				}
-			}
-			/* mark remaining segs as aborted. */
-			wa_complete_remaining_xfer_segs(xfer, seg_index,
+			/* mark all segs as aborted. */
+			wa_complete_remaining_xfer_segs(xfer, 0,
 				WA_SEG_ABORTED);
 			done = __wa_xfer_is_done(xfer);
 			spin_unlock_irqrestore(&xfer->lock, flags);
@@ -1203,7 +1192,6 @@ static int __wa_xfer_setup_segs(struct wa_xfer *xfer, size_t xfer_hdr_size)
 				sizeof(struct wa_xfer_packet_info_hwaiso) +
 				(seg_isoc_frame_count * sizeof(__le16));
 		}
-		result = -ENOMEM;
 		seg = xfer->seg[cnt] = kmalloc(alloc_size + iso_pkt_descr_size,
 						GFP_ATOMIC);
 		if (seg == NULL)
@@ -2614,7 +2602,6 @@ static void wa_buf_in_cb(struct urb *urb)
 	dev = &wa->usb_iface->dev;
 	--(wa->active_buf_in_urbs);
 	active_buf_in_urbs = wa->active_buf_in_urbs;
-	rpipe = xfer->ep->hcpriv;
 
 	if (usb_pipeisoc(xfer->urb->pipe)) {
 		struct usb_iso_packet_descriptor *iso_frame_desc =
@@ -2672,6 +2659,7 @@ static void wa_buf_in_cb(struct urb *urb)
 			  resubmit_dti = (isoc_data_frame_count ==
 							urb_frame_count);
 		} else if (active_buf_in_urbs == 0) {
+			rpipe = xfer->ep->hcpriv;
 			dev_dbg(dev,
 				"xfer %p 0x%08X#%u: data in done (%zu bytes)\n",
 				xfer, wa_xfer_id(xfer), seg->index,
@@ -2697,6 +2685,7 @@ static void wa_buf_in_cb(struct urb *urb)
 		 */
 		resubmit_dti = wa->dti_state != WA_DTI_TRANSFER_RESULT_PENDING;
 		spin_lock_irqsave(&xfer->lock, flags);
+		rpipe = xfer->ep->hcpriv;
 		if (printk_ratelimit())
 			dev_err(dev, "xfer %p 0x%08X#%u: data in error %d\n",
 				xfer, wa_xfer_id(xfer), seg->index,
@@ -2866,8 +2855,10 @@ int wa_dti_start(struct wahc *wa)
 		goto out;
 
 	wa->dti_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (wa->dti_urb == NULL)
+	if (wa->dti_urb == NULL) {
+		dev_err(dev, "Can't allocate DTI URB\n");
 		goto error_dti_urb_alloc;
+	}
 	usb_fill_bulk_urb(
 		wa->dti_urb, wa->usb_dev,
 		usb_rcvbulkpipe(wa->usb_dev, 0x80 | dti_epd->bEndpointAddress),

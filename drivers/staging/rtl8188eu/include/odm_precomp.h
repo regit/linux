@@ -11,6 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 
 #ifndef	__ODM_PRECOMP_H__
@@ -25,20 +30,28 @@
 #include <osdep_service.h>
 #include <drv_types.h>
 #include <hal_intf.h>
-#include <usb_ops_linux.h>
 
 /* 2 OutSrc Header Files */
 
 #include "odm.h"
 #include "odm_HWConfig.h"
 #include "odm_debug.h"
+#include "odm_RegDefine11AC.h"
 #include "odm_RegDefine11N.h"
 
+#include "HalPhyRf.h"
+#include "HalPhyRf_8188e.h"/* for IQK,LCK,Power-tracking */
 #include "Hal8188ERateAdaptive.h"/* for  RA,Power training */
 #include "rtl8188e_hal.h"
 
 #include "odm_reg.h"
 
+#include "HalHWImg8188E_MAC.h"
+#include "HalHWImg8188E_RF.h"
+#include "HalHWImg8188E_BB.h"
+#include "Hal8188EReg.h"
+
+#include "odm_RegConfig8188E.h"
 #include "odm_RTL8188E.h"
 
 void odm_CmnInfoHook_Debug(struct odm_dm_struct *pDM_Odm);
@@ -59,6 +72,7 @@ void odm_RefreshRateAdaptiveMaskMP(struct odm_dm_struct *pDM_Odm);
 void odm_DynamicBBPowerSaving(struct odm_dm_struct *pDM_Odm);
 void odm_SwAntDivChkAntSwitch(struct odm_dm_struct *pDM_Odm, u8 Step);
 void odm_EdcaTurboCheck(struct odm_dm_struct *pDM_Odm);
+void odm_DynamicTxPower(struct odm_dm_struct *pDM_Odm);
 void odm_CommonInfoSelfInit(struct odm_dm_struct *pDM_Odm);
 void odm_RSSIMonitorCheck(struct odm_dm_struct *pDM_Odm);
 void odm_RefreshRateAdaptiveMask(struct odm_dm_struct *pDM_Odm);

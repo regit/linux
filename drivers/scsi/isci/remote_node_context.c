@@ -66,9 +66,6 @@ const char *rnc_state_name(enum scis_sds_remote_node_context_states state)
 {
 	static const char * const strings[] = RNC_STATES;
 
-	if (state >= ARRAY_SIZE(strings))
-		return "UNKNOWN";
-
 	return strings[state];
 }
 #undef C
@@ -457,7 +454,7 @@ enum sci_status sci_remote_node_context_event_handler(struct sci_remote_node_con
 				 * the device since it's being invalidated anyway */
 				dev_warn(scirdev_to_dev(rnc_to_dev(sci_rnc)),
 					"%s: SCIC Remote Node Context 0x%p was "
-					"suspended by hardware while being "
+					"suspeneded by hardware while being "
 					"invalidated.\n", __func__, sci_rnc);
 				break;
 			default:
@@ -476,7 +473,7 @@ enum sci_status sci_remote_node_context_event_handler(struct sci_remote_node_con
 				 * the device since it's being resumed anyway */
 				dev_warn(scirdev_to_dev(rnc_to_dev(sci_rnc)),
 					"%s: SCIC Remote Node Context 0x%p was "
-					"suspended by hardware while being resumed.\n",
+					"suspeneded by hardware while being resumed.\n",
 					__func__, sci_rnc);
 				break;
 			default:

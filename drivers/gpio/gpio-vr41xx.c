@@ -138,8 +138,8 @@ static void unmask_giuint_low(struct irq_data *d)
 
 static unsigned int startup_giuint(struct irq_data *data)
 {
-	if (gpiochip_lock_as_irq(&vr41xx_gpio_chip, data->hwirq))
-		dev_err(vr41xx_gpio_chip.parent,
+	if (gpio_lock_as_irq(&vr41xx_gpio_chip, data->hwirq))
+		dev_err(vr41xx_gpio_chip.dev,
 			"unable to lock HW IRQ %lu for IRQ\n",
 			data->hwirq);
 	/* Satisfy the .enable semantics by unmasking the line */
@@ -150,7 +150,7 @@ static unsigned int startup_giuint(struct irq_data *data)
 static void shutdown_giuint(struct irq_data *data)
 {
 	mask_giuint_low(data);
-	gpiochip_unlock_as_irq(&vr41xx_gpio_chip, data->hwirq);
+	gpio_unlock_as_irq(&vr41xx_gpio_chip, data->hwirq);
 }
 
 static struct irq_chip giuint_low_irq_chip = {
@@ -515,7 +515,7 @@ static int giu_probe(struct platform_device *pdev)
 	struct resource *res;
 	unsigned int trigger, i, pin;
 	struct irq_chip *chip;
-	int irq, ret;
+	int irq, retval;
 
 	switch (pdev->id) {
 	case GPIO_50PINS_PULLUPDOWN:
@@ -542,13 +542,9 @@ static int giu_probe(struct platform_device *pdev)
 	if (!giu_base)
 		return -ENOMEM;
 
-	vr41xx_gpio_chip.parent = &pdev->dev;
+	vr41xx_gpio_chip.dev = &pdev->dev;
 
-	ret = gpiochip_add_data(&vr41xx_gpio_chip, NULL);
-	if (!ret) {
-		iounmap(giu_base);
-		return -ENODEV;
-	}
+	retval = gpiochip_add(&vr41xx_gpio_chip);
 
 	giu_write(GIUINTENL, 0);
 	giu_write(GIUINTENH, 0);
@@ -591,6 +587,7 @@ static struct platform_driver giu_device_driver = {
 	.remove		= giu_remove,
 	.driver		= {
 		.name	= "GIU",
+		.owner	= THIS_MODULE,
 	},
 };
 

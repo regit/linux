@@ -8,7 +8,6 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <drm/drm_fb_helper.h>
 
 #include "bochs.h"
 
@@ -70,7 +69,9 @@ static const struct file_operations bochs_fops = {
 	.open		= drm_open,
 	.release	= drm_release,
 	.unlocked_ioctl	= drm_ioctl,
+#ifdef CONFIG_COMPAT
 	.compat_ioctl	= drm_compat_ioctl,
+#endif
 	.poll		= drm_poll,
 	.read		= drm_read,
 	.llseek		= no_llseek,
@@ -81,14 +82,13 @@ static struct drm_driver bochs_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET,
 	.load			= bochs_load,
 	.unload			= bochs_unload,
-	.set_busid		= drm_pci_set_busid,
 	.fops			= &bochs_fops,
 	.name			= "bochs-drm",
 	.desc			= "bochs dispi vga interface (qemu stdvga)",
 	.date			= "20130925",
 	.major			= 1,
 	.minor			= 0,
-	.gem_free_object_unlocked = bochs_gem_free_object,
+	.gem_free_object        = bochs_gem_free_object,
 	.dumb_create            = bochs_dumb_create,
 	.dumb_map_offset        = bochs_dumb_mmap_offset,
 	.dumb_destroy           = drm_gem_dumb_destroy,
@@ -97,7 +97,6 @@ static struct drm_driver bochs_driver = {
 /* ---------------------------------------------------------------------- */
 /* pm interface                                                           */
 
-#ifdef CONFIG_PM_SLEEP
 static int bochs_pm_suspend(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
@@ -108,7 +107,7 @@ static int bochs_pm_suspend(struct device *dev)
 
 	if (bochs->fb.initialized) {
 		console_lock();
-		drm_fb_helper_set_suspend(&bochs->fb.helper, 1);
+		fb_set_suspend(bochs->fb.helper.fbdev, 1);
 		console_unlock();
 	}
 
@@ -125,14 +124,13 @@ static int bochs_pm_resume(struct device *dev)
 
 	if (bochs->fb.initialized) {
 		console_lock();
-		drm_fb_helper_set_suspend(&bochs->fb.helper, 0);
+		fb_set_suspend(bochs->fb.helper.fbdev, 0);
 		console_unlock();
 	}
 
 	drm_kms_helper_poll_enable(drm_dev);
 	return 0;
 }
-#endif
 
 static const struct dev_pm_ops bochs_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(bochs_pm_suspend,
@@ -152,7 +150,7 @@ static int bochs_kick_out_firmware_fb(struct pci_dev *pdev)
 
 	ap->ranges[0].base = pci_resource_start(pdev, 0);
 	ap->ranges[0].size = pci_resource_len(pdev, 0);
-	drm_fb_helper_remove_conflicting_framebuffers(ap, "bochsdrmfb", false);
+	remove_conflicting_framebuffers(ap, "bochsdrmfb", false);
 	kfree(ap);
 
 	return 0;
@@ -161,14 +159,7 @@ static int bochs_kick_out_firmware_fb(struct pci_dev *pdev)
 static int bochs_pci_probe(struct pci_dev *pdev,
 			   const struct pci_device_id *ent)
 {
-	unsigned long fbsize;
 	int ret;
-
-	fbsize = pci_resource_len(pdev, 0);
-	if (fbsize < 4 * 1024 * 1024) {
-		DRM_ERROR("less than 4 MB video memory, ignoring device\n");
-		return -ENOMEM;
-	}
 
 	ret = bochs_kick_out_firmware_fb(pdev);
 	if (ret)
@@ -184,12 +175,12 @@ static void bochs_pci_remove(struct pci_dev *pdev)
 	drm_put_dev(dev);
 }
 
-static const struct pci_device_id bochs_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(bochs_pci_tbl) = {
 	{
 		.vendor      = 0x1234,
 		.device      = 0x1111,
-		.subvendor   = PCI_SUBVENDOR_ID_REDHAT_QUMRANET,
-		.subdevice   = PCI_SUBDEVICE_ID_QEMU,
+		.subvendor   = 0x1af4,
+		.subdevice   = 0x1100,
 		.driver_data = BOCHS_QEMU_STDVGA,
 	},
 	{

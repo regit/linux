@@ -247,8 +247,10 @@ id_map_alloc(struct ib_device *ibdev, int slave_id, u32 sl_cm_id)
 	struct mlx4_ib_sriov *sriov = &to_mdev(ibdev)->sriov;
 
 	ent = kmalloc(sizeof (struct id_map_entry), GFP_KERNEL);
-	if (!ent)
+	if (!ent) {
+		mlx4_ib_warn(ibdev, "Couldn't allocate id cache entry - out of memory\n");
 		return ERR_PTR(-ENOMEM);
+	}
 
 	ent->sl_cm_id = sl_cm_id;
 	ent->slave_id = slave_id;
@@ -370,7 +372,7 @@ int mlx4_ib_demux_cm_handler(struct ib_device *ibdev, int port, int *slave,
 		*slave = mlx4_ib_find_real_gid(ibdev, port, gid.global.interface_id);
 		if (*slave < 0) {
 			mlx4_ib_warn(ibdev, "failed matching slave_id by gid (0x%llx)\n",
-				     be64_to_cpu(gid.global.interface_id));
+					gid.global.interface_id);
 			return -ENOENT;
 		}
 		return 0;

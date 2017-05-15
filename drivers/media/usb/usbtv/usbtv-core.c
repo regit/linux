@@ -1,6 +1,19 @@
 /*
+ * Fushicai USBTV007 Video Grabber Driver
+ *
+ * Product web site:
+ * http://www.fushicai.com/products_detail/&productId=d05449ee-b690-42f9-a661-aa7353894bed.html
+ *
+ * Following LWN articles were very useful in construction of this driver:
+ * Video4Linux2 API series: http://lwn.net/Articles/203924/
+ * videobuf2 API explanation: http://lwn.net/Articles/447435/
+ * Thanks go to Jonathan Corbet for providing this quality documentation.
+ * He is awesome.
+ *
  * Copyright (c) 2013 Lubomir Rintel
  * All rights reserved.
+ * No physical hardware was harmed running Windows during the
+ * reverse-engineering activity
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -13,33 +26,6 @@
  *
  * Alternatively, this software may be distributed under the terms of the
  * GNU General Public License ("GPL").
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-/*
- * Fushicai USBTV007 Audio-Video Grabber Driver
- *
- * Product web site:
- * http://www.fushicai.com/products_detail/&productId=d05449ee-b690-42f9-a661-aa7353894bed.html
- *
- * Following LWN articles were very useful in construction of this driver:
- * Video4Linux2 API series: http://lwn.net/Articles/203924/
- * videobuf2 API explanation: http://lwn.net/Articles/447435/
- * Thanks go to Jonathan Corbet for providing this quality documentation.
- * He is awesome.
- *
- * No physical hardware was harmed running Windows during the
- * reverse-engineering activity
  */
 
 #include "usbtv.h"
@@ -71,7 +57,6 @@ static int usbtv_probe(struct usb_interface *intf,
 	int size;
 	struct device *dev = &intf->dev;
 	struct usbtv *usbtv;
-	struct usb_host_endpoint *ep;
 
 	/* Checks that the device is what we think it is. */
 	if (intf->num_altsetting != 2)
@@ -79,12 +64,10 @@ static int usbtv_probe(struct usb_interface *intf,
 	if (intf->altsetting[1].desc.bNumEndpoints != 4)
 		return -ENODEV;
 
-	ep = &intf->altsetting[1].endpoint[0];
-
 	/* Packet size is split into 11 bits of base size and count of
 	 * extra multiplies of it.*/
-	size = usb_endpoint_maxp(&ep->desc);
-	size = (size & 0x07ff) * usb_endpoint_maxp_mult(&ep->desc);
+	size = usb_endpoint_maxp(&intf->altsetting[1].endpoint[0].desc);
+	size = (size & 0x07ff) * (((size & 0x1800) >> 11) + 1);
 
 	/* Device structure */
 	usbtv = kzalloc(sizeof(struct usbtv), GFP_KERNEL);
@@ -101,22 +84,13 @@ static int usbtv_probe(struct usb_interface *intf,
 	if (ret < 0)
 		goto usbtv_video_fail;
 
-	ret = usbtv_audio_init(usbtv);
-	if (ret < 0)
-		goto usbtv_audio_fail;
-
 	/* for simplicity we exploit the v4l2_device reference counting */
 	v4l2_device_get(&usbtv->v4l2_dev);
 
-	dev_info(dev, "Fushicai USBTV007 Audio-Video Grabber\n");
+	dev_info(dev, "Fushicai USBTV007 Video Grabber\n");
 	return 0;
 
-usbtv_audio_fail:
-	usbtv_video_free(usbtv);
-
 usbtv_video_fail:
-	usb_set_intfdata(intf, NULL);
-	usb_put_dev(usbtv->udev);
 	kfree(usbtv);
 
 	return ret;
@@ -125,13 +99,11 @@ usbtv_video_fail:
 static void usbtv_disconnect(struct usb_interface *intf)
 {
 	struct usbtv *usbtv = usb_get_intfdata(intf);
-
 	usb_set_intfdata(intf, NULL);
 
 	if (!usbtv)
 		return;
 
-	usbtv_audio_free(usbtv);
 	usbtv_video_free(usbtv);
 
 	usb_put_dev(usbtv->udev);
@@ -148,8 +120,8 @@ static struct usb_device_id usbtv_id_table[] = {
 };
 MODULE_DEVICE_TABLE(usb, usbtv_id_table);
 
-MODULE_AUTHOR("Lubomir Rintel, Federico Simoncelli");
-MODULE_DESCRIPTION("Fushicai USBTV007 Audio-Video Grabber Driver");
+MODULE_AUTHOR("Lubomir Rintel");
+MODULE_DESCRIPTION("Fushicai USBTV007 Video Grabber Driver");
 MODULE_LICENSE("Dual BSD/GPL");
 
 static struct usb_driver usbtv_usb_driver = {

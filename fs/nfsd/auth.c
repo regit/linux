@@ -28,7 +28,7 @@ int nfsd_setuser(struct svc_rqst *rqstp, struct svc_export *exp)
 	validate_process_creds();
 
 	/* discard any old override before preparing the new set */
-	revert_creds(get_cred(current_real_cred()));
+	revert_creds(get_cred(current->real_cred));
 	new = prepare_creds();
 	if (!new)
 		return -ENOMEM;
@@ -55,10 +55,10 @@ int nfsd_setuser(struct svc_rqst *rqstp, struct svc_export *exp)
 			goto oom;
 
 		for (i = 0; i < rqgi->ngroups; i++) {
-			if (gid_eq(GLOBAL_ROOT_GID, rqgi->gid[i]))
-				gi->gid[i] = exp->ex_anon_gid;
+			if (gid_eq(GLOBAL_ROOT_GID, GROUP_AT(rqgi, i)))
+				GROUP_AT(gi, i) = exp->ex_anon_gid;
 			else
-				gi->gid[i] = rqgi->gid[i];
+				GROUP_AT(gi, i) = GROUP_AT(rqgi, i);
 		}
 	} else {
 		gi = get_group_info(rqgi);

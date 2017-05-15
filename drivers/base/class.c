@@ -90,7 +90,6 @@ int class_create_file_ns(struct class *cls, const struct class_attribute *attr,
 			 const void *ns)
 {
 	int error;
-
 	if (cls)
 		error = sysfs_create_file_ns(&cls->p->subsys.kobj,
 					     &attr->attr, ns);
@@ -163,18 +162,6 @@ static void klist_class_dev_put(struct klist_node *n)
 	put_device(dev);
 }
 
-static int class_add_groups(struct class *cls,
-			    const struct attribute_group **groups)
-{
-	return sysfs_create_groups(&cls->p->subsys.kobj, groups);
-}
-
-static void class_remove_groups(struct class *cls,
-				const struct attribute_group **groups)
-{
-	return sysfs_remove_groups(&cls->p->subsys.kobj, groups);
-}
-
 int __class_register(struct class *cls, struct lock_class_key *key)
 {
 	struct subsys_private *cp;
@@ -215,8 +202,6 @@ int __class_register(struct class *cls, struct lock_class_key *key)
 		kfree(cp);
 		return error;
 	}
-	error = class_add_groups(class_get(cls), cls->class_groups);
-	class_put(cls);
 	error = add_class_attrs(class_get(cls));
 	class_put(cls);
 	return error;
@@ -227,7 +212,6 @@ void class_unregister(struct class *cls)
 {
 	pr_debug("device class '%s': unregistering\n", cls->name);
 	remove_class_attrs(cls);
-	class_remove_groups(cls, cls->class_groups);
 	kset_unregister(&cls->p->subsys);
 }
 
@@ -421,7 +405,7 @@ EXPORT_SYMBOL_GPL(class_for_each_device);
  *
  * Note, you will need to drop the reference with put_device() after use.
  *
- * @match is allowed to do anything including calling back into class
+ * @fn is allowed to do anything including calling back into class
  * code.  There's no locking restriction.
  */
 struct device *class_find_device(struct class *class, struct device *start,
@@ -504,7 +488,6 @@ ssize_t show_class_attr_string(struct class *class,
 			       struct class_attribute *attr, char *buf)
 {
 	struct class_attribute_string *cs;
-
 	cs = container_of(attr, struct class_attribute_string, attr);
 	return snprintf(buf, PAGE_SIZE, "%s\n", cs->str);
 }

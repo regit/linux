@@ -76,3 +76,4 @@ struct wmt_pinctrl_data {
 
 int wmt_pinctrl_probe(struct platform_device *pdev,
 		      struct wmt_pinctrl_data *data);
+int wmt_pinctrl_remove(struct platform_device *pdev);

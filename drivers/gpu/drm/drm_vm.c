@@ -35,20 +35,10 @@
 
 #include <drm/drmP.h>
 #include <linux/export.h>
-#include <linux/seq_file.h>
 #if defined(__ia64__)
 #include <linux/efi.h>
 #include <linux/slab.h>
 #endif
-#include <asm/pgtable.h>
-#include "drm_internal.h"
-#include "drm_legacy.h"
-
-struct drm_vma_entry {
-	struct list_head head;
-	struct vm_area_struct *vma;
-	pid_t pid;
-};
 
 static void drm_vm_open(struct vm_area_struct *vma);
 static void drm_vm_close(struct vm_area_struct *vma);
@@ -58,11 +48,15 @@ static pgprot_t drm_io_prot(struct drm_local_map *map,
 {
 	pgprot_t tmp = vm_get_page_prot(vma->vm_flags);
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__powerpc__)
+#if defined(__i386__) || defined(__x86_64__)
 	if (map->type == _DRM_REGISTERS && !(map->flags & _DRM_WRITE_COMBINING))
 		tmp = pgprot_noncached(tmp);
 	else
 		tmp = pgprot_writecombine(tmp);
+#elif defined(__powerpc__)
+	pgprot_val(tmp) |= _PAGE_NO_CACHE;
+	if (map->type == _DRM_REGISTERS)
+		pgprot_val(tmp) |= _PAGE_GUARDED;
 #elif defined(__ia64__)
 	if (efi_range_is_wc(vma->vm_start, vma->vm_end -
 				    vma->vm_start))
@@ -80,7 +74,7 @@ static pgprot_t drm_dma_prot(uint32_t map_type, struct vm_area_struct *vma)
 	pgprot_t tmp = vm_get_page_prot(vma->vm_flags);
 
 #if defined(__powerpc__) && defined(CONFIG_NOT_COHERENT_CACHE)
-	tmp = pgprot_noncached_wc(tmp);
+	tmp |= _PAGE_NO_CACHE;
 #endif
 	return tmp;
 }
@@ -95,7 +89,7 @@ static pgprot_t drm_dma_prot(uint32_t map_type, struct vm_area_struct *vma)
  * Find the right map and if it's AGP memory find the real physical page to
  * map, get the page, increment the use count and return it.
  */
-#if IS_ENABLED(CONFIG_AGP)
+#if __OS_HAS_AGP
 static int drm_do_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct drm_file *priv = vma->vm_file->private_data;
@@ -124,7 +118,8 @@ static int drm_do_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 		 * Using vm_pgoff as a selector forces us to use this unusual
 		 * addressing scheme.
 		 */
-		resource_size_t offset = vmf->address - vma->vm_start;
+		resource_size_t offset = (unsigned long)vmf->virtual_address -
+			vma->vm_start;
 		resource_size_t baddr = map->offset + offset;
 		struct drm_agp_mem *agpmem;
 		struct page *page;
@@ -167,12 +162,12 @@ static int drm_do_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 vm_fault_error:
 	return VM_FAULT_SIGBUS;	/* Disallow mremap */
 }
-#else
+#else				/* __OS_HAS_AGP */
 static int drm_do_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	return VM_FAULT_SIGBUS;
 }
-#endif
+#endif				/* __OS_HAS_AGP */
 
 /**
  * \c nopage method for shared virtual memory.
@@ -194,7 +189,7 @@ static int drm_do_vm_shm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	if (!map)
 		return VM_FAULT_SIGBUS;	/* Nothing allocated */
 
-	offset = vmf->address - vma->vm_start;
+	offset = (unsigned long)vmf->virtual_address - vma->vm_start;
 	i = (unsigned long)map->handle + offset;
 	page = vmalloc_to_page((void *)i);
 	if (!page)
@@ -268,7 +263,7 @@ static void drm_vm_shm_close(struct vm_area_struct *vma)
 				dmah.vaddr = map->handle;
 				dmah.busaddr = map->offset;
 				dmah.size = map->size;
-				__drm_legacy_pci_free(dev, &dmah);
+				__drm_pci_free(dev, &dmah);
 				break;
 			}
 			kfree(map);
@@ -300,8 +295,7 @@ static int drm_do_vm_dma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	if (!dma->pagelist)
 		return VM_FAULT_SIGBUS;	/* Nothing allocated */
 
-	offset = vmf->address - vma->vm_start;
-					/* vm_[pg]off[set] should be 0 */
+	offset = (unsigned long)vmf->virtual_address - vma->vm_start;	/* vm_[pg]off[set] should be 0 */
 	page_nr = offset >> PAGE_SHIFT; /* page_nr could just be vmf->pgoff */
 	page = virt_to_page((void *)dma->pagelist[page_nr]);
 
@@ -337,7 +331,7 @@ static int drm_do_vm_sg_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	if (!entry->pagelist)
 		return VM_FAULT_SIGBUS;	/* Nothing allocated */
 
-	offset = vmf->address - vma->vm_start;
+	offset = (unsigned long)vmf->virtual_address - vma->vm_start;
 	map_offset = map->offset - (unsigned long)dev->sg->virtual;
 	page_offset = (offset >> PAGE_SHIFT) + (map_offset >> PAGE_SHIFT);
 	page = entry->pagelist[page_offset];
@@ -395,8 +389,16 @@ static const struct vm_operations_struct drm_vm_sg_ops = {
 	.close = drm_vm_close,
 };
 
-static void drm_vm_open_locked(struct drm_device *dev,
-			       struct vm_area_struct *vma)
+/**
+ * \c open method for shared virtual memory.
+ *
+ * \param vma virtual memory area.
+ *
+ * Create a new drm_vma_entry structure as the \p vma private data entry and
+ * add it to drm_device::vmalist.
+ */
+void drm_vm_open_locked(struct drm_device *dev,
+		struct vm_area_struct *vma)
 {
 	struct drm_vma_entry *vma_entry;
 
@@ -410,6 +412,7 @@ static void drm_vm_open_locked(struct drm_device *dev,
 		list_add(&vma_entry->head, &dev->vmalist);
 	}
 }
+EXPORT_SYMBOL_GPL(drm_vm_open_locked);
 
 static void drm_vm_open(struct vm_area_struct *vma)
 {
@@ -421,8 +424,8 @@ static void drm_vm_open(struct vm_area_struct *vma)
 	mutex_unlock(&dev->struct_mutex);
 }
 
-static void drm_vm_close_locked(struct drm_device *dev,
-				struct vm_area_struct *vma)
+void drm_vm_close_locked(struct drm_device *dev,
+		struct vm_area_struct *vma)
 {
 	struct drm_vma_entry *pt, *temp;
 
@@ -529,7 +532,7 @@ static resource_size_t drm_core_get_reg_ofs(struct drm_device *dev)
  * according to the mapping type and remaps the pages. Finally sets the file
  * pointer and calls vm_open().
  */
-static int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
+int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 {
 	struct drm_file *priv = filp->private_data;
 	struct drm_device *dev = priv->minor->dev;
@@ -548,7 +551,7 @@ static int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 	 * --BenH.
 	 */
 	if (!vma->vm_pgoff
-#if IS_ENABLED(CONFIG_AGP)
+#if __OS_HAS_AGP
 	    && (!dev->agp
 		|| dev->agp->agp_info.device->vendor != PCI_VENDOR_ID_APPLE)
 #endif
@@ -593,7 +596,7 @@ static int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 			 * pages and mappings in fault()
 			 */
 #if defined(__powerpc__)
-			vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+			pgprot_val(vma->vm_page_prot) |= _PAGE_NO_CACHE;
 #endif
 			vma->vm_ops = &drm_vm_ops;
 			break;
@@ -643,7 +646,7 @@ static int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 	return 0;
 }
 
-int drm_legacy_mmap(struct file *filp, struct vm_area_struct *vma)
+int drm_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct drm_file *priv = filp->private_data;
 	struct drm_device *dev = priv->minor->dev;
@@ -658,15 +661,4 @@ int drm_legacy_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	return ret;
 }
-EXPORT_SYMBOL(drm_legacy_mmap);
-
-void drm_legacy_vma_flush(struct drm_device *dev)
-{
-	struct drm_vma_entry *vma, *vma_temp;
-
-	/* Clear vma list (only needed for legacy drivers) */
-	list_for_each_entry_safe(vma, vma_temp, &dev->vmalist, head) {
-		list_del(&vma->head);
-		kfree(vma);
-	}
-}
+EXPORT_SYMBOL(drm_mmap);

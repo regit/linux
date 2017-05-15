@@ -6,11 +6,11 @@
 # Execute this in the source tree.  Do not run it as a background task
 # because qemu does not seem to like that much.
 #
-# Usage: kvm-test-1-run.sh config builddir resdir seconds qemu-args boot_args
+# Usage: sh kvm-test-1-run.sh config builddir resdir minutes qemu-args boot_args
 #
-# qemu-args defaults to "-enable-kvm -nographic", along with arguments
-#			specifying the number of CPUs and other options
-#			generated from the underlying CPU architecture.
+# qemu-args defaults to "-nographic", along with arguments specifying the
+#			number of CPUs and other options generated from
+#			the underlying CPU architecture.
 # boot_args defaults to value returned by the per_version_boot_params
 #			shell function.
 #
@@ -38,12 +38,13 @@
 #
 # Authors: Paul E. McKenney <paulmck@linux.vnet.ibm.com>
 
+grace=120
+
 T=/tmp/kvm-test-1-run.sh.$$
 trap 'rm -rf $T' 0
-touch $T
 
 . $KVM/bin/functions.sh
-. $CONFIGFRAG/ver_functions.sh
+. $KVPATH/ver_functions.sh
 
 config_template=${1}
 config_dir=`echo $config_template | sed -e 's,/[^/]*$,,'`
@@ -91,34 +92,25 @@ fi
 # CONFIG_PCMCIA=n
 # CONFIG_CARDBUS=n
 # CONFIG_YENTA=n
-base_resdir=`echo $resdir | sed -e 's/\.[0-9]\+$//'`
-if test "$base_resdir" != "$resdir" -a -f $base_resdir/bzImage -a -f $base_resdir/vmlinux
+if kvm-build.sh $config_template $builddir $T
 then
-	# Rerunning previous test, so use that test's kernel.
-	QEMU="`identify_qemu $base_resdir/vmlinux`"
-	BOOT_IMAGE="`identify_boot_image $QEMU`"
-	KERNEL=$base_resdir/${BOOT_IMAGE##*/} # use the last component of ${BOOT_IMAGE}
-	ln -s $base_resdir/Make*.out $resdir  # for kvm-recheck.sh
-	ln -s $base_resdir/.config $resdir  # for kvm-recheck.sh
-elif kvm-build.sh $config_template $builddir $T
-then
-	# Had to build a kernel for this test.
 	QEMU="`identify_qemu $builddir/vmlinux`"
 	BOOT_IMAGE="`identify_boot_image $QEMU`"
 	cp $builddir/Make*.out $resdir
-	cp $builddir/vmlinux $resdir
 	cp $builddir/.config $resdir
 	if test -n "$BOOT_IMAGE"
 	then
 		cp $builddir/$BOOT_IMAGE $resdir
-		KERNEL=$resdir/${BOOT_IMAGE##*/}
 	else
 		echo No identifiable boot image, not running KVM, see $resdir.
 		echo Do the torture scripts know about your architecture?
 	fi
 	parse-build.sh $resdir/Make.out $title
+	if test -f $builddir.wait
+	then
+		mv $builddir.wait $builddir.ready
+	fi
 else
-	# Build failed.
 	cp $builddir/Make*.out $resdir
 	cp $builddir/.config $resdir || :
 	echo Build failed, not running KVM, see $resdir.
@@ -128,29 +120,22 @@ else
 	fi
 	exit 1
 fi
-if test -f $builddir.wait
-then
-	mv $builddir.wait $builddir.ready
-fi
 while test -f $builddir.ready
 do
 	sleep 1
 done
-seconds=$4
+minutes=$4
+seconds=$(($minutes * 60))
 qemu_args=$5
 boot_args=$6
 
 cd $KVM
 kstarttime=`awk 'BEGIN { print systime() }' < /dev/null`
-if test -z "$TORTURE_BUILDONLY"
-then
-	echo ' ---' `date`: Starting kernel
-fi
+echo ' ---' `date`: Starting kernel
 
 # Generate -smp qemu argument.
-qemu_args="-enable-kvm -nographic $qemu_args"
+qemu_args="-nographic $qemu_args"
 cpu_count=`configNR_CPUS.sh $config_template`
-cpu_count=`configfrag_boot_cpus "$boot_args" "$config_template" "$cpu_count"`
 vcpus=`identify_qemu_vcpus`
 if test $cpu_count -gt $vcpus
 then
@@ -162,7 +147,7 @@ fi
 qemu_args="`specify_qemu_cpus "$QEMU" "$qemu_args" "$cpu_count"`"
 
 # Generate architecture-specific and interaction-specific qemu arguments
-qemu_args="$qemu_args `identify_qemu_args "$QEMU" "$resdir/console.log"`"
+qemu_args="$qemu_args `identify_qemu_args "$QEMU" "$builddir/console.log"`"
 
 # Generate qemu -append arguments
 qemu_append="`identify_qemu_append "$QEMU"`"
@@ -172,33 +157,20 @@ boot_args="`configfrag_boot_params "$boot_args" "$config_template"`"
 # Generate kernel-version-specific boot parameters
 boot_args="`per_version_boot_params "$boot_args" $builddir/.config $seconds`"
 
+echo $QEMU $qemu_args -m 512 -kernel $builddir/$BOOT_IMAGE -append \"$qemu_append $boot_args\" > $resdir/qemu-cmd
 if test -n "$TORTURE_BUILDONLY"
 then
 	echo Build-only run specified, boot/test omitted.
-	touch $resdir/buildonly
 	exit 0
 fi
-echo "NOTE: $QEMU either did not run or was interactive" > $resdir/console.log
-echo $QEMU $qemu_args -m 512 -kernel $KERNEL -append \"$qemu_append $boot_args\" > $resdir/qemu-cmd
-( $QEMU $qemu_args -m 512 -kernel $KERNEL -append "$qemu_append $boot_args"& echo $! > $resdir/qemu_pid; wait `cat  $resdir/qemu_pid`; echo $? > $resdir/qemu-retval ) &
+( $QEMU $qemu_args -m 512 -kernel $builddir/$BOOT_IMAGE -append "$qemu_append $boot_args"; echo $? > $resdir/qemu-retval ) &
+qemu_pid=$!
 commandcompleted=0
-sleep 10 # Give qemu's pid a chance to reach the file
-if test -s "$resdir/qemu_pid"
-then
-	qemu_pid=`cat "$resdir/qemu_pid"`
-	echo Monitoring qemu job at pid $qemu_pid
-else
-	qemu_pid=""
-	echo Monitoring qemu job at yet-as-unknown pid
-fi
+echo Monitoring qemu job at pid $qemu_pid
 while :
 do
-	if test -z "$qemu_pid" -a -s "$resdir/qemu_pid"
-	then
-		qemu_pid=`cat "$resdir/qemu_pid"`
-	fi
 	kruntime=`awk 'BEGIN { print systime() - '"$kstarttime"' }' < /dev/null`
-	if test -z "$qemu_pid" || kill -0 "$qemu_pid" > /dev/null 2>&1
+	if kill -0 $qemu_pid > /dev/null 2>&1
 	then
 		if test $kruntime -ge $seconds
 		then
@@ -218,19 +190,14 @@ do
 				ps -fp $killpid >> $resdir/Warnings 2>&1
 			fi
 		else
-			echo ' ---' `date`: "Kernel done"
+			echo ' ---' `date`: Kernel done
 		fi
 		break
 	fi
 done
-if test -z "$qemu_pid" -a -s "$resdir/qemu_pid"
-then
-	qemu_pid=`cat "$resdir/qemu_pid"`
-fi
-if test $commandcompleted -eq 0 -a -n "$qemu_pid"
+if test $commandcompleted -eq 0
 then
 	echo Grace period for qemu job at pid $qemu_pid
-	oldline="`tail $resdir/console.log`"
 	while :
 	do
 		kruntime=`awk 'BEGIN { print systime() - '"$kstarttime"' }' < /dev/null`
@@ -240,34 +207,16 @@ then
 		else
 			break
 		fi
-		must_continue=no
-		newline="`tail $resdir/console.log`"
-		if test "$newline" != "$oldline" && echo $newline | grep -q ' [0-9]\+us : '
+		if test $kruntime -ge $((seconds + grace))
 		then
-			must_continue=yes
-		fi
-		last_ts="`tail $resdir/console.log | grep '^\[ *[0-9]\+\.[0-9]\+]' | tail -1 | sed -e 's/^\[ *//' -e 's/\..*$//'`"
-		if test -z "last_ts"
-		then
-			last_ts=0
-		fi
-		if test "$newline" != "$oldline" -a "$last_ts" -lt $((seconds + $TORTURE_SHUTDOWN_GRACE))
-		then
-			must_continue=yes
-		fi
-		if test $must_continue = no -a $kruntime -ge $((seconds + $TORTURE_SHUTDOWN_GRACE))
-		then
-			echo "!!! PID $qemu_pid hung at $kruntime vs. $seconds seconds" >> $resdir/Warnings 2>&1
+			echo "!!! Hang at $kruntime vs. $seconds seconds" >> $resdir/Warnings 2>&1
 			kill -KILL $qemu_pid
 			break
 		fi
-		oldline=$newline
-		sleep 10
+		sleep 1
 	done
-elif test -z "$qemu_pid"
-then
-	echo Unknown PID, cannot kill qemu command
 fi
 
+cp $builddir/console.log $resdir
 parse-torture.sh $resdir/console.log $title
 parse-console.sh $resdir/console.log $title

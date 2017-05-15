@@ -129,7 +129,7 @@ static int full_duplex[MAX_UNITS] = {-1, -1, -1, -1, -1, -1, -1, -1};
 #include <linux/rtnetlink.h>
 #include <linux/crc32.h>
 #include <linux/bitops.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/processor.h>		/* Processor type for cache alignment. */
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -219,7 +219,7 @@ enum chip_capability_flags {
 	CanHaveMII=1, HasBrokenTx=2, AlwaysFDX=4, FDXOnNoMII=8,
 };
 
-static const struct pci_device_id w840_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(w840_pci_tbl) = {
 	{ 0x1050, 0x0840, PCI_ANY_ID, 0x8153,     0, 0, 0 },
 	{ 0x1050, 0x0840, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1 },
 	{ 0x11f6, 0x2011, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 2 },
@@ -353,6 +353,7 @@ static const struct net_device_ops netdev_ops = {
 	.ndo_set_rx_mode	= set_rx_mode,
 	.ndo_do_ioctl		= netdev_ioctl,
 	.ndo_tx_timeout		= tx_timeout,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 };
@@ -903,10 +904,10 @@ static void init_registers(struct net_device *dev)
 	}
 #elif defined(__powerpc__) || defined(__i386__) || defined(__alpha__) || defined(__ia64__) || defined(__x86_64__)
 	i |= 0xE000;
-#elif defined(CONFIG_SPARC) || defined (CONFIG_PARISC) || defined(CONFIG_ARM)
+#elif defined(CONFIG_SPARC) || defined (CONFIG_PARISC)
 	i |= 0x4800;
 #else
-	dev_warn(&dev->dev, "unknown CPU architecture, using default csr0 setting\n");
+#warning Processor architecture undefined
 	i |= 0x4800;
 #endif
 	iowrite32(i, ioaddr + PCIBusCfg);
@@ -965,7 +966,7 @@ static void tx_timeout(struct net_device *dev)
 	enable_irq(irq);
 
 	netif_wake_queue(dev);
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	np->stats.tx_errors++;
 }
 

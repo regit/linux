@@ -87,7 +87,7 @@
 /* This should be 1500 if "jumbo" is not set in LIPP. */
 /* This should be at most 10226 (10240 - 14) if "jumbo" is set in LIPP. */
 /* ISSUE: This has not been thoroughly tested (except at 1500). */
-#define TILE_NET_MTU ETH_DATA_LEN
+#define TILE_NET_MTU 1500
 
 /* HACK: Define this to verify incoming packets. */
 /* #define TILE_NET_VERIFY_INGRESS */
@@ -588,7 +588,7 @@ static bool tile_net_lepp_free_comps(struct net_device *dev, bool all)
 static void tile_net_schedule_egress_timer(struct tile_net_cpu *info)
 {
 	if (!info->egress_timer_scheduled) {
-		mod_timer(&info->egress_timer, jiffies + 1);
+		mod_timer_pinned(&info->egress_timer, jiffies + 1);
 		info->egress_timer_scheduled = true;
 	}
 }
@@ -720,6 +720,9 @@ static bool tile_net_poll_aux(struct tile_net_cpu *info, int index)
 	/* Invalidate the packet buffer. */
 	if (!hash_default)
 		__inv_buffer(buf, len);
+
+	/* ISSUE: Is this needed? */
+	dev->last_rx = jiffies;
 
 #ifdef TILE_NET_DUMP_PACKETS
 	dump_packet(buf, len, "rx");
@@ -953,7 +956,7 @@ static int tile_net_open_aux(struct net_device *dev)
 	 */
 	if (hv_dev_pwrite(priv->hv_devhdl, 0, (HV_VirtAddr)&dummy,
 			  sizeof(dummy), NETIO_IPP_START_SHIM_OFF) < 0) {
-		pr_warn("Failed to start LIPP/LEPP\n");
+		pr_warning("Failed to start LIPP/LEPP.\n");
 		return -EIO;
 	}
 
@@ -993,18 +996,18 @@ static void tile_net_register(void *dev_ptr)
 	PDEBUG("tile_net_register(queue_id %d)\n", queue_id);
 
 	if (!strcmp(dev->name, "xgbe0"))
-		info = this_cpu_ptr(&hv_xgbe0);
+		info = &__get_cpu_var(hv_xgbe0);
 	else if (!strcmp(dev->name, "xgbe1"))
-		info = this_cpu_ptr(&hv_xgbe1);
+		info = &__get_cpu_var(hv_xgbe1);
 	else if (!strcmp(dev->name, "gbe0"))
-		info = this_cpu_ptr(&hv_gbe0);
+		info = &__get_cpu_var(hv_gbe0);
 	else if (!strcmp(dev->name, "gbe1"))
-		info = this_cpu_ptr(&hv_gbe1);
+		info = &__get_cpu_var(hv_gbe1);
 	else
 		BUG();
 
 	/* Initialize the egress timer. */
-	init_timer_pinned(&info->egress_timer);
+	init_timer(&info->egress_timer);
 	info->egress_timer.data = (long)info;
 	info->egress_timer.function = tile_net_handle_egress_timer;
 
@@ -1349,7 +1352,8 @@ static int tile_net_open_inner(struct net_device *dev)
  */
 static void tile_net_open_retry(struct work_struct *w)
 {
-	struct delayed_work *dw = to_delayed_work(w);
+	struct delayed_work *dw =
+		container_of(w, struct delayed_work, work);
 
 	struct tile_net_priv *priv =
 		container_of(dw, struct tile_net_priv, retry_work);
@@ -1883,7 +1887,7 @@ static int tile_net_tx(struct sk_buff *skb, struct net_device *dev)
 
 
 	/* Save the timestamp. */
-	netif_trans_update(dev);
+	dev->trans_start = jiffies;
 
 
 #ifdef TILE_NET_PARANOIA
@@ -2026,7 +2030,7 @@ static void tile_net_tx_timeout(struct net_device *dev)
 {
 	PDEBUG("tile_net_tx_timeout()\n");
 	PDEBUG("Transmit timeout at %ld, latency %ld\n", jiffies,
-	       jiffies - dev_trans_start(dev));
+	       jiffies - dev->trans_start);
 
 	/* XXX: ISSUE: This doesn't seem useful for us. */
 	netif_wake_queue(dev);
@@ -2094,6 +2098,26 @@ static struct rtnl_link_stats64 *tile_net_get_stats64(struct net_device *dev,
 	return stats;
 }
 
+
+/*
+ * Change the "mtu".
+ *
+ * The "change_mtu" method is usually not needed.
+ * If you need it, it must be like this.
+ */
+static int tile_net_change_mtu(struct net_device *dev, int new_mtu)
+{
+	PDEBUG("tile_net_change_mtu()\n");
+
+	/* Check ranges. */
+	if ((new_mtu < 68) || (new_mtu > 1500))
+		return -EINVAL;
+
+	/* Accept the value. */
+	dev->mtu = new_mtu;
+
+	return 0;
+}
 
 
 /*
@@ -2209,6 +2233,7 @@ static const struct net_device_ops tile_net_ops = {
 	.ndo_start_xmit = tile_net_tx,
 	.ndo_do_ioctl = tile_net_ioctl,
 	.ndo_get_stats64 = tile_net_get_stats64,
+	.ndo_change_mtu = tile_net_change_mtu,
 	.ndo_tx_timeout = tile_net_tx_timeout,
 	.ndo_set_mac_address = tile_net_set_mac_address,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -2231,11 +2256,7 @@ static void tile_net_setup(struct net_device *dev)
 	dev->netdev_ops = &tile_net_ops;
 	dev->watchdog_timeo = TILE_NET_TIMEOUT;
 	dev->tx_queue_len = TILE_NET_TX_QUEUE_LEN;
-
-	/* MTU range: 68 - 1500 */
 	dev->mtu = TILE_NET_MTU;
-	dev->min_mtu = ETH_MIN_MTU;
-	dev->max_mtu = TILE_NET_MTU;
 
 	features |= NETIF_F_HW_CSUM;
 	features |= NETIF_F_SG;
@@ -2271,8 +2292,7 @@ static struct net_device *tile_net_dev_init(const char *name)
 	 * tile_net_setup(), and saves "name".  Normally, "name" is a
 	 * template, instantiated by register_netdev(), but not for us.
 	 */
-	dev = alloc_netdev(sizeof(*priv), name, NET_NAME_UNKNOWN,
-			   tile_net_setup);
+	dev = alloc_netdev(sizeof(*priv), name, tile_net_setup);
 	if (!dev) {
 		pr_err("alloc_netdev(%s) failed\n", name);
 		return NULL;
@@ -2378,7 +2398,8 @@ static int __init network_cpus_setup(char *str)
 {
 	int rc = cpulist_parse_crop(str, &network_cpus_map);
 	if (rc != 0) {
-		pr_warn("network_cpus=%s: malformed cpu list\n", str);
+		pr_warning("network_cpus=%s: malformed cpu list\n",
+		       str);
 	} else {
 
 		/* Remove dedicated cpus. */
@@ -2387,10 +2408,12 @@ static int __init network_cpus_setup(char *str)
 
 
 		if (cpumask_empty(&network_cpus_map)) {
-			pr_warn("Ignoring network_cpus='%s'\n", str);
+			pr_warning("Ignoring network_cpus='%s'.\n",
+			       str);
 		} else {
-			pr_info("Linux network CPUs: %*pbl\n",
-				cpumask_pr_args(&network_cpus_map));
+			char buf[1024];
+			cpulist_scnprintf(buf, sizeof(buf), &network_cpus_map);
+			pr_info("Linux network CPUs: %s\n", buf);
 			network_cpus_used = true;
 		}
 	}

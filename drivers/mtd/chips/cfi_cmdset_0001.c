@@ -52,11 +52,6 @@
 /* Atmel chips */
 #define AT49BV640D	0x02de
 #define AT49BV640DT	0x02db
-/* Sharp chips */
-#define LH28F640BFHE_PTTL90	0x00b0
-#define LH28F640BFHE_PBTL90	0x00b1
-#define LH28F640BFHE_PTTL70A	0x00b2
-#define LH28F640BFHE_PBTL70A	0x00b3
 
 static int cfi_intelext_read (struct mtd_info *, loff_t, size_t, size_t *, u_char *);
 static int cfi_intelext_write_words(struct mtd_info *, loff_t, size_t, size_t *, const u_char *);
@@ -263,36 +258,6 @@ static void fixup_st_m28w320cb(struct mtd_info *mtd)
 		(cfi->cfiq->EraseRegionInfo[1] & 0xffff0000) | 0x3e;
 };
 
-static int is_LH28F640BF(struct cfi_private *cfi)
-{
-	/* Sharp LH28F640BF Family */
-	if (cfi->mfr == CFI_MFR_SHARP && (
-	    cfi->id == LH28F640BFHE_PTTL90 || cfi->id == LH28F640BFHE_PBTL90 ||
-	    cfi->id == LH28F640BFHE_PTTL70A || cfi->id == LH28F640BFHE_PBTL70A))
-		return 1;
-	return 0;
-}
-
-static void fixup_LH28F640BF(struct mtd_info *mtd)
-{
-	struct map_info *map = mtd->priv;
-	struct cfi_private *cfi = map->fldrv_priv;
-	struct cfi_pri_intelext *extp = cfi->cmdset_priv;
-
-	/* Reset the Partition Configuration Register on LH28F640BF
-	 * to a single partition (PCR = 0x000): PCR is embedded into A0-A15. */
-	if (is_LH28F640BF(cfi)) {
-		printk(KERN_INFO "Reset Partition Config. Register: 1 Partition of 4 planes\n");
-		map_write(map, CMD(0x60), 0);
-		map_write(map, CMD(0x04), 0);
-
-		/* We have set one single partition thus
-		 * Simultaneous Operations are not allowed */
-		printk(KERN_INFO "cfi_cmdset_0001: Simultaneous Operations disabled\n");
-		extp->FeatureSupport &= ~512;
-	}
-}
-
 static void fixup_use_point(struct mtd_info *mtd)
 {
 	struct map_info *map = mtd->priv;
@@ -344,8 +309,6 @@ static struct cfi_fixup cfi_fixup_table[] = {
 	{ CFI_MFR_ST, 0x00ba, /* M28W320CT */ fixup_st_m28w320ct },
 	{ CFI_MFR_ST, 0x00bb, /* M28W320CB */ fixup_st_m28w320cb },
 	{ CFI_MFR_INTEL, CFI_ID_ANY, fixup_unlock_powerup_lock },
-	{ CFI_MFR_SHARP, CFI_ID_ANY, fixup_unlock_powerup_lock },
-	{ CFI_MFR_SHARP, CFI_ID_ANY, fixup_LH28F640BF },
 	{ 0, 0, NULL }
 };
 
@@ -596,7 +559,7 @@ static struct mtd_info *cfi_intelext_setup(struct mtd_info *mtd)
 	mtd->size = devsize * cfi->numchips;
 
 	mtd->numeraseregions = cfi->cfiq->NumEraseRegions * cfi->numchips;
-	mtd->eraseregions = kzalloc(sizeof(struct mtd_erase_region_info)
+	mtd->eraseregions = kmalloc(sizeof(struct mtd_erase_region_info)
 			* mtd->numeraseregions, GFP_KERNEL);
 	if (!mtd->eraseregions)
 		goto setup_err;
@@ -614,8 +577,6 @@ static struct mtd_info *cfi_intelext_setup(struct mtd_info *mtd)
 			mtd->eraseregions[(j*cfi->cfiq->NumEraseRegions)+i].erasesize = ersize;
 			mtd->eraseregions[(j*cfi->cfiq->NumEraseRegions)+i].numblocks = ernum;
 			mtd->eraseregions[(j*cfi->cfiq->NumEraseRegions)+i].lockmap = kmalloc(ernum / 8 + 1, GFP_KERNEL);
-			if (!mtd->eraseregions[(j*cfi->cfiq->NumEraseRegions)+i].lockmap)
-				goto setup_err;
 		}
 		offset += (ersize * ernum);
 	}
@@ -652,10 +613,6 @@ static struct mtd_info *cfi_intelext_setup(struct mtd_info *mtd)
 	return mtd;
 
  setup_err:
-	if (mtd->eraseregions)
-		for (i=0; i<cfi->cfiq->NumEraseRegions; i++)
-			for (j=0; j<cfi->numchips; j++)
-				kfree(mtd->eraseregions[(j*cfi->cfiq->NumEraseRegions)+i].lockmap);
 	kfree(mtd->eraseregions);
 	kfree(mtd);
 	kfree(cfi->cmdset_priv);
@@ -1692,12 +1649,6 @@ static int __xipram do_write_buffer(struct map_info *map, struct flchip *chip,
 	initial_adr = adr;
 	cmd_adr = adr & ~(wbufsize-1);
 
-	/* Sharp LH28F640BF chips need the first address for the
-	 * Page Buffer Program command. See Table 5 of
-	 * LH28F320BF, LH28F640BF, LH28F128BF Series (Appendix FUM00701) */
-	if (is_LH28F640BF(cfi))
-		cmd_adr = adr;
-
 	/* Let's determine this according to the interleave only once */
 	write_cmd = (cfi->cfiq->P_ID != P_ID_INTEL_PERFORMANCE) ? CMD(0xe8) : CMD(0xe9);
 
@@ -2596,8 +2547,6 @@ static void cfi_intelext_resume(struct mtd_info *mtd)
 
 		/* Go to known state. Chip may have been power cycled */
 		if (chip->state == FL_PM_SUSPENDED) {
-			/* Refresh LH28F640BF Partition Config. Register */
-			fixup_LH28F640BF(mtd);
 			map_write(map, CMD(0xFF), cfi->chips[i].start);
 			chip->oldstate = chip->state = FL_READY;
 			wake_up(&chip->wq);
@@ -2660,7 +2609,8 @@ static void cfi_intelext_destroy(struct mtd_info *mtd)
 	kfree(cfi);
 	for (i = 0; i < mtd->numeraseregions; i++) {
 		region = &mtd->eraseregions[i];
-		kfree(region->lockmap);
+		if (region->lockmap)
+			kfree(region->lockmap);
 	}
 	kfree(mtd->eraseregions);
 }

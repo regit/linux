@@ -22,11 +22,10 @@
 
 #include <asm/kvm_ppc.h>
 #include <asm/kvm_book3s.h>
-#include <asm/book3s/32/mmu-hash.h>
+#include <asm/mmu-hash32.h>
 #include <asm/machdep.h>
 #include <asm/mmu_context.h>
 #include <asm/hw_irq.h>
-#include "book3s.h"
 
 /* #define DEBUG_MMU */
 /* #define DEBUG_SR */
@@ -142,7 +141,7 @@ extern char etext[];
 int kvmppc_mmu_map_page(struct kvm_vcpu *vcpu, struct kvmppc_pte *orig_pte,
 			bool iswrite)
 {
-	kvm_pfn_t hpaddr;
+	pfn_t hpaddr;
 	u64 vpn;
 	u64 vsid;
 	struct kvmppc_sid_map *map;
@@ -157,10 +156,11 @@ int kvmppc_mmu_map_page(struct kvm_vcpu *vcpu, struct kvmppc_pte *orig_pte,
 	bool writable;
 
 	/* Get host physical address for gpa */
-	hpaddr = kvmppc_gpa_to_pfn(vcpu, orig_pte->raddr, iswrite, &writable);
+	hpaddr = kvmppc_gfn_to_pfn(vcpu, orig_pte->raddr >> PAGE_SHIFT,
+				   iswrite, &writable);
 	if (is_error_noslot_pfn(hpaddr)) {
-		printk(KERN_INFO "Couldn't get guest page for gpa %lx!\n",
-				 orig_pte->raddr);
+		printk(KERN_INFO "Couldn't get guest page for gfn %lx!\n",
+				 orig_pte->eaddr);
 		r = -EINVAL;
 		goto out;
 	}

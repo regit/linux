@@ -167,7 +167,7 @@ struct qlcnic_dcb_cfg {
 	u32 version;
 };
 
-static const struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
+static struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
 	.init_dcbnl_ops		= __qlcnic_init_dcbnl_ops,
 	.free			= __qlcnic_dcb_free,
 	.attach			= __qlcnic_dcb_attach,
@@ -180,7 +180,7 @@ static const struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
 	.aen_handler		= qlcnic_83xx_dcb_aen_handler,
 };
 
-static const struct qlcnic_dcb_ops qlcnic_82xx_dcb_ops = {
+static struct qlcnic_dcb_ops qlcnic_82xx_dcb_ops = {
 	.init_dcbnl_ops		= __qlcnic_init_dcbnl_ops,
 	.free			= __qlcnic_dcb_free,
 	.attach			= __qlcnic_dcb_attach,
@@ -926,7 +926,7 @@ static int qlcnic_dcb_get_num_tcs(struct net_device *netdev, int attr, u8 *num)
 	}
 }
 
-static int qlcnic_dcb_get_app(struct net_device *netdev, u8 idtype, u16 id)
+static u8 qlcnic_dcb_get_app(struct net_device *netdev, u8 idtype, u16 id)
 {
 	struct qlcnic_adapter *adapter = netdev_priv(netdev);
 	struct dcb_app app = {
@@ -935,7 +935,7 @@ static int qlcnic_dcb_get_app(struct net_device *netdev, u8 idtype, u16 id)
 			     };
 
 	if (!test_bit(QLCNIC_DCB_STATE, &adapter->dcb->state))
-		return -EINVAL;
+		return 0;
 
 	return dcb_getapp(netdev, &app);
 }

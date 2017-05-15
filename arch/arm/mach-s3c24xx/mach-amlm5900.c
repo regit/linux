@@ -247,4 +247,5 @@ MACHINE_START(AML_M5900, "AML_M5900")
 	.init_irq	= s3c2410_init_irq,
 	.init_machine	= amlm5900_init,
 	.init_time	= amlm5900_init_time,
+	.restart	= s3c2410_restart,
 MACHINE_END

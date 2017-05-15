@@ -64,7 +64,7 @@ proc_read_hwinfo(struct snd_info_entry *entry, struct snd_info_buffer *buffer)
 		    hwinfo->phys_in_grp_count);
 	for (i = 0; i < hwinfo->phys_in_grp_count; i++) {
 		snd_iprintf(buffer,
-			    "phys in grp[%d]: type 0x%X, count 0x%X\n",
+			    "phys in grp[0x%d]: type 0x%d, count 0x%d\n",
 			    i, hwinfo->phys_out_grps[i].type,
 			    hwinfo->phys_out_grps[i].count);
 	}
@@ -73,7 +73,7 @@ proc_read_hwinfo(struct snd_info_entry *entry, struct snd_info_buffer *buffer)
 		    hwinfo->phys_out_grp_count);
 	for (i = 0; i < hwinfo->phys_out_grp_count; i++) {
 		snd_iprintf(buffer,
-			    "phys out grps[%d]: type 0x%X, count 0x%X\n",
+			    "phys out grps[0x%d]: type 0x%d, count 0x%d\n",
 			    i, hwinfo->phys_out_grps[i].type,
 			    hwinfo->phys_out_grps[i].count);
 	}
@@ -188,8 +188,8 @@ proc_read_queues_state(struct snd_info_entry *entry,
 	else
 		consumed = (unsigned int)(efw->push_ptr - efw->pull_ptr);
 
-	snd_iprintf(buffer, "%d/%d\n",
-		    consumed, snd_efw_resp_buf_size);
+	snd_iprintf(buffer, "%d %d/%d\n",
+		    efw->resp_queues, consumed, snd_efw_resp_buf_size);
 }
 
 static void

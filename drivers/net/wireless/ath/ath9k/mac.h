@@ -65,6 +65,10 @@
 #define INIT_SSH_RETRY  32
 #define INIT_SLG_RETRY  32
 
+#define ATH9K_SLOT_TIME_6 6
+#define ATH9K_SLOT_TIME_9 9
+#define ATH9K_SLOT_TIME_20 20
+
 #define ATH9K_TXERR_XRETRY         0x01
 #define ATH9K_TXERR_FILT           0x02
 #define ATH9K_TXERR_FIFO           0x04
@@ -117,7 +121,6 @@ struct ath_tx_status {
 	u32 evm0;
 	u32 evm1;
 	u32 evm2;
-	u32 duration;
 };
 
 struct ath_rx_status {
@@ -205,25 +208,21 @@ enum ath9k_phyerr {
 	ATH9K_PHYERR_OFDM_POWER_DROP      = 21,
 	ATH9K_PHYERR_OFDM_SERVICE         = 22,
 	ATH9K_PHYERR_OFDM_RESTART         = 23,
+	ATH9K_PHYERR_FALSE_RADAR_EXT      = 24,
 
-	ATH9K_PHYERR_CCK_BLOCKER          = 24,
 	ATH9K_PHYERR_CCK_TIMING           = 25,
 	ATH9K_PHYERR_CCK_HEADER_CRC       = 26,
 	ATH9K_PHYERR_CCK_RATE_ILLEGAL     = 27,
-	ATH9K_PHYERR_CCK_LENGTH_ILLEGAL   = 28,
-	ATH9K_PHYERR_CCK_POWER_DROP       = 29,
 	ATH9K_PHYERR_CCK_SERVICE          = 30,
 	ATH9K_PHYERR_CCK_RESTART          = 31,
+	ATH9K_PHYERR_CCK_LENGTH_ILLEGAL   = 32,
+	ATH9K_PHYERR_CCK_POWER_DROP       = 33,
 
-	ATH9K_PHYERR_HT_CRC_ERROR         = 32,
-	ATH9K_PHYERR_HT_LENGTH_ILLEGAL    = 33,
-	ATH9K_PHYERR_HT_RATE_ILLEGAL      = 34,
-	ATH9K_PHYERR_HT_ZLF               = 35,
+	ATH9K_PHYERR_HT_CRC_ERROR         = 34,
+	ATH9K_PHYERR_HT_LENGTH_ILLEGAL    = 35,
+	ATH9K_PHYERR_HT_RATE_ILLEGAL      = 36,
 
-	ATH9K_PHYERR_FALSE_RADAR_EXT      = 36,
-	ATH9K_PHYERR_GREEN_FIELD          = 37,
-	ATH9K_PHYERR_SPECTRAL             = 38,
-
+	ATH9K_PHYERR_SPECTRAL		  = 38,
 	ATH9K_PHYERR_MAX                  = 39,
 };
 
@@ -347,14 +346,8 @@ struct ar5416_desc {
 #define AR_FrameLen         0x00000fff
 #define AR_VirtMoreFrag     0x00001000
 #define AR_TxCtlRsvd00      0x0000e000
-#define AR_XmitPower0       0x003f0000
-#define AR_XmitPower0_S     16
-#define AR_XmitPower1	    0x3f000000
-#define AR_XmitPower1_S     24
-#define AR_XmitPower2	    0x3f000000
-#define AR_XmitPower2_S     24
-#define AR_XmitPower3	    0x3f000000
-#define AR_XmitPower3_S     24
+#define AR_XmitPower        0x003f0000
+#define AR_XmitPower_S      16
 #define AR_RTSEnable        0x00400000
 #define AR_VEOL             0x00800000
 #define AR_ClrDestMask      0x01000000
@@ -704,7 +697,7 @@ struct ath_tx_info {
 	enum ath9k_pkt_type type;
 	enum ath9k_key_type keytype;
 	u8 keyix;
-	u8 txpower[4];
+	u8 txpower;
 };
 
 struct ath_hw;

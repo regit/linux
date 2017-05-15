@@ -25,13 +25,14 @@
 #include <asm/machvec.h>
 #include <asm/delay.h>
 #include <asm/hw_irq.h>
+#include <asm/paravirt.h>
 #include <asm/ptrace.h>
 #include <asm/sal.h>
 #include <asm/sections.h>
 
 #include "fsyscall_gtod_data.h"
 
-static u64 itc_get_cycles(struct clocksource *cs);
+static cycle_t itc_get_cycles(struct clocksource *cs);
 
 struct fsyscall_gtod_data_t fsyscall_gtod_data;
 
@@ -46,12 +47,33 @@ EXPORT_SYMBOL(last_cli_ip);
 
 #endif
 
+#ifdef CONFIG_PARAVIRT
+/* We need to define a real function for sched_clock, to override the
+   weak default version */
+unsigned long long sched_clock(void)
+{
+        return paravirt_sched_clock();
+}
+#endif
+
+#ifdef CONFIG_PARAVIRT
+static void
+paravirt_clocksource_resume(struct clocksource *cs)
+{
+	if (pv_time_ops.clocksource_resume)
+		pv_time_ops.clocksource_resume();
+}
+#endif
+
 static struct clocksource clocksource_itc = {
 	.name           = "itc",
 	.rating         = 350,
 	.read           = itc_get_cycles,
 	.mask           = CLOCKSOURCE_MASK(64),
 	.flags          = CLOCK_SOURCE_IS_CONTINUOUS,
+#ifdef CONFIG_PARAVIRT
+	.resume		= paravirt_clocksource_resume,
+#endif
 };
 static struct clocksource *itc_clocksource;
 
@@ -68,7 +90,7 @@ void vtime_account_user(struct task_struct *tsk)
 
 	if (ti->ac_utime) {
 		delta_utime = cycle_to_cputime(ti->ac_utime);
-		account_user_time(tsk, delta_utime);
+		account_user_time(tsk, delta_utime, delta_utime);
 		ti->ac_utime = 0;
 	}
 }
@@ -112,7 +134,7 @@ void vtime_account_system(struct task_struct *tsk)
 {
 	cputime_t delta = vtime_delta(tsk);
 
-	account_system_time(tsk, 0, delta);
+	account_system_time(tsk, 0, delta, delta);
 }
 EXPORT_SYMBOL_GPL(vtime_account_system);
 
@@ -142,6 +164,9 @@ timer_interrupt (int irq, void *dev_id)
 
 	profile_tick(CPU_PROFILING);
 
+	if (paravirt_do_steal_accounting(&new_itm))
+		goto skip_process_time_accounting;
+
 	while (1) {
 		update_process_times(user_mode(get_irq_regs()));
 
@@ -161,6 +186,8 @@ timer_interrupt (int irq, void *dev_id)
 		local_irq_enable();
 		local_irq_disable();
 	}
+
+skip_process_time_accounting:
 
 	do {
 		/*
@@ -310,6 +337,8 @@ void ia64_init_itm(void)
 		 */
 		clocksource_itc.rating = 50;
 
+	paravirt_init_missing_ticks_accounting(smp_processor_id());
+
 	/* avoid softlock up message when cpu is unplug and plugged again. */
 	touch_softlockup_watchdog();
 
@@ -323,7 +352,7 @@ void ia64_init_itm(void)
 	}
 }
 
-static u64 itc_get_cycles(struct clocksource *cs)
+static cycle_t itc_get_cycles(struct clocksource *cs)
 {
 	unsigned long lcycle, now, ret;
 
@@ -355,7 +384,22 @@ static struct irqaction timer_irqaction = {
 	.name =		"timer"
 };
 
-void read_persistent_clock64(struct timespec64 *ts)
+static struct platform_device rtc_efi_dev = {
+	.name = "rtc-efi",
+	.id = -1,
+};
+
+static int __init rtc_init(void)
+{
+	if (platform_device_register(&rtc_efi_dev) < 0)
+		printk(KERN_ERR "unable to register rtc device...\n");
+
+	/* not necessarily an error */
+	return 0;
+}
+module_init(rtc_init);
+
+void read_persistent_clock(struct timespec *ts)
 {
 	efi_gettimeofday(ts);
 }
@@ -397,7 +441,7 @@ void update_vsyscall_tz(void)
 }
 
 void update_vsyscall_old(struct timespec *wall, struct timespec *wtm,
-			 struct clocksource *c, u32 mult, u64 cycle_last)
+			struct clocksource *c, u32 mult)
 {
 	write_seqcount_begin(&fsyscall_gtod_data.seq);
 
@@ -406,7 +450,7 @@ void update_vsyscall_old(struct timespec *wall, struct timespec *wtm,
         fsyscall_gtod_data.clk_mult = mult;
         fsyscall_gtod_data.clk_shift = c->shift;
         fsyscall_gtod_data.clk_fsys_mmio = c->archdata.fsys_mmio;
-        fsyscall_gtod_data.clk_cycle_last = cycle_last;
+        fsyscall_gtod_data.clk_cycle_last = c->cycle_last;
 
 	/* copy kernel time structures */
         fsyscall_gtod_data.wall_time.tv_sec = wall->tv_sec;

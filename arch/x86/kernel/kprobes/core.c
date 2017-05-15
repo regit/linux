@@ -45,18 +45,15 @@
 #include <linux/slab.h>
 #include <linux/hardirq.h>
 #include <linux/preempt.h>
-#include <linux/extable.h>
+#include <linux/module.h>
 #include <linux/kdebug.h>
 #include <linux/kallsyms.h>
 #include <linux/ftrace.h>
-#include <linux/frame.h>
-#include <linux/kasan.h>
 
-#include <asm/text-patching.h>
 #include <asm/cacheflush.h>
 #include <asm/desc.h>
 #include <asm/pgtable.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/alternative.h>
 #include <asm/insn.h>
 #include <asm/debugreg.h>
@@ -87,7 +84,7 @@ static volatile u32 twobyte_is_boostable[256 / 32] = {
 	/*      0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f          */
 	/*      ----------------------------------------------          */
 	W(0x00, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0) | /* 00 */
-	W(0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1) , /* 10 */
+	W(0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) , /* 10 */
 	W(0x20, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) | /* 20 */
 	W(0x30, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) , /* 30 */
 	W(0x40, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) | /* 40 */
@@ -226,48 +223,27 @@ static unsigned long
 __recover_probed_insn(kprobe_opcode_t *buf, unsigned long addr)
 {
 	struct kprobe *kp;
-	unsigned long faddr;
 
 	kp = get_kprobe((void *)addr);
-	faddr = ftrace_location(addr);
-	/*
-	 * Addresses inside the ftrace location are refused by
-	 * arch_check_ftrace_location(). Something went terribly wrong
-	 * if such an address is checked here.
-	 */
-	if (WARN_ON(faddr && faddr != addr))
-		return 0UL;
-	/*
-	 * Use the current code if it is not modified by Kprobe
-	 * and it cannot be modified by ftrace.
-	 */
-	if (!kp && !faddr)
+	/* There is no probe, return original address */
+	if (!kp)
 		return addr;
 
 	/*
-	 * Basically, kp->ainsn.insn has an original instruction.
-	 * However, RIP-relative instruction can not do single-stepping
-	 * at different place, __copy_instruction() tweaks the displacement of
-	 * that instruction. In that case, we can't recover the instruction
-	 * from the kp->ainsn.insn.
+	 *  Basically, kp->ainsn.insn has an original instruction.
+	 *  However, RIP-relative instruction can not do single-stepping
+	 *  at different place, __copy_instruction() tweaks the displacement of
+	 *  that instruction. In that case, we can't recover the instruction
+	 *  from the kp->ainsn.insn.
 	 *
-	 * On the other hand, in case on normal Kprobe, kp->opcode has a copy
-	 * of the first byte of the probed instruction, which is overwritten
-	 * by int3. And the instruction at kp->addr is not modified by kprobes
-	 * except for the first byte, we can recover the original instruction
-	 * from it and kp->opcode.
-	 *
-	 * In case of Kprobes using ftrace, we do not have a copy of
-	 * the original instruction. In fact, the ftrace location might
-	 * be modified at anytime and even could be in an inconsistent state.
-	 * Fortunately, we know that the original code is the ideal 5-byte
-	 * long NOP.
+	 *  On the other hand, kp->opcode has a copy of the first byte of
+	 *  the probed instruction, which is overwritten by int3. And
+	 *  the instruction at kp->addr is not modified by kprobes except
+	 *  for the first byte, we can recover the original instruction
+	 *  from it and kp->opcode.
 	 */
-	memcpy(buf, (void *)addr, MAX_INSN_SIZE * sizeof(kprobe_opcode_t));
-	if (faddr)
-		memcpy(buf, ideal_nops[NOP_ATOMIC5], 5);
-	else
-		buf[0] = kp->opcode;
+	memcpy(buf, kp->addr, MAX_INSN_SIZE * sizeof(kprobe_opcode_t));
+	buf[0] = kp->opcode;
 	return (unsigned long)buf;
 }
 
@@ -275,7 +251,6 @@ __recover_probed_insn(kprobe_opcode_t *buf, unsigned long addr)
  * Recover the probed instruction at addr for further analysis.
  * Caller must lock kprobes by kprobe_mutex, or disable preemption
  * for preventing to release referencing kprobes.
- * Returns zero if the instruction can not get recovered.
  */
 unsigned long recover_probed_instruction(kprobe_opcode_t *buf, unsigned long addr)
 {
@@ -310,9 +285,7 @@ static int can_probe(unsigned long paddr)
 		 * normally used, we just go through if there is no kprobe.
 		 */
 		__addr = recover_probed_instruction(buf, addr);
-		if (!__addr)
-			return 0;
-		kernel_insn_init(&insn, (void *)__addr, MAX_INSN_SIZE);
+		kernel_insn_init(&insn, (void *)__addr);
 		insn_get_length(&insn);
 
 		/*
@@ -357,26 +330,19 @@ int __copy_instruction(u8 *dest, u8 *src)
 {
 	struct insn insn;
 	kprobe_opcode_t buf[MAX_INSN_SIZE];
-	int length;
-	unsigned long recovered_insn =
-		recover_probed_instruction(buf, (unsigned long)src);
 
-	if (!recovered_insn)
-		return 0;
-	kernel_insn_init(&insn, (void *)recovered_insn, MAX_INSN_SIZE);
+	kernel_insn_init(&insn, (void *)recover_probed_instruction(buf, (unsigned long)src));
 	insn_get_length(&insn);
-	length = insn.length;
-
 	/* Another subsystem puts a breakpoint, failed to recover */
 	if (insn.opcode.bytes[0] == BREAKPOINT_INSTRUCTION)
 		return 0;
-	memcpy(dest, insn.kaddr, length);
+	memcpy(dest, insn.kaddr, insn.length);
 
 #ifdef CONFIG_X86_64
 	if (insn_rip_relative(&insn)) {
 		s64 newdisp;
 		u8 *disp;
-		kernel_insn_init(&insn, dest, length);
+		kernel_insn_init(&insn, dest);
 		insn_get_displacement(&insn);
 		/*
 		 * The copied instruction uses the %rip-relative addressing
@@ -400,7 +366,7 @@ int __copy_instruction(u8 *dest, u8 *src)
 		*(s32 *) disp = (s32) newdisp;
 	}
 #endif
-	return length;
+	return insn.length;
 }
 
 static int arch_copy_kprobe(struct kprobe *p)
@@ -608,9 +574,6 @@ int kprobe_int3_handler(struct pt_regs *regs)
 	struct kprobe *p;
 	struct kprobe_ctlblk *kcb;
 
-	if (user_mode(regs))
-		return 0;
-
 	addr = (kprobe_opcode_t *)(regs->ip - sizeof(kprobe_opcode_t));
 	/*
 	 * We don't want to be preempted for the entire
@@ -674,39 +637,39 @@ NOKPROBE_SYMBOL(kprobe_int3_handler);
  * When a retprobed function returns, this code saves registers and
  * calls trampoline_handler() runs, which calls the kretprobe's handler.
  */
-asm(
-	".global kretprobe_trampoline\n"
-	".type kretprobe_trampoline, @function\n"
-	"kretprobe_trampoline:\n"
+static void __used kretprobe_trampoline_holder(void)
+{
+	asm volatile (
+			".global kretprobe_trampoline\n"
+			"kretprobe_trampoline: \n"
 #ifdef CONFIG_X86_64
-	/* We don't bother saving the ss register */
-	"	pushq %rsp\n"
-	"	pushfq\n"
-	SAVE_REGS_STRING
-	"	movq %rsp, %rdi\n"
-	"	call trampoline_handler\n"
-	/* Replace saved sp with true return address. */
-	"	movq %rax, 152(%rsp)\n"
-	RESTORE_REGS_STRING
-	"	popfq\n"
+			/* We don't bother saving the ss register */
+			"	pushq %rsp\n"
+			"	pushfq\n"
+			SAVE_REGS_STRING
+			"	movq %rsp, %rdi\n"
+			"	call trampoline_handler\n"
+			/* Replace saved sp with true return address. */
+			"	movq %rax, 152(%rsp)\n"
+			RESTORE_REGS_STRING
+			"	popfq\n"
 #else
-	"	pushf\n"
-	SAVE_REGS_STRING
-	"	movl %esp, %eax\n"
-	"	call trampoline_handler\n"
-	/* Move flags to cs */
-	"	movl 56(%esp), %edx\n"
-	"	movl %edx, 52(%esp)\n"
-	/* Replace saved flags with true return address. */
-	"	movl %eax, 56(%esp)\n"
-	RESTORE_REGS_STRING
-	"	popf\n"
+			"	pushf\n"
+			SAVE_REGS_STRING
+			"	movl %esp, %eax\n"
+			"	call trampoline_handler\n"
+			/* Move flags to cs */
+			"	movl 56(%esp), %edx\n"
+			"	movl %edx, 52(%esp)\n"
+			/* Replace saved flags with true return address. */
+			"	movl %eax, 56(%esp)\n"
+			RESTORE_REGS_STRING
+			"	popf\n"
 #endif
-	"	ret\n"
-	".size kretprobe_trampoline, .-kretprobe_trampoline\n"
-);
+			"	ret\n");
+}
+NOKPROBE_SYMBOL(kretprobe_trampoline_holder);
 NOKPROBE_SYMBOL(kretprobe_trampoline);
-STACK_FRAME_NON_STANDARD(kretprobe_trampoline);
 
 /*
  * Called from kretprobe_trampoline
@@ -962,19 +925,7 @@ int kprobe_fault_handler(struct pt_regs *regs, int trapnr)
 		 * normal page fault.
 		 */
 		regs->ip = (unsigned long)cur->addr;
-		/*
-		 * Trap flag (TF) has been set here because this fault
-		 * happened where the single stepping will be done.
-		 * So clear it by resetting the current kprobe:
-		 */
-		regs->flags &= ~X86_EFLAGS_TF;
-
-		/*
-		 * If the TF flag was set before the kprobe hit,
-		 * don't touch it:
-		 */
 		regs->flags |= kcb->kprobe_old_flags;
-
 		if (kcb->kprobe_status == KPROBE_REENTER)
 			restore_previous_kprobe(kcb);
 		else
@@ -1003,7 +954,7 @@ int kprobe_fault_handler(struct pt_regs *regs, int trapnr)
 		 * In case the user-specified fault handler returned
 		 * zero, try to fix up.
 		 */
-		if (fixup_exception(regs, trapnr))
+		if (fixup_exception(regs))
 			return 1;
 
 		/*
@@ -1025,7 +976,7 @@ int kprobe_exceptions_notify(struct notifier_block *self, unsigned long val,
 	struct die_args *args = data;
 	int ret = NOTIFY_DONE;
 
-	if (args->regs && user_mode(args->regs))
+	if (args->regs && user_mode_vm(args->regs))
 		return ret;
 
 	if (val == DIE_GPF) {
@@ -1058,22 +1009,12 @@ int setjmp_pre_handler(struct kprobe *p, struct pt_regs *regs)
 	 * tailcall optimization. So, to be absolutely safe
 	 * we also save and restore enough stack bytes to cover
 	 * the argument area.
-	 * Use __memcpy() to avoid KASAN stack out-of-bounds reports as we copy
-	 * raw stack chunk with redzones:
 	 */
-	__memcpy(kcb->jprobes_stack, (kprobe_opcode_t *)addr, MIN_STACK_SIZE(addr));
+	memcpy(kcb->jprobes_stack, (kprobe_opcode_t *)addr,
+	       MIN_STACK_SIZE(addr));
 	regs->flags &= ~X86_EFLAGS_IF;
 	trace_hardirqs_off();
 	regs->ip = (unsigned long)(jp->entry);
-
-	/*
-	 * jprobes use jprobe_return() which skips the normal return
-	 * path of the function, and this messes up the accounting of the
-	 * function graph tracer to get messed up.
-	 *
-	 * Pause function graph tracing while performing the jprobe function.
-	 */
-	pause_graph_tracing();
 	return 1;
 }
 NOKPROBE_SYMBOL(setjmp_pre_handler);
@@ -1081,9 +1022,6 @@ NOKPROBE_SYMBOL(setjmp_pre_handler);
 void jprobe_return(void)
 {
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
-
-	/* Unpoison stack redzones in the frames we are going to jump over. */
-	kasan_unpoison_stack_above_sp_to(kcb->jprobe_saved_sp);
 
 	asm volatile (
 #ifdef CONFIG_X86_64
@@ -1105,25 +1043,24 @@ int longjmp_break_handler(struct kprobe *p, struct pt_regs *regs)
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 	u8 *addr = (u8 *) (regs->ip - 1);
 	struct jprobe *jp = container_of(p, struct jprobe, kp);
-	void *saved_sp = kcb->jprobe_saved_sp;
 
 	if ((addr > (u8 *) jprobe_return) &&
 	    (addr < (u8 *) jprobe_return_end)) {
-		if (stack_addr(regs) != saved_sp) {
+		if (stack_addr(regs) != kcb->jprobe_saved_sp) {
 			struct pt_regs *saved_regs = &kcb->jprobe_saved_regs;
 			printk(KERN_ERR
 			       "current sp %p does not match saved sp %p\n",
-			       stack_addr(regs), saved_sp);
+			       stack_addr(regs), kcb->jprobe_saved_sp);
 			printk(KERN_ERR "Saved registers for jprobe %p\n", jp);
 			show_regs(saved_regs);
 			printk(KERN_ERR "Current registers\n");
 			show_regs(regs);
 			BUG();
 		}
-		/* It's OK to start function graph tracing again */
-		unpause_graph_tracing();
 		*regs = kcb->jprobe_saved_regs;
-		__memcpy(saved_sp, kcb->jprobes_stack, MIN_STACK_SIZE(saved_sp));
+		memcpy((kprobe_opcode_t *)(kcb->jprobe_saved_sp),
+		       kcb->jprobes_stack,
+		       MIN_STACK_SIZE(kcb->jprobe_saved_sp));
 		preempt_enable_no_resched();
 		return 1;
 	}

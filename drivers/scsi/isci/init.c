@@ -75,7 +75,7 @@ MODULE_VERSION(DRV_VERSION);
 
 static struct scsi_transport_template *isci_transport_template;
 
-static const struct pci_device_id isci_id_table[] = {
+static DEFINE_PCI_DEVICE_TABLE(isci_id_table) = {
 	{ PCI_VDEVICE(INTEL, 0x1D61),},
 	{ PCI_VDEVICE(INTEL, 0x1D63),},
 	{ PCI_VDEVICE(INTEL, 0x1D65),},
@@ -158,8 +158,10 @@ static struct scsi_host_template isci_sht = {
 	.scan_finished			= isci_host_scan_finished,
 	.scan_start			= isci_host_start,
 	.change_queue_depth		= sas_change_queue_depth,
+	.change_queue_type		= sas_change_queue_type,
 	.bios_param			= sas_bios_param,
 	.can_queue			= ISCI_CAN_QUEUE_VAL,
+	.cmd_per_lun			= 1,
 	.this_id			= -1,
 	.sg_tablesize			= SG_ALL,
 	.max_sectors			= SCSI_DEFAULT_MAX_SECTORS,
@@ -170,7 +172,6 @@ static struct scsi_host_template isci_sht = {
 	.target_destroy			= sas_target_destroy,
 	.ioctl				= sas_ioctl,
 	.shost_attrs			= isci_host_attrs,
-	.track_queue_depth		= 1,
 };
 
 static struct sas_domain_function_template isci_transport_ops  = {
@@ -257,6 +258,8 @@ static int isci_register_sas_ha(struct isci_host *isci_host)
 	sas_ha->sas_port = sas_ports;
 	sas_ha->num_phys = SCI_MAX_PHYS;
 
+	sas_ha->lldd_queue_size = ISCI_CAN_QUEUE_VAL;
+	sas_ha->lldd_max_execute_num = 1;
 	sas_ha->strict_wide_ports = 1;
 
 	sas_register_ha(sas_ha);
@@ -271,11 +274,11 @@ static void isci_unregister(struct isci_host *isci_host)
 	if (!isci_host)
 		return;
 
-	shost = to_shost(isci_host);
-	scsi_remove_host(shost);
 	sas_unregister_ha(&isci_host->sas_ha);
 
+	shost = to_shost(isci_host);
 	sas_remove_host(shost);
+	scsi_remove_host(shost);
 	scsi_host_put(shost);
 }
 
@@ -350,12 +353,16 @@ static int isci_setup_interrupts(struct pci_dev *pdev)
 	 */
 	num_msix = num_controllers(pdev) * SCI_NUM_MSI_X_INT;
 
-	err = pci_alloc_irq_vectors(pdev, num_msix, num_msix, PCI_IRQ_MSIX);
-	if (err < 0)
+	for (i = 0; i < num_msix; i++)
+		pci_info->msix_entries[i].entry = i;
+
+	err = pci_enable_msix(pdev, pci_info->msix_entries, num_msix);
+	if (err)
 		goto intx;
 
 	for (i = 0; i < num_msix; i++) {
 		int id = i / SCI_NUM_MSI_X_INT;
+		struct msix_entry *msix = &pci_info->msix_entries[i];
 		irq_handler_t isr;
 
 		ihost = pci_info->hosts[id];
@@ -365,8 +372,8 @@ static int isci_setup_interrupts(struct pci_dev *pdev)
 		else
 			isr = isci_msix_isr;
 
-		err = devm_request_irq(&pdev->dev, pci_irq_vector(pdev, i),
-				isr, 0, DRV_NAME"-msix", ihost);
+		err = devm_request_irq(&pdev->dev, msix->vector, isr, 0,
+				       DRV_NAME"-msix", ihost);
 		if (!err)
 			continue;
 
@@ -374,19 +381,18 @@ static int isci_setup_interrupts(struct pci_dev *pdev)
 		while (i--) {
 			id = i / SCI_NUM_MSI_X_INT;
 			ihost = pci_info->hosts[id];
-			devm_free_irq(&pdev->dev, pci_irq_vector(pdev, i),
-					ihost);
+			msix = &pci_info->msix_entries[i];
+			devm_free_irq(&pdev->dev, msix->vector, ihost);
 		}
-		pci_free_irq_vectors(pdev);
+		pci_disable_msix(pdev);
 		goto intx;
 	}
 	return 0;
 
  intx:
 	for_each_isci_host(i, ihost, pdev) {
-		err = devm_request_irq(&pdev->dev, pci_irq_vector(pdev, 0),
-				isci_intx_isr, IRQF_SHARED, DRV_NAME"-intx",
-				ihost);
+		err = devm_request_irq(&pdev->dev, pdev->irq, isci_intx_isr,
+				       IRQF_SHARED, DRV_NAME"-intx", ihost);
 		if (err)
 			break;
 	}

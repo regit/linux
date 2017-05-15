@@ -11,6 +11,16 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
  */
 
 #ifndef OMAP3_ISP_VIDEO_H
@@ -20,7 +30,7 @@
 #include <media/media-entity.h>
 #include <media/v4l2-dev.h>
 #include <media/v4l2-fh.h>
-#include <media/videobuf2-v4l2.h>
+#include <media/videobuf2-core.h>
 
 #define ISP_VIDEO_DRIVER_NAME		"ispvideo"
 #define ISP_VIDEO_DRIVER_VERSION	"0.0.2"
@@ -44,10 +54,10 @@ struct v4l2_pix_format;
  * @bpp: Bytes per pixel (when stored in memory)
  */
 struct isp_format_info {
-	u32 code;
-	u32 truncated;
-	u32 uncompressed;
-	u32 flavor;
+	enum v4l2_mbus_pixelcode code;
+	enum v4l2_mbus_pixelcode truncated;
+	enum v4l2_mbus_pixelcode uncompressed;
+	enum v4l2_mbus_pixelcode flavor;
 	u32 pixelformat;
 	unsigned int width;
 	unsigned int bpp;
@@ -78,9 +88,8 @@ enum isp_pipeline_state {
 
 /*
  * struct isp_pipeline - An ISP hardware pipeline
- * @field: The field being processed by the pipeline
  * @error: A hardware error occurred during capture
- * @ent_enum: Entities in the pipeline
+ * @entities: Bitmask of entities in the pipeline (indexed by entity ID)
  */
 struct isp_pipeline {
 	struct media_pipeline pipe;
@@ -89,10 +98,9 @@ struct isp_pipeline {
 	enum isp_pipeline_stream_state stream_state;
 	struct isp_video *input;
 	struct isp_video *output;
-	struct media_entity_enum ent_enum;
+	u32 entities;
 	unsigned long l3_ick;
 	unsigned int max_rate;
-	enum v4l2_field field;
 	atomic_t frame_number;
 	bool do_propagation; /* of frame number */
 	bool error;
@@ -122,7 +130,7 @@ static inline int isp_pipeline_ready(struct isp_pipeline *pipe)
  * @dma: DMA address
  */
 struct isp_buffer {
-	struct vb2_v4l2_buffer vb;
+	struct vb2_buffer vb;
 	struct list_head irqlist;
 	dma_addr_t dma;
 };
@@ -171,6 +179,7 @@ struct isp_video {
 	bool error;
 
 	/* Video buffers queue */
+	void *alloc_ctx;
 	struct vb2_queue *queue;
 	struct mutex queue_lock;	/* protects the queue */
 	spinlock_t irqlock;		/* protects dmaqueue */
@@ -205,6 +214,6 @@ void omap3isp_video_resume(struct isp_video *video, int continuous);
 struct media_pad *omap3isp_video_remote_pad(struct isp_video *video);
 
 const struct isp_format_info *
-omap3isp_video_format_info(u32 code);
+omap3isp_video_format_info(enum v4l2_mbus_pixelcode code);
 
 #endif /* OMAP3_ISP_VIDEO_H */

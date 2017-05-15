@@ -15,44 +15,24 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/irq.h>
-
-#include <drm/drm_print.h>
 
 #include "msm_drv.h"
 #include "mdp5_kms.h"
 
-void mdp5_set_irqmask(struct mdp_kms *mdp_kms, uint32_t irqmask,
-		uint32_t old_irqmask)
+void mdp5_set_irqmask(struct mdp_kms *mdp_kms, uint32_t irqmask)
 {
-	mdp5_write(to_mdp5_kms(mdp_kms), REG_MDP5_INTR_CLEAR,
-		   irqmask ^ (irqmask & old_irqmask));
 	mdp5_write(to_mdp5_kms(mdp_kms), REG_MDP5_INTR_EN, irqmask);
 }
 
 static void mdp5_irq_error_handler(struct mdp_irq *irq, uint32_t irqstatus)
 {
-	struct mdp5_kms *mdp5_kms = container_of(irq, struct mdp5_kms, error_handler);
-	static DEFINE_RATELIMIT_STATE(rs, 5*HZ, 1);
-	extern bool dumpstate;
-
-	DRM_ERROR_RATELIMITED("errors: %08x\n", irqstatus);
-
-	if (dumpstate && __ratelimit(&rs)) {
-		struct drm_printer p = drm_info_printer(mdp5_kms->dev->dev);
-		drm_state_dump(mdp5_kms->dev, &p);
-		if (mdp5_kms->smp)
-			mdp5_smp_dump(mdp5_kms->smp, &p);
-	}
+	DRM_ERROR("errors: %08x\n", irqstatus);
 }
 
 void mdp5_irq_preinstall(struct msm_kms *kms)
 {
 	struct mdp5_kms *mdp5_kms = to_mdp5_kms(to_mdp_kms(kms));
-	mdp5_enable(mdp5_kms);
 	mdp5_write(mdp5_kms, REG_MDP5_INTR_CLEAR, 0xffffffff);
-	mdp5_write(mdp5_kms, REG_MDP5_INTR_EN, 0x00000000);
-	mdp5_disable(mdp5_kms);
 }
 
 int mdp5_irq_postinstall(struct msm_kms *kms)
@@ -67,9 +47,7 @@ int mdp5_irq_postinstall(struct msm_kms *kms)
 			MDP5_IRQ_INTF2_UNDER_RUN |
 			MDP5_IRQ_INTF3_UNDER_RUN;
 
-	mdp5_enable(mdp5_kms);
 	mdp_irq_register(mdp_kms, error_handler);
-	mdp5_disable(mdp5_kms);
 
 	return 0;
 }
@@ -77,22 +55,18 @@ int mdp5_irq_postinstall(struct msm_kms *kms)
 void mdp5_irq_uninstall(struct msm_kms *kms)
 {
 	struct mdp5_kms *mdp5_kms = to_mdp5_kms(to_mdp_kms(kms));
-	mdp5_enable(mdp5_kms);
 	mdp5_write(mdp5_kms, REG_MDP5_INTR_EN, 0x00000000);
-	mdp5_disable(mdp5_kms);
 }
 
-irqreturn_t mdp5_irq(struct msm_kms *kms)
+static void mdp5_irq_mdp(struct mdp_kms *mdp_kms)
 {
-	struct mdp_kms *mdp_kms = to_mdp_kms(kms);
 	struct mdp5_kms *mdp5_kms = to_mdp5_kms(mdp_kms);
 	struct drm_device *dev = mdp5_kms->dev;
 	struct msm_drm_private *priv = dev->dev_private;
 	unsigned int id;
-	uint32_t status, enable;
+	uint32_t status;
 
-	enable = mdp5_read(mdp5_kms, REG_MDP5_INTR_EN);
-	status = mdp5_read(mdp5_kms, REG_MDP5_INTR_STATUS) & enable;
+	status = mdp5_read(mdp5_kms, REG_MDP5_INTR_STATUS);
 	mdp5_write(mdp5_kms, REG_MDP5_INTR_CLEAR, status);
 
 	VERB("status=%08x", status);
@@ -102,28 +76,36 @@ irqreturn_t mdp5_irq(struct msm_kms *kms)
 	for (id = 0; id < priv->num_crtcs; id++)
 		if (status & mdp5_crtc_vblank(priv->crtcs[id]))
 			drm_handle_vblank(dev, id);
+}
+
+irqreturn_t mdp5_irq(struct msm_kms *kms)
+{
+	struct mdp_kms *mdp_kms = to_mdp_kms(kms);
+	struct mdp5_kms *mdp5_kms = to_mdp5_kms(mdp_kms);
+	uint32_t intr;
+
+	intr = mdp5_read(mdp5_kms, REG_MDP5_HW_INTR_STATUS);
+
+	VERB("intr=%08x", intr);
+
+	if (intr & MDP5_HW_INTR_STATUS_INTR_MDP)
+		mdp5_irq_mdp(mdp_kms);
+
+	if (intr & MDP5_HW_INTR_STATUS_INTR_HDMI)
+		hdmi_irq(0, mdp5_kms->hdmi);
 
 	return IRQ_HANDLED;
 }
 
 int mdp5_enable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 {
-	struct mdp5_kms *mdp5_kms = to_mdp5_kms(to_mdp_kms(kms));
-
-	mdp5_enable(mdp5_kms);
 	mdp_update_vblank_mask(to_mdp_kms(kms),
 			mdp5_crtc_vblank(crtc), true);
-	mdp5_disable(mdp5_kms);
-
 	return 0;
 }
 
 void mdp5_disable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 {
-	struct mdp5_kms *mdp5_kms = to_mdp5_kms(to_mdp_kms(kms));
-
-	mdp5_enable(mdp5_kms);
 	mdp_update_vblank_mask(to_mdp_kms(kms),
 			mdp5_crtc_vblank(crtc), false);
-	mdp5_disable(mdp5_kms);
 }

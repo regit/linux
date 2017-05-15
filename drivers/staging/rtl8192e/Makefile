@@ -17,3 +17,5 @@ obj-$(CONFIG_RTLLIB_CRYPTO_TKIP) += rtllib_crypt_tkip.o
 obj-$(CONFIG_RTLLIB_CRYPTO_WEP) += rtllib_crypt_wep.o
 
 obj-$(CONFIG_RTL8192E) += rtl8192e/
+
+ccflags-y += -D__CHECK_ENDIAN__

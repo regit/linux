@@ -29,12 +29,12 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/ioctl.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/i2c.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
-#include <media/i2c/wm8775.h>
+#include <media/wm8775.h>
 
 MODULE_DESCRIPTION("wm8775 driver");
 MODULE_AUTHOR("Ulf Eklund, Hans Verkuil");
@@ -178,6 +178,13 @@ static const struct v4l2_ctrl_ops wm8775_ctrl_ops = {
 
 static const struct v4l2_subdev_core_ops wm8775_core_ops = {
 	.log_status = wm8775_log_status,
+	.g_ext_ctrls = v4l2_subdev_g_ext_ctrls,
+	.try_ext_ctrls = v4l2_subdev_try_ext_ctrls,
+	.s_ext_ctrls = v4l2_subdev_s_ext_ctrls,
+	.g_ctrl = v4l2_subdev_g_ctrl,
+	.s_ctrl = v4l2_subdev_s_ctrl,
+	.queryctrl = v4l2_subdev_queryctrl,
+	.querymenu = v4l2_subdev_querymenu,
 };
 
 static const struct v4l2_subdev_tuner_ops wm8775_tuner_ops = {
@@ -311,6 +318,7 @@ MODULE_DEVICE_TABLE(i2c, wm8775_id);
 
 static struct i2c_driver wm8775_driver = {
 	.driver = {
+		.owner	= THIS_MODULE,
 		.name	= "wm8775",
 	},
 	.probe		= wm8775_probe,

@@ -45,9 +45,10 @@ void cxio_dump_tpt(struct cxio_rdev *rdev, u32 stag)
 	int size = 32;
 
 	m = kmalloc(sizeof(*m) + size, GFP_ATOMIC);
-	if (!m)
+	if (!m) {
+		PDBG("%s couldn't allocate memory.\n", __func__);
 		return;
-
+	}
 	m->mem_id = MEM_PMRX;
 	m->addr = (stag>>8) * 32 + rdev->rnic_info.tpt_base;
 	m->len = size;
@@ -81,9 +82,10 @@ void cxio_dump_pbl(struct cxio_rdev *rdev, u32 pbl_addr, uint len, u8 shift)
 	size = npages * sizeof(u64);
 
 	m = kmalloc(sizeof(*m) + size, GFP_ATOMIC);
-	if (!m)
+	if (!m) {
+		PDBG("%s couldn't allocate memory.\n", __func__);
 		return;
-
+	}
 	m->mem_id = MEM_PMRX;
 	m->addr = pbl_addr;
 	m->len = size;
@@ -142,9 +144,10 @@ void cxio_dump_rqt(struct cxio_rdev *rdev, u32 hwtid, int nents)
 	int rc;
 
 	m = kmalloc(sizeof(*m) + size, GFP_ATOMIC);
-	if (!m)
+	if (!m) {
+		PDBG("%s couldn't allocate memory.\n", __func__);
 		return;
-
+	}
 	m->mem_id = MEM_PMRX;
 	m->addr = ((hwtid)<<10) + rdev->rnic_info.rqt_base;
 	m->len = size;
@@ -174,9 +177,10 @@ void cxio_dump_tcb(struct cxio_rdev *rdev, u32 hwtid)
 	int rc;
 
 	m = kmalloc(sizeof(*m) + size, GFP_ATOMIC);
-	if (!m)
+	if (!m) {
+		PDBG("%s couldn't allocate memory.\n", __func__);
 		return;
-
+	}
 	m->mem_id = MEM_CM;
 	m->addr = hwtid * size;
 	m->len = size;

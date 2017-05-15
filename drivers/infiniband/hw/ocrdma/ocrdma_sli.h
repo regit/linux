@@ -1,36 +1,21 @@
-/* This file is part of the Emulex RoCE Device Driver for
- * RoCE (RDMA over Converged Ethernet) adapters.
- * Copyright (C) 2012-2015 Emulex. All rights reserved.
- * EMULEX and SLI are trademarks of Emulex.
- * www.emulex.com
- *
- * This software is available to you under a choice of one of two licenses.
- * You may choose to be licensed under the terms of the GNU General Public
- * License (GPL) Version 2, available from the file COPYING in the main
- * directory of this source tree, or the BSD license below:
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * - Redistributions of source code must retain the above copyright notice,
- *   this list of conditions and the following disclaimer.
- *
- * - Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
- * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
- * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/*******************************************************************
+ * This file is part of the Emulex RoCE Device Driver for          *
+ * RoCE (RDMA over Converged Ethernet) adapters.                   *
+ * Copyright (C) 2008-2012 Emulex. All rights reserved.            *
+ * EMULEX and SLI are trademarks of Emulex.                        *
+ * www.emulex.com                                                  *
+ *                                                                 *
+ * This program is free software; you can redistribute it and/or   *
+ * modify it under the terms of version 2 of the GNU General       *
+ * Public License as published by the Free Software Foundation.    *
+ * This program is distributed in the hope that it will be useful. *
+ * ALL EXPRESS OR IMPLIED CONDITIONS, REPRESENTATIONS AND          *
+ * WARRANTIES, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY,  *
+ * FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT, ARE      *
+ * DISCLAIMED, EXCEPT TO THE EXTENT THAT SUCH DISCLAIMERS ARE HELD *
+ * TO BE LEGALLY INVALID.  See the GNU General Public License for  *
+ * more details, a copy of which can be found in the file COPYING  *
+ * included with this package.                                     *
  *
  * Contact Information:
  * linux-drivers@emulex.com
@@ -38,10 +23,12 @@
  * Emulex
  * 3333 Susan Street
  * Costa Mesa, CA 92626
- */
+ *******************************************************************/
 
 #ifndef __OCRDMA_SLI_H__
 #define __OCRDMA_SLI_H__
+
+#define Bit(_b) (1 << (_b))
 
 enum {
 	OCRDMA_ASIC_GEN_SKH_R = 0x04,
@@ -57,41 +44,35 @@ enum {
 #define OCRDMA_SUBSYS_ROCE 10
 enum {
 	OCRDMA_CMD_QUERY_CONFIG = 1,
-	OCRDMA_CMD_ALLOC_PD = 2,
-	OCRDMA_CMD_DEALLOC_PD = 3,
+	OCRDMA_CMD_ALLOC_PD,
+	OCRDMA_CMD_DEALLOC_PD,
 
-	OCRDMA_CMD_CREATE_AH_TBL = 4,
-	OCRDMA_CMD_DELETE_AH_TBL = 5,
+	OCRDMA_CMD_CREATE_AH_TBL,
+	OCRDMA_CMD_DELETE_AH_TBL,
 
-	OCRDMA_CMD_CREATE_QP = 6,
-	OCRDMA_CMD_QUERY_QP = 7,
-	OCRDMA_CMD_MODIFY_QP = 8 ,
-	OCRDMA_CMD_DELETE_QP = 9,
+	OCRDMA_CMD_CREATE_QP,
+	OCRDMA_CMD_QUERY_QP,
+	OCRDMA_CMD_MODIFY_QP,
+	OCRDMA_CMD_DELETE_QP,
 
-	OCRDMA_CMD_RSVD1 = 10,
-	OCRDMA_CMD_ALLOC_LKEY = 11,
-	OCRDMA_CMD_DEALLOC_LKEY = 12,
-	OCRDMA_CMD_REGISTER_NSMR = 13,
-	OCRDMA_CMD_REREGISTER_NSMR = 14,
-	OCRDMA_CMD_REGISTER_NSMR_CONT = 15,
-	OCRDMA_CMD_QUERY_NSMR = 16,
-	OCRDMA_CMD_ALLOC_MW = 17,
-	OCRDMA_CMD_QUERY_MW = 18,
+	OCRDMA_CMD_RSVD1,
+	OCRDMA_CMD_ALLOC_LKEY,
+	OCRDMA_CMD_DEALLOC_LKEY,
+	OCRDMA_CMD_REGISTER_NSMR,
+	OCRDMA_CMD_REREGISTER_NSMR,
+	OCRDMA_CMD_REGISTER_NSMR_CONT,
+	OCRDMA_CMD_QUERY_NSMR,
+	OCRDMA_CMD_ALLOC_MW,
+	OCRDMA_CMD_QUERY_MW,
 
-	OCRDMA_CMD_CREATE_SRQ = 19,
-	OCRDMA_CMD_QUERY_SRQ = 20,
-	OCRDMA_CMD_MODIFY_SRQ = 21,
-	OCRDMA_CMD_DELETE_SRQ = 22,
+	OCRDMA_CMD_CREATE_SRQ,
+	OCRDMA_CMD_QUERY_SRQ,
+	OCRDMA_CMD_MODIFY_SRQ,
+	OCRDMA_CMD_DELETE_SRQ,
 
-	OCRDMA_CMD_ATTACH_MCAST = 23,
-	OCRDMA_CMD_DETACH_MCAST = 24,
-
-	OCRDMA_CMD_CREATE_RBQ = 25,
-	OCRDMA_CMD_DESTROY_RBQ = 26,
-
-	OCRDMA_CMD_GET_RDMA_STATS = 27,
-	OCRDMA_CMD_ALLOC_PD_RANGE = 28,
-	OCRDMA_CMD_DEALLOC_PD_RANGE = 29,
+	OCRDMA_CMD_ATTACH_MCAST,
+	OCRDMA_CMD_DETACH_MCAST,
+	OCRDMA_CMD_GET_RDMA_STATS,
 
 	OCRDMA_CMD_MAX
 };
@@ -104,7 +85,6 @@ enum {
 	OCRDMA_CMD_CREATE_MQ		= 21,
 	OCRDMA_CMD_GET_CTRL_ATTRIBUTES  = 32,
 	OCRDMA_CMD_GET_FW_VER		= 35,
-	OCRDMA_CMD_MODIFY_EQ_DELAY      = 41,
 	OCRDMA_CMD_DELETE_MQ		= 53,
 	OCRDMA_CMD_DELETE_CQ		= 54,
 	OCRDMA_CMD_DELETE_EQ		= 55,
@@ -119,11 +99,11 @@ enum {
 	QTYPE_MCCQ	= 3
 };
 
-#define OCRDMA_MAX_SGID		16
+#define OCRDMA_MAX_SGID (8)
 
 #define OCRDMA_MAX_QP    2048
 #define OCRDMA_MAX_CQ    2048
-#define OCRDMA_MAX_STAG 16384
+#define OCRDMA_MAX_STAG  8192
 
 enum {
 	OCRDMA_DB_RQ_OFFSET		= 0xE0,
@@ -140,43 +120,37 @@ enum {
 	OCRDMA_DB_RQ_SHIFT		= 24
 };
 
-enum {
-	OCRDMA_L3_TYPE_IB_GRH   = 0x00,
-	OCRDMA_L3_TYPE_IPV4     = 0x01,
-	OCRDMA_L3_TYPE_IPV6     = 0x02
-};
-
 #define OCRDMA_DB_CQ_RING_ID_MASK       0x3FF	/* bits 0 - 9 */
 #define OCRDMA_DB_CQ_RING_ID_EXT_MASK  0x0C00	/* bits 10-11 of qid at 12-11 */
 /* qid #2 msbits at 12-11 */
 #define OCRDMA_DB_CQ_RING_ID_EXT_MASK_SHIFT  0x1
-#define OCRDMA_DB_CQ_NUM_POPPED_SHIFT	16	/* bits 16 - 28 */
+#define OCRDMA_DB_CQ_NUM_POPPED_SHIFT       (16)	/* bits 16 - 28 */
 /* Rearm bit */
-#define OCRDMA_DB_CQ_REARM_SHIFT	29	/* bit 29 */
+#define OCRDMA_DB_CQ_REARM_SHIFT        (29)	/* bit 29 */
 /* solicited bit */
-#define OCRDMA_DB_CQ_SOLICIT_SHIFT	31	/* bit 31 */
+#define OCRDMA_DB_CQ_SOLICIT_SHIFT   (31)	/* bit 31 */
 
 #define OCRDMA_EQ_ID_MASK		0x1FF	/* bits 0 - 8 */
 #define OCRDMA_EQ_ID_EXT_MASK		0x3e00	/* bits 9-13 */
-#define OCRDMA_EQ_ID_EXT_MASK_SHIFT	2	/* qid bits 9-13 at 11-15 */
+#define OCRDMA_EQ_ID_EXT_MASK_SHIFT	(2)	/* qid bits 9-13 at 11-15 */
 
 /* Clear the interrupt for this eq */
-#define OCRDMA_EQ_CLR_SHIFT		9	/* bit 9 */
+#define OCRDMA_EQ_CLR_SHIFT			(9)	/* bit 9 */
 /* Must be 1 */
-#define OCRDMA_EQ_TYPE_SHIFT		10	/* bit 10 */
+#define OCRDMA_EQ_TYPE_SHIFT		(10)	/* bit 10 */
 /* Number of event entries processed */
-#define OCRDMA_NUM_EQE_SHIFT		16	/* bits 16 - 28 */
+#define OCRDMA_NUM_EQE_SHIFT		(16)	/* bits 16 - 28 */
 /* Rearm bit */
-#define OCRDMA_REARM_SHIFT		29	/* bit 29 */
+#define OCRDMA_REARM_SHIFT		(29)	/* bit 29 */
 
 #define OCRDMA_MQ_ID_MASK		0x7FF	/* bits 0 - 10 */
 /* Number of entries posted */
-#define OCRDMA_MQ_NUM_MQE_SHIFT	16	/* bits 16 - 29 */
+#define OCRDMA_MQ_NUM_MQE_SHIFT	(16)	/* bits 16 - 29 */
 
-#define OCRDMA_MIN_HPAGE_SIZE	4096
+#define OCRDMA_MIN_HPAGE_SIZE (4096)
 
-#define OCRDMA_MIN_Q_PAGE_SIZE	4096
-#define OCRDMA_MAX_Q_PAGES	8
+#define OCRDMA_MIN_Q_PAGE_SIZE (4096)
+#define OCRDMA_MAX_Q_PAGES     (8)
 
 #define OCRDMA_SLI_ASIC_ID_OFFSET	0x9C
 #define OCRDMA_SLI_ASIC_REV_MASK	0x000000FF
@@ -192,14 +166,14 @@ enum {
 # 6: 256K Bytes
 # 7: 512K Bytes
 */
-#define OCRDMA_MAX_Q_PAGE_SIZE_CNT	8
+#define OCRDMA_MAX_Q_PAGE_SIZE_CNT (8)
 #define OCRDMA_Q_PAGE_BASE_SIZE (OCRDMA_MIN_Q_PAGE_SIZE * OCRDMA_MAX_Q_PAGES)
 
-#define MAX_OCRDMA_QP_PAGES		8
+#define MAX_OCRDMA_QP_PAGES      (8)
 #define OCRDMA_MAX_WQE_MEM_SIZE (MAX_OCRDMA_QP_PAGES * OCRDMA_MIN_HQ_PAGE_SIZE)
 
-#define OCRDMA_CREATE_CQ_MAX_PAGES	4
-#define OCRDMA_DPP_CQE_SIZE		4
+#define OCRDMA_CREATE_CQ_MAX_PAGES (4)
+#define OCRDMA_DPP_CQE_SIZE (4)
 
 #define OCRDMA_GEN2_MAX_CQE 1024
 #define OCRDMA_GEN2_CQ_PAGE_SIZE 4096
@@ -260,7 +234,7 @@ struct ocrdma_mqe_sge {
 
 enum {
 	OCRDMA_MQE_HDR_EMB_SHIFT	= 0,
-	OCRDMA_MQE_HDR_EMB_MASK		= BIT(0),
+	OCRDMA_MQE_HDR_EMB_MASK		= Bit(0),
 	OCRDMA_MQE_HDR_SGE_CNT_SHIFT	= 3,
 	OCRDMA_MQE_HDR_SGE_CNT_MASK	= 0x1F << OCRDMA_MQE_HDR_SGE_CNT_SHIFT,
 	OCRDMA_MQE_HDR_SPECIAL_SHIFT	= 24,
@@ -314,7 +288,7 @@ struct ocrdma_pa {
 	u32 hi;
 };
 
-#define MAX_OCRDMA_EQ_PAGES	8
+#define MAX_OCRDMA_EQ_PAGES (8)
 struct ocrdma_create_eq_req {
 	struct ocrdma_mbx_hdr req;
 	u32 num_pages;
@@ -326,7 +300,7 @@ struct ocrdma_create_eq_req {
 };
 
 enum {
-	OCRDMA_CREATE_EQ_VALID	= BIT(29),
+	OCRDMA_CREATE_EQ_VALID	= Bit(29),
 	OCRDMA_CREATE_EQ_CNT_SHIFT	= 26,
 	OCRDMA_CREATE_CQ_DELAY_SHIFT	= 13,
 };
@@ -336,30 +310,7 @@ struct ocrdma_create_eq_rsp {
 	u32 vector_eqid;
 };
 
-#define OCRDMA_EQ_MINOR_OTHER	0x1
-
-struct ocrmda_set_eqd {
-	u32 eq_id;
-	u32 phase;
-	u32 delay_multiplier;
-};
-
-struct ocrdma_modify_eqd_cmd {
-	struct ocrdma_mbx_hdr req;
-	u32 num_eq;
-	struct ocrmda_set_eqd set_eqd[8];
-} __packed;
-
-struct ocrdma_modify_eqd_req {
-	struct ocrdma_mqe_hdr hdr;
-	struct ocrdma_modify_eqd_cmd cmd;
-};
-
-
-struct ocrdma_modify_eq_delay_rsp {
-	struct ocrdma_mbx_rsp hdr;
-	u32 rsvd0;
-} __packed;
+#define OCRDMA_EQ_MINOR_OTHER (0x1)
 
 enum {
 	OCRDMA_MCQE_STATUS_SHIFT	= 0,
@@ -367,13 +318,13 @@ enum {
 	OCRDMA_MCQE_ESTATUS_SHIFT	= 16,
 	OCRDMA_MCQE_ESTATUS_MASK	= 0xFFFF << OCRDMA_MCQE_ESTATUS_SHIFT,
 	OCRDMA_MCQE_CONS_SHIFT		= 27,
-	OCRDMA_MCQE_CONS_MASK		= BIT(27),
+	OCRDMA_MCQE_CONS_MASK		= Bit(27),
 	OCRDMA_MCQE_CMPL_SHIFT		= 28,
-	OCRDMA_MCQE_CMPL_MASK		= BIT(28),
+	OCRDMA_MCQE_CMPL_MASK		= Bit(28),
 	OCRDMA_MCQE_AE_SHIFT		= 30,
-	OCRDMA_MCQE_AE_MASK		= BIT(30),
+	OCRDMA_MCQE_AE_MASK		= Bit(30),
 	OCRDMA_MCQE_VALID_SHIFT		= 31,
-	OCRDMA_MCQE_VALID_MASK		= BIT(31)
+	OCRDMA_MCQE_VALID_MASK		= Bit(31)
 };
 
 struct ocrdma_mcqe {
@@ -384,13 +335,13 @@ struct ocrdma_mcqe {
 };
 
 enum {
-	OCRDMA_AE_MCQE_QPVALID		= BIT(31),
+	OCRDMA_AE_MCQE_QPVALID		= Bit(31),
 	OCRDMA_AE_MCQE_QPID_MASK	= 0xFFFF,
 
-	OCRDMA_AE_MCQE_CQVALID		= BIT(31),
+	OCRDMA_AE_MCQE_CQVALID		= Bit(31),
 	OCRDMA_AE_MCQE_CQID_MASK	= 0xFFFF,
-	OCRDMA_AE_MCQE_VALID		= BIT(31),
-	OCRDMA_AE_MCQE_AE		= BIT(30),
+	OCRDMA_AE_MCQE_VALID		= Bit(31),
+	OCRDMA_AE_MCQE_AE		= Bit(30),
 	OCRDMA_AE_MCQE_EVENT_TYPE_SHIFT	= 16,
 	OCRDMA_AE_MCQE_EVENT_TYPE_MASK	=
 					0xFF << OCRDMA_AE_MCQE_EVENT_TYPE_SHIFT,
@@ -431,9 +382,9 @@ enum {
 	OCRDMA_AE_MPA_MCQE_EVENT_TYPE_MASK	= 0xFF <<
 					OCRDMA_AE_MPA_MCQE_EVENT_TYPE_SHIFT,
 	OCRDMA_AE_MPA_MCQE_EVENT_AE_SHIFT	= 30,
-	OCRDMA_AE_MPA_MCQE_EVENT_AE_MASK	= BIT(30),
+	OCRDMA_AE_MPA_MCQE_EVENT_AE_MASK	= Bit(30),
 	OCRDMA_AE_MPA_MCQE_EVENT_VALID_SHIFT	= 31,
-	OCRDMA_AE_MPA_MCQE_EVENT_VALID_MASK	= BIT(31)
+	OCRDMA_AE_MPA_MCQE_EVENT_VALID_MASK	= Bit(31)
 };
 
 struct ocrdma_ae_mpa_mcqe {
@@ -457,9 +408,9 @@ enum {
 	OCRDMA_AE_QP_MCQE_EVENT_TYPE_MASK	= 0xFF <<
 				OCRDMA_AE_QP_MCQE_EVENT_TYPE_SHIFT,
 	OCRDMA_AE_QP_MCQE_EVENT_AE_SHIFT	= 30,
-	OCRDMA_AE_QP_MCQE_EVENT_AE_MASK		= BIT(30),
+	OCRDMA_AE_QP_MCQE_EVENT_AE_MASK		= Bit(30),
 	OCRDMA_AE_QP_MCQE_EVENT_VALID_SHIFT	= 31,
-	OCRDMA_AE_QP_MCQE_EVENT_VALID_MASK	= BIT(31)
+	OCRDMA_AE_QP_MCQE_EVENT_VALID_MASK	= Bit(31)
 };
 
 struct ocrdma_ae_qp_mcqe {
@@ -469,17 +420,9 @@ struct ocrdma_ae_qp_mcqe {
 	u32 valid_ae_event;
 };
 
-enum ocrdma_async_event_code {
-	OCRDMA_ASYNC_LINK_EVE_CODE	= 0x01,
-	OCRDMA_ASYNC_GRP5_EVE_CODE	= 0x05,
-	OCRDMA_ASYNC_RDMA_EVE_CODE	= 0x14
-};
-
-enum ocrdma_async_grp5_events {
-	OCRDMA_ASYNC_EVENT_QOS_VALUE	= 0x01,
-	OCRDMA_ASYNC_EVENT_COS_VALUE	= 0x02,
-	OCRDMA_ASYNC_EVENT_PVID_STATE	= 0x03
-};
+#define OCRDMA_ASYNC_RDMA_EVE_CODE 0x14
+#define OCRDMA_ASYNC_GRP5_EVE_CODE 0x5
+#define OCRDMA_ASYNC_EVENT_PVID_STATE 0x3
 
 enum OCRDMA_ASYNC_EVENT_TYPE {
 	OCRDMA_CQ_ERROR			= 0x00,
@@ -491,55 +434,15 @@ enum OCRDMA_ASYNC_EVENT_TYPE {
 	OCRDMA_DEVICE_FATAL_EVENT	= 0x08,
 	OCRDMA_SRQCAT_ERROR		= 0x0E,
 	OCRDMA_SRQ_LIMIT_EVENT		= 0x0F,
-	OCRDMA_QP_LAST_WQE_EVENT	= 0x10,
-
-	OCRDMA_MAX_ASYNC_ERRORS
-};
-
-struct ocrdma_ae_lnkst_mcqe {
-	u32 speed_state_ptn;
-	u32 qos_reason_falut;
-	u32 evt_tag;
-	u32 valid_ae_event;
-};
-
-enum {
-	OCRDMA_AE_LSC_PORT_NUM_MASK	= 0x3F,
-	OCRDMA_AE_LSC_PT_SHIFT		= 0x06,
-	OCRDMA_AE_LSC_PT_MASK		= (0x03 <<
-			OCRDMA_AE_LSC_PT_SHIFT),
-	OCRDMA_AE_LSC_LS_SHIFT		= 0x08,
-	OCRDMA_AE_LSC_LS_MASK		= (0xFF <<
-			OCRDMA_AE_LSC_LS_SHIFT),
-	OCRDMA_AE_LSC_LD_SHIFT		= 0x10,
-	OCRDMA_AE_LSC_LD_MASK		= (0xFF <<
-			OCRDMA_AE_LSC_LD_SHIFT),
-	OCRDMA_AE_LSC_PPS_SHIFT		= 0x18,
-	OCRDMA_AE_LSC_PPS_MASK		= (0xFF <<
-			OCRDMA_AE_LSC_PPS_SHIFT),
-	OCRDMA_AE_LSC_PPF_MASK		= 0xFF,
-	OCRDMA_AE_LSC_ER_SHIFT		= 0x08,
-	OCRDMA_AE_LSC_ER_MASK		= (0xFF <<
-			OCRDMA_AE_LSC_ER_SHIFT),
-	OCRDMA_AE_LSC_QOS_SHIFT		= 0x10,
-	OCRDMA_AE_LSC_QOS_MASK		= (0xFFFF <<
-			OCRDMA_AE_LSC_QOS_SHIFT)
-};
-
-enum {
-	OCRDMA_AE_LSC_PLINK_DOWN	= 0x00,
-	OCRDMA_AE_LSC_PLINK_UP		= 0x01,
-	OCRDMA_AE_LSC_LLINK_DOWN	= 0x02,
-	OCRDMA_AE_LSC_LLINK_MASK	= 0x02,
-	OCRDMA_AE_LSC_LLINK_UP		= 0x03
+	OCRDMA_QP_LAST_WQE_EVENT	= 0x10
 };
 
 /* mailbox command request and responses */
 enum {
 	OCRDMA_MBX_QUERY_CFG_CQ_OVERFLOW_SHIFT		= 2,
-	OCRDMA_MBX_QUERY_CFG_CQ_OVERFLOW_MASK		= BIT(2),
+	OCRDMA_MBX_QUERY_CFG_CQ_OVERFLOW_MASK		= Bit(2),
 	OCRDMA_MBX_QUERY_CFG_SRQ_SUPPORTED_SHIFT	= 3,
-	OCRDMA_MBX_QUERY_CFG_SRQ_SUPPORTED_MASK		= BIT(3),
+	OCRDMA_MBX_QUERY_CFG_SRQ_SUPPORTED_MASK		= Bit(3),
 	OCRDMA_MBX_QUERY_CFG_MAX_QP_SHIFT		= 8,
 	OCRDMA_MBX_QUERY_CFG_MAX_QP_MASK		= 0xFFFFFF <<
 				OCRDMA_MBX_QUERY_CFG_MAX_QP_SHIFT,
@@ -550,13 +453,12 @@ enum {
 	OCRDMA_MBX_QUERY_CFG_CA_ACK_DELAY_SHIFT		= 8,
 	OCRDMA_MBX_QUERY_CFG_CA_ACK_DELAY_MASK		= 0xFF <<
 				OCRDMA_MBX_QUERY_CFG_CA_ACK_DELAY_SHIFT,
-	OCRDMA_MBX_QUERY_CFG_L3_TYPE_SHIFT		= 3,
-	OCRDMA_MBX_QUERY_CFG_L3_TYPE_MASK		= 0x18,
+
 	OCRDMA_MBX_QUERY_CFG_MAX_SEND_SGE_SHIFT		= 0,
 	OCRDMA_MBX_QUERY_CFG_MAX_SEND_SGE_MASK		= 0xFFFF,
-	OCRDMA_MBX_QUERY_CFG_MAX_RECV_SGE_SHIFT	= 16,
-	OCRDMA_MBX_QUERY_CFG_MAX_RECV_SGE_MASK		= 0xFFFF <<
-				OCRDMA_MBX_QUERY_CFG_MAX_RECV_SGE_SHIFT,
+	OCRDMA_MBX_QUERY_CFG_MAX_WRITE_SGE_SHIFT	= 16,
+	OCRDMA_MBX_QUERY_CFG_MAX_WRITE_SGE_MASK		= 0xFFFF <<
+				OCRDMA_MBX_QUERY_CFG_MAX_WRITE_SGE_SHIFT,
 
 	OCRDMA_MBX_QUERY_CFG_MAX_ORD_PER_QP_SHIFT	= 0,
 	OCRDMA_MBX_QUERY_CFG_MAX_ORD_PER_QP_MASK	= 0xFFFF,
@@ -612,8 +514,6 @@ enum {
 	OCRDMA_MBX_QUERY_CFG_MAX_SRQ_SGE_OFFSET		= 0,
 	OCRDMA_MBX_QUERY_CFG_MAX_SRQ_SGE_MASK		= 0xFFFF <<
 				OCRDMA_MBX_QUERY_CFG_MAX_SRQ_SGE_OFFSET,
-	OCRDMA_MBX_QUERY_CFG_MAX_RD_SGE_SHIFT		= 0,
-	OCRDMA_MBX_QUERY_CFG_MAX_RD_SGE_MASK		= 0xFFFF,
 };
 
 struct ocrdma_mbx_query_config {
@@ -621,12 +521,12 @@ struct ocrdma_mbx_query_config {
 	struct ocrdma_mbx_rsp rsp;
 	u32 qp_srq_cq_ird_ord;
 	u32 max_pd_ca_ack_delay;
-	u32 max_recv_send_sge;
+	u32 max_write_send_sge;
 	u32 max_ird_ord_per_qp;
 	u32 max_shared_ird_ord;
 	u32 max_mr;
-	u32 max_mr_size_hi;
 	u32 max_mr_size_lo;
+	u32 max_mr_size_hi;
 	u32 max_num_mr_pbl;
 	u32 max_mw;
 	u32 max_fmr;
@@ -641,8 +541,6 @@ struct ocrdma_mbx_query_config {
 	u32 max_wqes_rqes_per_q;
 	u32 max_cq_cqes_per_cq;
 	u32 max_srq_rqe_sge;
-	u32 max_wr_rd_sge;
-	u32 ird_pgsz_num_pages;
 };
 
 struct ocrdma_fw_ver_rsp {
@@ -682,26 +580,17 @@ enum {
 	OCRDMA_FN_MODE_RDMA	= 0x4
 };
 
-enum {
-	OCRDMA_IF_TYPE_MASK		= 0xFFFF0000,
-	OCRDMA_IF_TYPE_SHIFT		= 0x10,
-	OCRDMA_PHY_TYPE_MASK		= 0x0000FFFF,
-	OCRDMA_FUTURE_DETAILS_MASK	= 0xFFFF0000,
-	OCRDMA_FUTURE_DETAILS_SHIFT	= 0x10,
-	OCRDMA_EX_PHY_DETAILS_MASK	= 0x0000FFFF,
-	OCRDMA_FSPEED_SUPP_MASK		= 0xFFFF0000,
-	OCRDMA_FSPEED_SUPP_SHIFT	= 0x10,
-	OCRDMA_ASPEED_SUPP_MASK		= 0x0000FFFF
-};
-
 struct ocrdma_get_phy_info_rsp {
 	struct ocrdma_mqe_hdr hdr;
 	struct ocrdma_mbx_rsp rsp;
 
-	u32 ityp_ptyp;
+	u16 phy_type;
+	u16 interface_type;
 	u32 misc_params;
-	u32 ftrdtl_exphydtl;
-	u32 fspeed_aspeed;
+	u16 ext_phy_details;
+	u16 rsvd;
+	u16 auto_speeds_supported;
+	u16 fixed_speeds_supported;
 	u32 future_use[2];
 };
 
@@ -714,34 +603,19 @@ enum {
 	OCRDMA_PHY_SPEED_40GBPS = 0x20
 };
 
-enum {
-	OCRDMA_PORT_NUM_MASK	= 0x3F,
-	OCRDMA_PT_MASK		= 0xC0,
-	OCRDMA_PT_SHIFT		= 0x6,
-	OCRDMA_LINK_DUP_MASK	= 0x0000FF00,
-	OCRDMA_LINK_DUP_SHIFT	= 0x8,
-	OCRDMA_PHY_PS_MASK	= 0x00FF0000,
-	OCRDMA_PHY_PS_SHIFT	= 0x10,
-	OCRDMA_PHY_PFLT_MASK	= 0xFF000000,
-	OCRDMA_PHY_PFLT_SHIFT	= 0x18,
-	OCRDMA_QOS_LNKSP_MASK	= 0xFFFF0000,
-	OCRDMA_QOS_LNKSP_SHIFT	= 0x10,
-	OCRDMA_LINK_ST_MASK	= 0x01,
-	OCRDMA_PLFC_MASK	= 0x00000400,
-	OCRDMA_PLFC_SHIFT	= 0x8,
-	OCRDMA_PLRFC_MASK	= 0x00000200,
-	OCRDMA_PLRFC_SHIFT	= 0x8,
-	OCRDMA_PLTFC_MASK	= 0x00000100,
-	OCRDMA_PLTFC_SHIFT	= 0x8
-};
 
 struct ocrdma_get_link_speed_rsp {
 	struct ocrdma_mqe_hdr hdr;
 	struct ocrdma_mbx_rsp rsp;
 
-	u32 pflt_pps_ld_pnum;
-	u32 qos_lsp;
-	u32 res_lnk_st;
+	u8 pt_port_num;
+	u8 link_duplex;
+	u8 phys_port_speed;
+	u8 phys_port_fault;
+	u16 rsvd1;
+	u16 qos_lnk_speed;
+	u8 logical_lnk_status;
+	u8 rsvd2[3];
 };
 
 enum {
@@ -765,9 +639,9 @@ enum {
 	OCRDMA_CREATE_CQ_PAGE_SIZE_MASK		= 0xFF,
 
 	OCRDMA_CREATE_CQ_COALESCWM_SHIFT	= 12,
-	OCRDMA_CREATE_CQ_COALESCWM_MASK		= BIT(13) | BIT(12),
-	OCRDMA_CREATE_CQ_FLAGS_NODELAY		= BIT(14),
-	OCRDMA_CREATE_CQ_FLAGS_AUTO_VALID	= BIT(15),
+	OCRDMA_CREATE_CQ_COALESCWM_MASK		= Bit(13) | Bit(12),
+	OCRDMA_CREATE_CQ_FLAGS_NODELAY		= Bit(14),
+	OCRDMA_CREATE_CQ_FLAGS_AUTO_VALID	= Bit(15),
 
 	OCRDMA_CREATE_CQ_EQ_ID_MASK		= 0xFFFF,
 	OCRDMA_CREATE_CQ_CQE_COUNT_MASK		= 0xFFFF
@@ -780,8 +654,8 @@ enum {
 	OCRDMA_CREATE_CQ_EQID_SHIFT		= 22,
 
 	OCRDMA_CREATE_CQ_CNT_SHIFT		= 27,
-	OCRDMA_CREATE_CQ_FLAGS_VALID		= BIT(29),
-	OCRDMA_CREATE_CQ_FLAGS_EVENTABLE	= BIT(31),
+	OCRDMA_CREATE_CQ_FLAGS_VALID		= Bit(29),
+	OCRDMA_CREATE_CQ_FLAGS_EVENTABLE	= Bit(31),
 	OCRDMA_CREATE_CQ_DEF_FLAGS		= OCRDMA_CREATE_CQ_FLAGS_VALID |
 					OCRDMA_CREATE_CQ_FLAGS_EVENTABLE |
 					OCRDMA_CREATE_CQ_FLAGS_NODELAY
@@ -792,7 +666,8 @@ struct ocrdma_create_cq_cmd {
 	u32 pgsz_pgcnt;
 	u32 ev_cnt_flags;
 	u32 eqn;
-	u32 pdid_cqecnt;
+	u16 cqe_count;
+	u16 pd_id;
 	u32 rsvd6;
 	struct ocrdma_pa pa[OCRDMA_CREATE_CQ_MAX_PAGES];
 };
@@ -800,10 +675,6 @@ struct ocrdma_create_cq_cmd {
 struct ocrdma_create_cq {
 	struct ocrdma_mqe_hdr hdr;
 	struct ocrdma_create_cq_cmd cmd;
-};
-
-enum {
-	OCRDMA_CREATE_CQ_CMD_PDID_SHIFT	= 0x10
 };
 
 enum {
@@ -824,8 +695,8 @@ enum {
 	OCRDMA_CREATE_MQ_V0_CQ_ID_SHIFT		= 22,
 	OCRDMA_CREATE_MQ_CQ_ID_SHIFT		= 16,
 	OCRDMA_CREATE_MQ_RING_SIZE_SHIFT	= 16,
-	OCRDMA_CREATE_MQ_VALID			= BIT(31),
-	OCRDMA_CREATE_MQ_ASYNC_CQ_VALID		= BIT(0)
+	OCRDMA_CREATE_MQ_VALID			= Bit(31),
+	OCRDMA_CREATE_MQ_ASYNC_CQ_VALID		= Bit(0)
 };
 
 struct ocrdma_create_mq_req {
@@ -876,7 +747,7 @@ enum {
 	OCRDMA_CREATE_QP_REQ_SQ_PAGE_SIZE_SHIFT	= 16,
 	OCRDMA_CREATE_QP_REQ_RQ_PAGE_SIZE_SHIFT	= 19,
 	OCRDMA_CREATE_QP_REQ_QPT_SHIFT		= 29,
-	OCRDMA_CREATE_QP_REQ_QPT_MASK		= BIT(31) | BIT(30) | BIT(29),
+	OCRDMA_CREATE_QP_REQ_QPT_MASK		= Bit(31) | Bit(30) | Bit(29),
 
 	OCRDMA_CREATE_QP_REQ_MAX_RQE_SHIFT	= 0,
 	OCRDMA_CREATE_QP_REQ_MAX_RQE_MASK	= 0xFFFF,
@@ -891,23 +762,23 @@ enum {
 					OCRDMA_CREATE_QP_REQ_MAX_SGE_SEND_SHIFT,
 
 	OCRDMA_CREATE_QP_REQ_FMR_EN_SHIFT		= 0,
-	OCRDMA_CREATE_QP_REQ_FMR_EN_MASK		= BIT(0),
+	OCRDMA_CREATE_QP_REQ_FMR_EN_MASK		= Bit(0),
 	OCRDMA_CREATE_QP_REQ_ZERO_LKEYEN_SHIFT		= 1,
-	OCRDMA_CREATE_QP_REQ_ZERO_LKEYEN_MASK		= BIT(1),
+	OCRDMA_CREATE_QP_REQ_ZERO_LKEYEN_MASK		= Bit(1),
 	OCRDMA_CREATE_QP_REQ_BIND_MEMWIN_SHIFT		= 2,
-	OCRDMA_CREATE_QP_REQ_BIND_MEMWIN_MASK		= BIT(2),
+	OCRDMA_CREATE_QP_REQ_BIND_MEMWIN_MASK		= Bit(2),
 	OCRDMA_CREATE_QP_REQ_INB_WREN_SHIFT		= 3,
-	OCRDMA_CREATE_QP_REQ_INB_WREN_MASK		= BIT(3),
+	OCRDMA_CREATE_QP_REQ_INB_WREN_MASK		= Bit(3),
 	OCRDMA_CREATE_QP_REQ_INB_RDEN_SHIFT		= 4,
-	OCRDMA_CREATE_QP_REQ_INB_RDEN_MASK		= BIT(4),
+	OCRDMA_CREATE_QP_REQ_INB_RDEN_MASK		= Bit(4),
 	OCRDMA_CREATE_QP_REQ_USE_SRQ_SHIFT		= 5,
-	OCRDMA_CREATE_QP_REQ_USE_SRQ_MASK		= BIT(5),
+	OCRDMA_CREATE_QP_REQ_USE_SRQ_MASK		= Bit(5),
 	OCRDMA_CREATE_QP_REQ_ENABLE_RPIR_SHIFT		= 6,
-	OCRDMA_CREATE_QP_REQ_ENABLE_RPIR_MASK		= BIT(6),
+	OCRDMA_CREATE_QP_REQ_ENABLE_RPIR_MASK		= Bit(6),
 	OCRDMA_CREATE_QP_REQ_ENABLE_DPP_SHIFT		= 7,
-	OCRDMA_CREATE_QP_REQ_ENABLE_DPP_MASK		= BIT(7),
+	OCRDMA_CREATE_QP_REQ_ENABLE_DPP_MASK		= Bit(7),
 	OCRDMA_CREATE_QP_REQ_ENABLE_DPP_CQ_SHIFT	= 8,
-	OCRDMA_CREATE_QP_REQ_ENABLE_DPP_CQ_MASK		= BIT(8),
+	OCRDMA_CREATE_QP_REQ_ENABLE_DPP_CQ_MASK		= Bit(8),
 	OCRDMA_CREATE_QP_REQ_MAX_SGE_RECV_SHIFT		= 16,
 	OCRDMA_CREATE_QP_REQ_MAX_SGE_RECV_MASK		= 0xFFFF <<
 				OCRDMA_CREATE_QP_REQ_MAX_SGE_RECV_SHIFT,
@@ -1020,7 +891,7 @@ enum {
 	OCRDMA_CREATE_QP_RSP_SQ_ID_MASK			= 0xFFFF <<
 				OCRDMA_CREATE_QP_RSP_SQ_ID_SHIFT,
 
-	OCRDMA_CREATE_QP_RSP_DPP_ENABLED_MASK		= BIT(0),
+	OCRDMA_CREATE_QP_RSP_DPP_ENABLED_MASK		= Bit(0),
 	OCRDMA_CREATE_QP_RSP_DPP_PAGE_OFFSET_SHIFT	= 1,
 	OCRDMA_CREATE_QP_RSP_DPP_PAGE_OFFSET_MASK	= 0x7FFF <<
 				OCRDMA_CREATE_QP_RSP_DPP_PAGE_OFFSET_SHIFT,
@@ -1057,38 +928,38 @@ enum {
 	OCRDMA_MODIFY_QP_ID_SHIFT	= 0,
 	OCRDMA_MODIFY_QP_ID_MASK	= 0xFFFF,
 
-	OCRDMA_QP_PARA_QPS_VALID	= BIT(0),
-	OCRDMA_QP_PARA_SQD_ASYNC_VALID	= BIT(1),
-	OCRDMA_QP_PARA_PKEY_VALID	= BIT(2),
-	OCRDMA_QP_PARA_QKEY_VALID	= BIT(3),
-	OCRDMA_QP_PARA_PMTU_VALID	= BIT(4),
-	OCRDMA_QP_PARA_ACK_TO_VALID	= BIT(5),
-	OCRDMA_QP_PARA_RETRY_CNT_VALID	= BIT(6),
-	OCRDMA_QP_PARA_RRC_VALID	= BIT(7),
-	OCRDMA_QP_PARA_RQPSN_VALID	= BIT(8),
-	OCRDMA_QP_PARA_MAX_IRD_VALID	= BIT(9),
-	OCRDMA_QP_PARA_MAX_ORD_VALID	= BIT(10),
-	OCRDMA_QP_PARA_RNT_VALID	= BIT(11),
-	OCRDMA_QP_PARA_SQPSN_VALID	= BIT(12),
-	OCRDMA_QP_PARA_DST_QPN_VALID	= BIT(13),
-	OCRDMA_QP_PARA_MAX_WQE_VALID	= BIT(14),
-	OCRDMA_QP_PARA_MAX_RQE_VALID	= BIT(15),
-	OCRDMA_QP_PARA_SGE_SEND_VALID	= BIT(16),
-	OCRDMA_QP_PARA_SGE_RECV_VALID	= BIT(17),
-	OCRDMA_QP_PARA_SGE_WR_VALID	= BIT(18),
-	OCRDMA_QP_PARA_INB_RDEN_VALID	= BIT(19),
-	OCRDMA_QP_PARA_INB_WREN_VALID	= BIT(20),
-	OCRDMA_QP_PARA_FLOW_LBL_VALID	= BIT(21),
-	OCRDMA_QP_PARA_BIND_EN_VALID	= BIT(22),
-	OCRDMA_QP_PARA_ZLKEY_EN_VALID	= BIT(23),
-	OCRDMA_QP_PARA_FMR_EN_VALID	= BIT(24),
-	OCRDMA_QP_PARA_INBAT_EN_VALID	= BIT(25),
-	OCRDMA_QP_PARA_VLAN_EN_VALID	= BIT(26),
+	OCRDMA_QP_PARA_QPS_VALID	= Bit(0),
+	OCRDMA_QP_PARA_SQD_ASYNC_VALID	= Bit(1),
+	OCRDMA_QP_PARA_PKEY_VALID	= Bit(2),
+	OCRDMA_QP_PARA_QKEY_VALID	= Bit(3),
+	OCRDMA_QP_PARA_PMTU_VALID	= Bit(4),
+	OCRDMA_QP_PARA_ACK_TO_VALID	= Bit(5),
+	OCRDMA_QP_PARA_RETRY_CNT_VALID	= Bit(6),
+	OCRDMA_QP_PARA_RRC_VALID	= Bit(7),
+	OCRDMA_QP_PARA_RQPSN_VALID	= Bit(8),
+	OCRDMA_QP_PARA_MAX_IRD_VALID	= Bit(9),
+	OCRDMA_QP_PARA_MAX_ORD_VALID	= Bit(10),
+	OCRDMA_QP_PARA_RNT_VALID	= Bit(11),
+	OCRDMA_QP_PARA_SQPSN_VALID	= Bit(12),
+	OCRDMA_QP_PARA_DST_QPN_VALID	= Bit(13),
+	OCRDMA_QP_PARA_MAX_WQE_VALID	= Bit(14),
+	OCRDMA_QP_PARA_MAX_RQE_VALID	= Bit(15),
+	OCRDMA_QP_PARA_SGE_SEND_VALID	= Bit(16),
+	OCRDMA_QP_PARA_SGE_RECV_VALID	= Bit(17),
+	OCRDMA_QP_PARA_SGE_WR_VALID	= Bit(18),
+	OCRDMA_QP_PARA_INB_RDEN_VALID	= Bit(19),
+	OCRDMA_QP_PARA_INB_WREN_VALID	= Bit(20),
+	OCRDMA_QP_PARA_FLOW_LBL_VALID	= Bit(21),
+	OCRDMA_QP_PARA_BIND_EN_VALID	= Bit(22),
+	OCRDMA_QP_PARA_ZLKEY_EN_VALID	= Bit(23),
+	OCRDMA_QP_PARA_FMR_EN_VALID	= Bit(24),
+	OCRDMA_QP_PARA_INBAT_EN_VALID	= Bit(25),
+	OCRDMA_QP_PARA_VLAN_EN_VALID	= Bit(26),
 
-	OCRDMA_MODIFY_QP_FLAGS_RD	= BIT(0),
-	OCRDMA_MODIFY_QP_FLAGS_WR	= BIT(1),
-	OCRDMA_MODIFY_QP_FLAGS_SEND	= BIT(2),
-	OCRDMA_MODIFY_QP_FLAGS_ATOMIC	= BIT(3)
+	OCRDMA_MODIFY_QP_FLAGS_RD	= Bit(0),
+	OCRDMA_MODIFY_QP_FLAGS_WR	= Bit(1),
+	OCRDMA_MODIFY_QP_FLAGS_SEND	= Bit(2),
+	OCRDMA_MODIFY_QP_FLAGS_ATOMIC	= Bit(3)
 };
 
 enum {
@@ -1107,17 +978,15 @@ enum {
 	OCRDMA_QP_PARAMS_MAX_SGE_SEND_MASK	= 0xFFFF <<
 					OCRDMA_QP_PARAMS_MAX_SGE_SEND_SHIFT,
 
-	OCRDMA_QP_PARAMS_FLAGS_FMR_EN		= BIT(0),
-	OCRDMA_QP_PARAMS_FLAGS_LKEY_0_EN	= BIT(1),
-	OCRDMA_QP_PARAMS_FLAGS_BIND_MW_EN	= BIT(2),
-	OCRDMA_QP_PARAMS_FLAGS_INBWR_EN		= BIT(3),
-	OCRDMA_QP_PARAMS_FLAGS_INBRD_EN		= BIT(4),
+	OCRDMA_QP_PARAMS_FLAGS_FMR_EN		= Bit(0),
+	OCRDMA_QP_PARAMS_FLAGS_LKEY_0_EN	= Bit(1),
+	OCRDMA_QP_PARAMS_FLAGS_BIND_MW_EN	= Bit(2),
+	OCRDMA_QP_PARAMS_FLAGS_INBWR_EN		= Bit(3),
+	OCRDMA_QP_PARAMS_FLAGS_INBRD_EN		= Bit(4),
 	OCRDMA_QP_PARAMS_STATE_SHIFT		= 5,
-	OCRDMA_QP_PARAMS_STATE_MASK		= BIT(5) | BIT(6) | BIT(7),
-	OCRDMA_QP_PARAMS_FLAGS_SQD_ASYNC	= BIT(8),
-	OCRDMA_QP_PARAMS_FLAGS_INB_ATEN		= BIT(9),
-	OCRDMA_QP_PARAMS_FLAGS_L3_TYPE_SHIFT    = 11,
-	OCRDMA_QP_PARAMS_FLAGS_L3_TYPE_MASK     = BIT(11) | BIT(12) | BIT(13),
+	OCRDMA_QP_PARAMS_STATE_MASK		= Bit(5) | Bit(6) | Bit(7),
+	OCRDMA_QP_PARAMS_FLAGS_SQD_ASYNC	= Bit(8),
+	OCRDMA_QP_PARAMS_FLAGS_INB_ATEN		= Bit(9),
 	OCRDMA_QP_PARAMS_MAX_SGE_RECV_SHIFT	= 16,
 	OCRDMA_QP_PARAMS_MAX_SGE_RECV_MASK	= 0xFFFF <<
 					OCRDMA_QP_PARAMS_MAX_SGE_RECV_SHIFT,
@@ -1245,8 +1114,6 @@ struct ocrdma_query_qp_rsp {
 	struct ocrdma_mqe_hdr hdr;
 	struct ocrdma_mbx_rsp rsp;
 	struct ocrdma_qp_params params;
-	u32 dpp_credits_cqid;
-	u32 rbq_id;
 };
 
 enum {
@@ -1364,6 +1231,7 @@ struct ocrdma_destroy_srq {
 
 enum {
 	OCRDMA_ALLOC_PD_ENABLE_DPP	= BIT(16),
+	OCRDMA_PD_MAX_DPP_ENABLED_QP	= 8,
 	OCRDMA_DPP_PAGE_SIZE		= 4096
 };
 
@@ -1374,7 +1242,7 @@ struct ocrdma_alloc_pd {
 };
 
 enum {
-	OCRDMA_ALLOC_PD_RSP_DPP			= BIT(16),
+	OCRDMA_ALLOC_PD_RSP_DPP			= Bit(16),
 	OCRDMA_ALLOC_PD_RSP_DPP_PAGE_SHIFT	= 20,
 	OCRDMA_ALLOC_PD_RSP_PDID_MASK		= 0xFFFF,
 };
@@ -1396,37 +1264,6 @@ struct ocrdma_dealloc_pd_rsp {
 	struct ocrdma_mbx_rsp rsp;
 };
 
-struct ocrdma_alloc_pd_range {
-	struct ocrdma_mqe_hdr hdr;
-	struct ocrdma_mbx_hdr req;
-	u32 enable_dpp_rsvd;
-	u32 pd_count;
-};
-
-struct ocrdma_alloc_pd_range_rsp {
-	struct ocrdma_mqe_hdr hdr;
-	struct ocrdma_mbx_rsp rsp;
-	u32 dpp_page_pdid;
-	u32 pd_count;
-};
-
-enum {
-	OCRDMA_ALLOC_PD_RNG_RSP_START_PDID_MASK = 0xFFFF,
-};
-
-struct ocrdma_dealloc_pd_range {
-	struct ocrdma_mqe_hdr hdr;
-	struct ocrdma_mbx_hdr req;
-	u32 start_pd_id;
-	u32 pd_count;
-};
-
-struct ocrdma_dealloc_pd_range_rsp {
-	struct ocrdma_mqe_hdr hdr;
-	struct ocrdma_mbx_hdr req;
-	u32 rsvd;
-};
-
 enum {
 	OCRDMA_ADDR_CHECK_ENABLE	= 1,
 	OCRDMA_ADDR_CHECK_DISABLE	= 0
@@ -1437,18 +1274,18 @@ enum {
 	OCRDMA_ALLOC_LKEY_PD_ID_MASK		= 0xFFFF,
 
 	OCRDMA_ALLOC_LKEY_ADDR_CHECK_SHIFT	= 0,
-	OCRDMA_ALLOC_LKEY_ADDR_CHECK_MASK	= BIT(0),
+	OCRDMA_ALLOC_LKEY_ADDR_CHECK_MASK	= Bit(0),
 	OCRDMA_ALLOC_LKEY_FMR_SHIFT		= 1,
-	OCRDMA_ALLOC_LKEY_FMR_MASK		= BIT(1),
+	OCRDMA_ALLOC_LKEY_FMR_MASK		= Bit(1),
 	OCRDMA_ALLOC_LKEY_REMOTE_INV_SHIFT	= 2,
-	OCRDMA_ALLOC_LKEY_REMOTE_INV_MASK	= BIT(2),
+	OCRDMA_ALLOC_LKEY_REMOTE_INV_MASK	= Bit(2),
 	OCRDMA_ALLOC_LKEY_REMOTE_WR_SHIFT	= 3,
-	OCRDMA_ALLOC_LKEY_REMOTE_WR_MASK	= BIT(3),
+	OCRDMA_ALLOC_LKEY_REMOTE_WR_MASK	= Bit(3),
 	OCRDMA_ALLOC_LKEY_REMOTE_RD_SHIFT	= 4,
-	OCRDMA_ALLOC_LKEY_REMOTE_RD_MASK	= BIT(4),
+	OCRDMA_ALLOC_LKEY_REMOTE_RD_MASK	= Bit(4),
 	OCRDMA_ALLOC_LKEY_LOCAL_WR_SHIFT	= 5,
-	OCRDMA_ALLOC_LKEY_LOCAL_WR_MASK		= BIT(5),
-	OCRDMA_ALLOC_LKEY_REMOTE_ATOMIC_MASK	= BIT(6),
+	OCRDMA_ALLOC_LKEY_LOCAL_WR_MASK		= Bit(5),
+	OCRDMA_ALLOC_LKEY_REMOTE_ATOMIC_MASK	= Bit(6),
 	OCRDMA_ALLOC_LKEY_REMOTE_ATOMIC_SHIFT	= 6,
 	OCRDMA_ALLOC_LKEY_PBL_SIZE_SHIFT	= 16,
 	OCRDMA_ALLOC_LKEY_PBL_SIZE_MASK		= 0xFFFF <<
@@ -1507,21 +1344,21 @@ enum {
 	OCRDMA_REG_NSMR_HPAGE_SIZE_MASK		= 0xFF <<
 					OCRDMA_REG_NSMR_HPAGE_SIZE_SHIFT,
 	OCRDMA_REG_NSMR_BIND_MEMWIN_SHIFT	= 24,
-	OCRDMA_REG_NSMR_BIND_MEMWIN_MASK	= BIT(24),
+	OCRDMA_REG_NSMR_BIND_MEMWIN_MASK	= Bit(24),
 	OCRDMA_REG_NSMR_ZB_SHIFT		= 25,
-	OCRDMA_REG_NSMR_ZB_SHIFT_MASK		= BIT(25),
+	OCRDMA_REG_NSMR_ZB_SHIFT_MASK		= Bit(25),
 	OCRDMA_REG_NSMR_REMOTE_INV_SHIFT	= 26,
-	OCRDMA_REG_NSMR_REMOTE_INV_MASK		= BIT(26),
+	OCRDMA_REG_NSMR_REMOTE_INV_MASK		= Bit(26),
 	OCRDMA_REG_NSMR_REMOTE_WR_SHIFT		= 27,
-	OCRDMA_REG_NSMR_REMOTE_WR_MASK		= BIT(27),
+	OCRDMA_REG_NSMR_REMOTE_WR_MASK		= Bit(27),
 	OCRDMA_REG_NSMR_REMOTE_RD_SHIFT		= 28,
-	OCRDMA_REG_NSMR_REMOTE_RD_MASK		= BIT(28),
+	OCRDMA_REG_NSMR_REMOTE_RD_MASK		= Bit(28),
 	OCRDMA_REG_NSMR_LOCAL_WR_SHIFT		= 29,
-	OCRDMA_REG_NSMR_LOCAL_WR_MASK		= BIT(29),
+	OCRDMA_REG_NSMR_LOCAL_WR_MASK		= Bit(29),
 	OCRDMA_REG_NSMR_REMOTE_ATOMIC_SHIFT	= 30,
-	OCRDMA_REG_NSMR_REMOTE_ATOMIC_MASK	= BIT(30),
+	OCRDMA_REG_NSMR_REMOTE_ATOMIC_MASK	= Bit(30),
 	OCRDMA_REG_NSMR_LAST_SHIFT		= 31,
-	OCRDMA_REG_NSMR_LAST_MASK		= BIT(31)
+	OCRDMA_REG_NSMR_LAST_MASK		= Bit(31)
 };
 
 struct ocrdma_reg_nsmr {
@@ -1548,7 +1385,7 @@ enum {
 					OCRDMA_REG_NSMR_CONT_NUM_PBL_SHIFT,
 
 	OCRDMA_REG_NSMR_CONT_LAST_SHIFT		= 31,
-	OCRDMA_REG_NSMR_CONT_LAST_MASK		= BIT(31)
+	OCRDMA_REG_NSMR_CONT_LAST_MASK		= Bit(31)
 };
 
 struct ocrdma_reg_nsmr_cont {
@@ -1694,18 +1531,11 @@ struct ocrdma_delete_ah_tbl_rsp {
 
 enum {
 	OCRDMA_EQE_VALID_SHIFT		= 0,
-	OCRDMA_EQE_VALID_MASK		= BIT(0),
-	OCRDMA_EQE_MAJOR_CODE_MASK      = 0x0E,
-	OCRDMA_EQE_MAJOR_CODE_SHIFT     = 0x01,
+	OCRDMA_EQE_VALID_MASK		= Bit(0),
 	OCRDMA_EQE_FOR_CQE_MASK		= 0xFFFE,
 	OCRDMA_EQE_RESOURCE_ID_SHIFT	= 16,
 	OCRDMA_EQE_RESOURCE_ID_MASK	= 0xFFFF <<
 				OCRDMA_EQE_RESOURCE_ID_SHIFT,
-};
-
-enum major_code {
-	OCRDMA_MAJOR_CODE_COMPLETION    = 0x00,
-	OCRDMA_MAJOR_CODE_SENTINAL      = 0x01
 };
 
 struct ocrdma_eqe {
@@ -1734,9 +1564,7 @@ enum OCRDMA_CQE_STATUS {
 	OCRDMA_CQE_INV_EEC_STATE_ERR,
 	OCRDMA_CQE_FATAL_ERR,
 	OCRDMA_CQE_RESP_TIMEOUT_ERR,
-	OCRDMA_CQE_GENERAL_ERR,
-
-	OCRDMA_MAX_CQE_ERR
+	OCRDMA_CQE_GENERAL_ERR
 };
 
 enum {
@@ -1746,11 +1574,8 @@ enum {
 
 	/* w1 */
 	OCRDMA_CQE_UD_XFER_LEN_SHIFT	= 16,
-	OCRDMA_CQE_UD_XFER_LEN_MASK     = 0x1FFF,
 	OCRDMA_CQE_PKEY_SHIFT		= 0,
 	OCRDMA_CQE_PKEY_MASK		= 0xFFFF,
-	OCRDMA_CQE_UD_L3TYPE_SHIFT      = 29,
-	OCRDMA_CQE_UD_L3TYPE_MASK       = 0x07,
 
 	/* w2 */
 	OCRDMA_CQE_QPN_SHIFT		= 0,
@@ -1764,11 +1589,11 @@ enum {
 	OCRDMA_CQE_UD_STATUS_MASK	= 0x7 << OCRDMA_CQE_UD_STATUS_SHIFT,
 	OCRDMA_CQE_STATUS_SHIFT		= 16,
 	OCRDMA_CQE_STATUS_MASK		= 0xFF << OCRDMA_CQE_STATUS_SHIFT,
-	OCRDMA_CQE_VALID		= BIT(31),
-	OCRDMA_CQE_INVALIDATE		= BIT(30),
-	OCRDMA_CQE_QTYPE		= BIT(29),
-	OCRDMA_CQE_IMM			= BIT(28),
-	OCRDMA_CQE_WRITE_IMM		= BIT(27),
+	OCRDMA_CQE_VALID		= Bit(31),
+	OCRDMA_CQE_INVALIDATE		= Bit(30),
+	OCRDMA_CQE_QTYPE		= Bit(29),
+	OCRDMA_CQE_IMM			= Bit(28),
+	OCRDMA_CQE_WRITE_IMM		= Bit(27),
 	OCRDMA_CQE_QTYPE_SQ		= 0,
 	OCRDMA_CQE_QTYPE_RQ		= 1,
 	OCRDMA_CQE_SRCQP_MASK		= 0xFFFFFF
@@ -1815,7 +1640,6 @@ enum {
 	OCRDMA_FLAG_FENCE_R	= 0x8,
 	OCRDMA_FLAG_SOLICIT	= 0x10,
 	OCRDMA_FLAG_IMM		= 0x20,
-	OCRDMA_FLAG_AH_VLAN_PR  = 0x40,
 
 	/* Stag flags */
 	OCRDMA_LKEY_FLAG_LOCAL_WR	= 0x1,
@@ -1875,7 +1699,7 @@ struct ocrdma_ewqe_ud_hdr {
 	u32 rsvd_dest_qpn;
 	u32 qkey;
 	u32 rsvd_ahid;
-	u32 hdr_type;
+	u32 rsvd;
 };
 
 /* extended wqe followed by hdr_wqe for Fast Memory register */
@@ -1913,8 +1737,8 @@ struct ocrdma_grh {
 	u16	rsvd;
 } __packed;
 
-#define OCRDMA_AV_VALID		BIT(7)
-#define OCRDMA_AV_VLAN_VALID	BIT(1)
+#define OCRDMA_AV_VALID		Bit(7)
+#define OCRDMA_AV_VLAN_VALID	Bit(1)
 
 struct ocrdma_av {
 	struct ocrdma_eth_vlan eth_hdr;
@@ -2072,62 +1896,12 @@ struct ocrdma_rdma_stats_resp {
 	struct ocrdma_rx_dbg_stats	rx_dbg_stats;
 } __packed;
 
-enum {
-	OCRDMA_HBA_ATTRB_EPROM_VER_LO_MASK	= 0xFF,
-	OCRDMA_HBA_ATTRB_EPROM_VER_HI_MASK	= 0xFF00,
-	OCRDMA_HBA_ATTRB_EPROM_VER_HI_SHIFT	= 0x08,
-	OCRDMA_HBA_ATTRB_CDBLEN_MASK		= 0xFFFF,
-	OCRDMA_HBA_ATTRB_ASIC_REV_MASK		= 0xFF0000,
-	OCRDMA_HBA_ATTRB_ASIC_REV_SHIFT		= 0x10,
-	OCRDMA_HBA_ATTRB_GUID0_MASK		= 0xFF000000,
-	OCRDMA_HBA_ATTRB_GUID0_SHIFT		= 0x18,
-	OCRDMA_HBA_ATTRB_GUID13_MASK		= 0xFF,
-	OCRDMA_HBA_ATTRB_GUID14_MASK		= 0xFF00,
-	OCRDMA_HBA_ATTRB_GUID14_SHIFT		= 0x08,
-	OCRDMA_HBA_ATTRB_GUID15_MASK		= 0xFF0000,
-	OCRDMA_HBA_ATTRB_GUID15_SHIFT		= 0x10,
-	OCRDMA_HBA_ATTRB_PCNT_MASK		= 0xFF000000,
-	OCRDMA_HBA_ATTRB_PCNT_SHIFT		= 0x18,
-	OCRDMA_HBA_ATTRB_LDTOUT_MASK		= 0xFFFF,
-	OCRDMA_HBA_ATTRB_ISCSI_VER_MASK		= 0xFF0000,
-	OCRDMA_HBA_ATTRB_ISCSI_VER_SHIFT	= 0x10,
-	OCRDMA_HBA_ATTRB_MFUNC_DEV_MASK		= 0xFF000000,
-	OCRDMA_HBA_ATTRB_MFUNC_DEV_SHIFT	= 0x18,
-	OCRDMA_HBA_ATTRB_CV_MASK		= 0xFF,
-	OCRDMA_HBA_ATTRB_HBA_ST_MASK		= 0xFF00,
-	OCRDMA_HBA_ATTRB_HBA_ST_SHIFT		= 0x08,
-	OCRDMA_HBA_ATTRB_MAX_DOMS_MASK		= 0xFF0000,
-	OCRDMA_HBA_ATTRB_MAX_DOMS_SHIFT		= 0x10,
-	OCRDMA_HBA_ATTRB_PTNUM_MASK		= 0x3F000000,
-	OCRDMA_HBA_ATTRB_PTNUM_SHIFT		= 0x18,
-	OCRDMA_HBA_ATTRB_PT_MASK		= 0xC0000000,
-	OCRDMA_HBA_ATTRB_PT_SHIFT		= 0x1E,
-	OCRDMA_HBA_ATTRB_ISCSI_FET_MASK		= 0xFF,
-	OCRDMA_HBA_ATTRB_ASIC_GEN_MASK		= 0xFF00,
-	OCRDMA_HBA_ATTRB_ASIC_GEN_SHIFT		= 0x08,
-	OCRDMA_HBA_ATTRB_PCI_VID_MASK		= 0xFFFF,
-	OCRDMA_HBA_ATTRB_PCI_DID_MASK		= 0xFFFF0000,
-	OCRDMA_HBA_ATTRB_PCI_DID_SHIFT		= 0x10,
-	OCRDMA_HBA_ATTRB_PCI_SVID_MASK		= 0xFFFF,
-	OCRDMA_HBA_ATTRB_PCI_SSID_MASK		= 0xFFFF0000,
-	OCRDMA_HBA_ATTRB_PCI_SSID_SHIFT		= 0x10,
-	OCRDMA_HBA_ATTRB_PCI_BUSNUM_MASK	= 0xFF,
-	OCRDMA_HBA_ATTRB_PCI_DEVNUM_MASK	= 0xFF00,
-	OCRDMA_HBA_ATTRB_PCI_DEVNUM_SHIFT	= 0x08,
-	OCRDMA_HBA_ATTRB_PCI_FUNCNUM_MASK	= 0xFF0000,
-	OCRDMA_HBA_ATTRB_PCI_FUNCNUM_SHIFT	= 0x10,
-	OCRDMA_HBA_ATTRB_IF_TYPE_MASK		= 0xFF000000,
-	OCRDMA_HBA_ATTRB_IF_TYPE_SHIFT		= 0x18,
-	OCRDMA_HBA_ATTRB_NETFIL_MASK		=0xFF
-};
 
 struct mgmt_hba_attribs {
 	u8 flashrom_version_string[32];
 	u8 manufacturer_name[32];
 	u32 supported_modes;
-	u32 rsvd_eprom_verhi_verlo;
-	u32 mbx_ds_ver;
-	u32 epfw_ds_ver;
+	u32 rsvd0[3];
 	u8 ncsi_ver_string[12];
 	u32 default_extended_timeout;
 	u8 controller_model_number[32];
@@ -2140,26 +1914,34 @@ struct mgmt_hba_attribs {
 	u8 driver_version_string[32];
 	u8 fw_on_flash_version_string[32];
 	u32 functionalities_supported;
-	u32 guid0_asicrev_cdblen;
-	u8 generational_guid[12];
-	u32 portcnt_guid15;
-	u32 mfuncdev_iscsi_ldtout;
-	u32 ptpnum_maxdoms_hbast_cv;
+	u16 max_cdblength;
+	u8 asic_revision;
+	u8 generational_guid[16];
+	u8 hba_port_count;
+	u16 default_link_down_timeout;
+	u8 iscsi_ver_min_max;
+	u8 multifunction_device;
+	u8 cache_valid;
+	u8 hba_status;
+	u8 max_domains_supported;
+	u8 phy_port;
 	u32 firmware_post_status;
 	u32 hba_mtu[8];
-	u32 res_asicgen_iscsi_feaures;
-	u32 rsvd1[3];
+	u32 rsvd1[4];
 };
 
 struct mgmt_controller_attrib {
 	struct mgmt_hba_attribs hba_attribs;
-	u32 pci_did_vid;
-	u32 pci_ssid_svid;
-	u32 ityp_fnum_devnum_bnum;
-	u32 uid_hi;
-	u32 uid_lo;
-	u32 res_nnetfil;
-	u32 rsvd0[4];
+	u16 pci_vendor_id;
+	u16 pci_device_id;
+	u16 pci_sub_vendor_id;
+	u16 pci_sub_system_id;
+	u8 pci_bus_number;
+	u8 pci_device_number;
+	u8 pci_function_number;
+	u8 interface_type;
+	u64 unique_identifier;
+	u32 rsvd0[5];
 };
 
 struct ocrdma_get_ctrl_attribs_rsp {
@@ -2167,79 +1949,5 @@ struct ocrdma_get_ctrl_attribs_rsp {
 	struct mgmt_controller_attrib ctrl_attribs;
 };
 
-#define OCRDMA_SUBSYS_DCBX 0x10
-
-enum OCRDMA_DCBX_OPCODE {
-	OCRDMA_CMD_GET_DCBX_CONFIG = 0x01
-};
-
-enum OCRDMA_DCBX_PARAM_TYPE {
-	OCRDMA_PARAMETER_TYPE_ADMIN	= 0x00,
-	OCRDMA_PARAMETER_TYPE_OPER	= 0x01,
-	OCRDMA_PARAMETER_TYPE_PEER	= 0x02
-};
-
-enum OCRDMA_DCBX_APP_PROTO {
-	OCRDMA_APP_PROTO_ROCE	= 0x8915
-};
-
-enum OCRDMA_DCBX_PROTO {
-	OCRDMA_PROTO_SELECT_L2	= 0x00,
-	OCRDMA_PROTO_SELECT_L4	= 0x01
-};
-
-enum OCRDMA_DCBX_APP_PARAM {
-	OCRDMA_APP_PARAM_APP_PROTO_MASK = 0xFFFF,
-	OCRDMA_APP_PARAM_PROTO_SEL_MASK = 0xFF,
-	OCRDMA_APP_PARAM_PROTO_SEL_SHIFT = 0x10,
-	OCRDMA_APP_PARAM_VALID_MASK	= 0xFF,
-	OCRDMA_APP_PARAM_VALID_SHIFT	= 0x18
-};
-
-enum OCRDMA_DCBX_STATE_FLAGS {
-	OCRDMA_STATE_FLAG_ENABLED	= 0x01,
-	OCRDMA_STATE_FLAG_ADDVERTISED	= 0x02,
-	OCRDMA_STATE_FLAG_WILLING	= 0x04,
-	OCRDMA_STATE_FLAG_SYNC		= 0x08,
-	OCRDMA_STATE_FLAG_UNSUPPORTED	= 0x40000000,
-	OCRDMA_STATE_FLAG_NEG_FAILD	= 0x80000000
-};
-
-enum OCRDMA_TCV_AEV_OPV_ST {
-	OCRDMA_DCBX_TC_SUPPORT_MASK	= 0xFF,
-	OCRDMA_DCBX_TC_SUPPORT_SHIFT	= 0x18,
-	OCRDMA_DCBX_APP_ENTRY_SHIFT	= 0x10,
-	OCRDMA_DCBX_OP_PARAM_SHIFT	= 0x08,
-	OCRDMA_DCBX_STATE_MASK		= 0xFF
-};
-
-struct ocrdma_app_parameter {
-	u32 valid_proto_app;
-	u32 oui;
-	u32 app_prio[2];
-};
-
-struct ocrdma_dcbx_cfg {
-	u32 tcv_aev_opv_st;
-	u32 tc_state;
-	u32 pfc_state;
-	u32 qcn_state;
-	u32 appl_state;
-	u32 ll_state;
-	u32 tc_bw[2];
-	u32 tc_prio[8];
-	u32 pfc_prio[2];
-	struct ocrdma_app_parameter app_param[15];
-};
-
-struct ocrdma_get_dcbx_cfg_req {
-	struct ocrdma_mbx_hdr hdr;
-	u32 param_type;
-} __packed;
-
-struct ocrdma_get_dcbx_cfg_rsp {
-	struct ocrdma_mbx_rsp hdr;
-	struct ocrdma_dcbx_cfg cfg;
-} __packed;
 
 #endif				/* __OCRDMA_SLI_H__ */

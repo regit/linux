@@ -30,7 +30,6 @@
  *  675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/kernel.h>
@@ -43,7 +42,6 @@
 #include <linux/ctype.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
 
 #include <asm/mach-au1x00/au1000.h>
 #include <asm/mach-au1x00/au1200fb.h>	/* platform_data */
@@ -332,8 +330,9 @@ struct panel_settings
 	uint32 mode_pwmhi;
 	uint32 mode_outmask;
 	uint32 mode_fifoctrl;
+	uint32 mode_toyclksrc;
 	uint32 mode_backlight;
-	uint32 lcdclk;
+	uint32 mode_auxpll;
 #define Xres min_xres
 #define Yres min_yres
 	u32	min_xres;		/* Minimum horizontal resolution */
@@ -380,8 +379,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x00000000,
 		.mode_outmask	= 0x00FFFFFF,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96,
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		320, 320,
 		240, 240,
 	},
@@ -407,8 +407,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x00000000,
 		.mode_outmask	= 0x00FFFFFF,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96,
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		640, 480,
 		640, 480,
 	},
@@ -434,8 +435,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x00000000,
 		.mode_outmask	= 0x00FFFFFF,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96,
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		800, 800,
 		600, 600,
 	},
@@ -461,8 +463,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x00000000,
 		.mode_outmask	= 0x00FFFFFF,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 72,
+		.mode_auxpll		= 6, /* 72MHz AUXPLL */
 		1024, 1024,
 		768, 768,
 	},
@@ -488,8 +491,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x00000000,
 		.mode_outmask	= 0x00FFFFFF,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 120,
+		.mode_auxpll		= 10, /* 120MHz AUXPLL */
 		1280, 1280,
 		1024, 1024,
 	},
@@ -515,8 +519,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x03400000, /* SCB 0x0 */
 		.mode_outmask	= 0x00FFFFFF,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96,
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		1024, 1024,
 		768, 768,
 	},
@@ -545,8 +550,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x03400000,
 		.mode_outmask	= 0x00fcfcfc,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96,
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		640, 480,
 		640, 480,
 	},
@@ -575,8 +581,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x03400000,
 		.mode_outmask	= 0x00fcfcfc,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96, /* 96MHz AUXPLL */
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		320, 320,
 		240, 240,
 	},
@@ -605,8 +612,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x03400000,
 		.mode_outmask	= 0x00fcfcfc,
 		.mode_fifoctrl	= 0x2f2f2f2f,
+		.mode_toyclksrc	= 0x00000004, /* AUXPLL directly */
 		.mode_backlight	= 0x00000000,
-		.lcdclk		= 96,
+		.mode_auxpll		= 8, /* 96MHz AUXPLL */
 		856, 856,
 		480, 480,
 	},
@@ -638,8 +646,9 @@ static struct panel_settings known_lcd_panels[] =
 		.mode_pwmhi		= 0x00000000,
 		.mode_outmask		= 0x00FFFFFF,
 		.mode_fifoctrl		= 0x2f2f2f2f,
+		.mode_toyclksrc		= 0x00000004, /* AUXPLL directly */
 		.mode_backlight		= 0x00000000,
-		.lcdclk			= 96,
+		.mode_auxpll		= (48/12) * 2,
 		800, 800,
 		480, 480,
 	},
@@ -755,7 +764,7 @@ static int au1200_setlocation (struct au1200fb_device *fbdev, int plane,
 
 	/* Disable the window while making changes, then restore WINEN */
 	winenable = lcd->winenable & (1 << plane);
-	wmb(); /* drain writebuffer */
+	au_sync();
 	lcd->winenable &= ~(1 << plane);
 	lcd->window[plane].winctrl0 = winctrl0;
 	lcd->window[plane].winctrl1 = winctrl1;
@@ -763,7 +772,7 @@ static int au1200_setlocation (struct au1200fb_device *fbdev, int plane,
 	lcd->window[plane].winbuf1 = fbdev->fb_phys;
 	lcd->window[plane].winbufctrl = 0; /* select winbuf0 */
 	lcd->winenable |= winenable;
-	wmb(); /* drain writebuffer */
+	au_sync();
 
 	return 0;
 }
@@ -779,21 +788,22 @@ static void au1200_setpanel(struct panel_settings *newpanel,
 	/* Make sure all windows disabled */
 	winenable = lcd->winenable;
 	lcd->winenable = 0;
-	wmb(); /* drain writebuffer */
+	au_sync();
 	/*
 	 * Ensure everything is disabled before reconfiguring
 	 */
 	if (lcd->screen & LCD_SCREEN_SEN) {
 		/* Wait for vertical sync period */
 		lcd->intstatus = LCD_INT_SS;
-		while ((lcd->intstatus & LCD_INT_SS) == 0)
-			;
+		while ((lcd->intstatus & LCD_INT_SS) == 0) {
+			au_sync();
+		}
 
 		lcd->screen &= ~LCD_SCREEN_SEN;	/*disable the controller*/
 
 		do {
 			lcd->intstatus = lcd->intstatus; /*clear interrupts*/
-			wmb(); /* drain writebuffer */
+			au_sync();
 		/*wait for controller to shut down*/
 		} while ((lcd->intstatus & LCD_INT_SD) == 0);
 
@@ -819,17 +829,11 @@ static void au1200_setpanel(struct panel_settings *newpanel,
 	 */
 	if (!(panel->mode_clkcontrol & LCD_CLKCONTROL_EXT))
 	{
-		struct clk *c = clk_get(NULL, "lcd_intclk");
-		long r, pc = panel->lcdclk * 1000000;
-
-		if (!IS_ERR(c)) {
-			r = clk_round_rate(c, pc);
-			if ((pc - r) < (pc / 10)) {	/* 10% slack */
-				clk_set_rate(c, r);
-				clk_prepare_enable(c);
-			}
-			clk_put(c);
-		}
+		uint32 sys_clksrc;
+		au_writel(panel->mode_auxpll, SYS_AUXPLL);
+		sys_clksrc = au_readl(SYS_CLKSRC) & ~0x0000001f;
+		sys_clksrc |= panel->mode_toyclksrc;
+		au_writel(sys_clksrc, SYS_CLKSRC);
 	}
 
 	/*
@@ -843,7 +847,7 @@ static void au1200_setpanel(struct panel_settings *newpanel,
 	lcd->pwmhi = panel->mode_pwmhi;
 	lcd->outmask = panel->mode_outmask;
 	lcd->fifoctrl = panel->mode_fifoctrl;
-	wmb(); /* drain writebuffer */
+	au_sync();
 
 	/* fixme: Check window settings to make sure still valid
 	 * for new geometry */
@@ -859,7 +863,7 @@ static void au1200_setpanel(struct panel_settings *newpanel,
 	 * Re-enable screen now that it is configured
 	 */
 	lcd->screen |= LCD_SCREEN_SEN;
-	wmb(); /* drain writebuffer */
+	au_sync();
 
 	/* Call init of panel */
 	if (pd->panel_init)
@@ -952,7 +956,7 @@ static void au1200_setmode(struct au1200fb_device *fbdev)
 		| LCD_WINCTRL2_SCY_1
 		) ;
 	lcd->winenable |= win->w[plane].mode_winenable;
-	wmb(); /* drain writebuffer */
+	au_sync();
 }
 
 
@@ -1255,6 +1259,7 @@ static void set_global(u_int cmd, struct au1200_lcd_global_regs_t *pdata)
 			pdata->brightness = 30;
 		}
 		divider = (lcd->pwmdiv & 0x3FFFF) + 1;
+		hi1 = (lcd->pwmhi >> 16) + 1;
 		hi1 = (((pdata->brightness & 0xFF)+1) * divider >> 8);
 		lcd->pwmhi &= 0xFFFF;
 		lcd->pwmhi |= (hi1 << 16);
@@ -1265,7 +1270,7 @@ static void set_global(u_int cmd, struct au1200_lcd_global_regs_t *pdata)
 
 	if (pdata->flags & SCREEN_MASK)
 		lcd->colorkeymsk = pdata->mask;
-	wmb(); /* drain writebuffer */
+	au_sync();
 }
 
 static void get_global(u_int cmd, struct au1200_lcd_global_regs_t *pdata)
@@ -1283,7 +1288,7 @@ static void get_global(u_int cmd, struct au1200_lcd_global_regs_t *pdata)
 	hi1 = (lcd->pwmhi >> 16) + 1;
 	divider = (lcd->pwmdiv & 0x3FFFF) + 1;
 	pdata->brightness = ((hi1 << 8) / divider) - 1;
-	wmb(); /* drain writebuffer */
+	au_sync();
 }
 
 static void set_window(unsigned int plane,
@@ -1382,7 +1387,7 @@ static void set_window(unsigned int plane,
 		val |= (pdata->enable & 1) << plane;
 		lcd->winenable = val;
 	}
-	wmb(); /* drain writebuffer */
+	au_sync();
 }
 
 static void get_window(unsigned int plane,
@@ -1409,7 +1414,7 @@ static void get_window(unsigned int plane,
 	pdata->ram_array_mode = (lcd->window[plane].winctrl2 & LCD_WINCTRL2_RAM) >> 21;
 
 	pdata->enable = (lcd->winenable >> plane) & 1;
-	wmb(); /* drain writebuffer */
+	au_sync();
 }
 
 static int au1200fb_ioctl(struct fb_info *info, unsigned int cmd,
@@ -1506,7 +1511,7 @@ static irqreturn_t au1200fb_handle_irq(int irq, void* dev_id)
 {
 	/* Nothing to do for now, just clear any pending interrupt */
 	lcd->intstatus = lcd->intstatus;
-	wmb(); /* drain writebuffer */
+	au_sync();
 
 	return IRQ_HANDLED;
 }
@@ -1804,7 +1809,7 @@ static int au1200fb_drv_suspend(struct device *dev)
 	au1200_setpanel(NULL, pd);
 
 	lcd->outmask = 0;
-	wmb(); /* drain writebuffer */
+	au_sync();
 
 	return 0;
 }
@@ -1842,6 +1847,7 @@ static const struct dev_pm_ops au1200fb_pmops = {
 static struct platform_driver au1200fb_driver = {
 	.driver = {
 		.name	= "au1200-lcd",
+		.owner	= THIS_MODULE,
 		.pm	= AU1200FB_PMOPS,
 	},
 	.probe		= au1200fb_drv_probe,

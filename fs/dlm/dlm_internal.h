@@ -18,6 +18,7 @@
  * This is the main header file to be included in each DLM source file.
  */
 
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/types.h>
@@ -38,7 +39,7 @@
 #include <linux/mutex.h>
 #include <linux/idr.h>
 #include <linux/ratelimit.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <linux/dlm.h>
 #include "config.h"
@@ -64,16 +65,8 @@ struct dlm_mhandle;
 	printk(KERN_ERR "dlm: "fmt"\n" , ##args)
 #define log_error(ls, fmt, args...) \
 	printk(KERN_ERR "dlm: %s: " fmt "\n", (ls)->ls_name , ##args)
-
 #define log_rinfo(ls, fmt, args...) \
-do { \
-	if (dlm_config.ci_log_info) \
-		printk(KERN_INFO "dlm: %s: " fmt "\n", \
-			(ls)->ls_name, ##args); \
-	else if (dlm_config.ci_log_debug) \
-		printk(KERN_DEBUG "dlm: %s: " fmt "\n", \
-		       (ls)->ls_name , ##args); \
-} while (0)
+	printk(KERN_INFO "dlm: %s: " fmt "\n", (ls)->ls_name , ##args);
 
 #define log_debug(ls, fmt, args...) \
 do { \

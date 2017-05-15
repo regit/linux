@@ -60,7 +60,7 @@
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/sn/types.h>
 #include <asm/sn/ioc3.h>
 #include <asm/pci/bridge.h>
@@ -1225,6 +1225,7 @@ static const struct net_device_ops ioc3_netdev_ops = {
 	.ndo_do_ioctl		= ioc3_ioctl,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= ioc3_set_mac_address,
+	.ndo_change_mtu		= eth_change_mtu,
 };
 
 static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
@@ -1383,7 +1384,7 @@ static void ioc3_remove_one(struct pci_dev *pdev)
 	 */
 }
 
-static const struct pci_device_id ioc3_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(ioc3_pci_tbl) = {
 	{ PCI_VENDOR_ID_SGI, PCI_DEVICE_ID_SGI_IOC3, PCI_ANY_ID, PCI_ANY_ID },
 	{ 0 }
 };

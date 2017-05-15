@@ -1,6 +1,3 @@
-/* For the CLR_() macros */
-#include <pthread.h>
-
 #include <sched.h>
 #include "evlist.h"
 #include "evsel.h"
@@ -35,7 +32,7 @@ realloc:
 	return cpu;
 }
 
-int test__PERF_RECORD(int subtest __maybe_unused)
+int test__PERF_RECORD(void)
 {
 	struct record_opts opts = {
 		.target = {
@@ -43,11 +40,12 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 			.uses_mmap = true,
 		},
 		.no_buffering = true,
+		.freq	      = 10,
 		.mmap_pages   = 256,
 	};
 	cpu_set_t cpu_mask;
 	size_t cpu_mask_size = sizeof(cpu_mask);
-	struct perf_evlist *evlist = perf_evlist__new_dummy();
+	struct perf_evlist *evlist = perf_evlist__new_default();
 	struct perf_evsel *evsel;
 	struct perf_sample sample;
 	const char *cmd = "sleep";
@@ -61,10 +59,6 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 	int err = -1, errs = 0, i, wakeups = 0;
 	u32 cpu;
 	int total_events = 0, nr_events[PERF_RECORD_MAX] = { 0, };
-	char sbuf[STRERR_BUFSIZE];
-
-	if (evlist == NULL) /* Fallback for kernels lacking PERF_COUNT_SW_DUMMY */
-		evlist = perf_evlist__new_default();
 
 	if (evlist == NULL || argv == NULL) {
 		pr_debug("Not enough memory to create evlist\n");
@@ -102,12 +96,11 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 	perf_evsel__set_sample_bit(evsel, CPU);
 	perf_evsel__set_sample_bit(evsel, TID);
 	perf_evsel__set_sample_bit(evsel, TIME);
-	perf_evlist__config(evlist, &opts, NULL);
+	perf_evlist__config(evlist, &opts);
 
 	err = sched__get_first_possible_cpu(evlist->workload.pid, &cpu_mask);
 	if (err < 0) {
-		pr_debug("sched__get_first_possible_cpu: %s\n",
-			 str_error_r(errno, sbuf, sizeof(sbuf)));
+		pr_debug("sched__get_first_possible_cpu: %s\n", strerror(errno));
 		goto out_delete_evlist;
 	}
 
@@ -117,8 +110,7 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 	 * So that we can check perf_sample.cpu on all the samples.
 	 */
 	if (sched_setaffinity(evlist->workload.pid, cpu_mask_size, &cpu_mask) < 0) {
-		pr_debug("sched_setaffinity: %s\n",
-			 str_error_r(errno, sbuf, sizeof(sbuf)));
+		pr_debug("sched_setaffinity: %s\n", strerror(errno));
 		goto out_delete_evlist;
 	}
 
@@ -128,8 +120,7 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 	 */
 	err = perf_evlist__open(evlist);
 	if (err < 0) {
-		pr_debug("perf_evlist__open: %s\n",
-			 str_error_r(errno, sbuf, sizeof(sbuf)));
+		pr_debug("perf_evlist__open: %s\n", strerror(errno));
 		goto out_delete_evlist;
 	}
 
@@ -140,8 +131,7 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 	 */
 	err = perf_evlist__mmap(evlist, opts.mmap_pages, false);
 	if (err < 0) {
-		pr_debug("perf_evlist__mmap: %s\n",
-			 str_error_r(errno, sbuf, sizeof(sbuf)));
+		pr_debug("perf_evlist__mmap: %s\n", strerror(errno));
 		goto out_delete_evlist;
 	}
 
@@ -273,7 +263,7 @@ int test__PERF_RECORD(int subtest __maybe_unused)
 		 * perf_event_attr.wakeup_events, just PERF_EVENT_SAMPLE does.
 		 */
 		if (total_events == before && false)
-			perf_evlist__poll(evlist, -1);
+			poll(evlist->pollfd, evlist->nr_fds, -1);
 
 		sleep(1);
 		if (++wakeups > 5) {

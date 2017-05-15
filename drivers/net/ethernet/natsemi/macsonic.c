@@ -190,6 +190,7 @@ static const struct net_device_ops macsonic_netdev_ops = {
 	.ndo_tx_timeout		= sonic_tx_timeout,
 	.ndo_get_stats		= sonic_get_stats,
 	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address	= eth_mac_addr,
 };
 
@@ -325,9 +326,13 @@ static int mac_onboard_sonic_probe(struct net_device *dev)
 	    macintosh_config->ident == MAC_MODEL_P588 ||
 	    macintosh_config->ident == MAC_MODEL_P575 ||
 	    macintosh_config->ident == MAC_MODEL_C610) {
+		unsigned long flags;
 		int card_present;
 
+		local_irq_save(flags);
 		card_present = hwreg_present((void*)ONBOARD_SONIC_REGISTERS);
+		local_irq_restore(flags);
+
 		if (!card_present) {
 			printk("none.\n");
 			return -ENODEV;
@@ -629,6 +634,7 @@ static struct platform_driver mac_sonic_driver = {
 	.remove = mac_sonic_device_remove,
 	.driver	= {
 		.name	= mac_sonic_string,
+		.owner	= THIS_MODULE,
 	},
 };
 

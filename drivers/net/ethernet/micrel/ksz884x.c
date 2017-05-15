@@ -2303,6 +2303,12 @@ static inline int port_chk_force_flow_ctrl(struct ksz_hw *hw, int p)
 
 /* Spanning Tree */
 
+static inline void port_cfg_dis_learn(struct ksz_hw *hw, int p, int set)
+{
+	port_cfg(hw, p,
+		KS8842_PORT_CTRL_2_OFFSET, PORT_LEARN_DISABLE, set);
+}
+
 static inline void port_cfg_rx(struct ksz_hw *hw, int p, int set)
 {
 	port_cfg(hw, p,
@@ -4144,7 +4150,7 @@ static int hw_del_addr(struct ksz_hw *hw, u8 *mac_addr)
 
 	for (i = 0; i < hw->addr_list_size; i++) {
 		if (ether_addr_equal(hw->address[i], mac_addr)) {
-			eth_zero_addr(hw->address[i]);
+			memset(hw->address[i], 0, ETH_ALEN);
 			writel(0, hw->io + ADD_ADDR_INCR * i +
 				KS_ADD_ADDR_0_HI);
 			return 0;
@@ -4342,7 +4348,9 @@ static void ksz_init_timer(struct ksz_timer_info *info, int period,
 {
 	info->max = 0;
 	info->period = period;
-	setup_timer(&info->timer, function, (unsigned long)data);
+	init_timer(&info->timer);
+	info->timer.function = function;
+	info->timer.data = (unsigned long) data;
 }
 
 static void ksz_update_timer(struct ksz_timer_info *info)
@@ -4401,13 +4409,14 @@ static int ksz_alloc_desc(struct dev_info *adapter)
 		DESC_ALIGNMENT;
 
 	adapter->desc_pool.alloc_virt =
-		pci_zalloc_consistent(adapter->pdev,
-				      adapter->desc_pool.alloc_size,
-				      &adapter->desc_pool.dma_addr);
+		pci_alloc_consistent(
+			adapter->pdev, adapter->desc_pool.alloc_size,
+			&adapter->desc_pool.dma_addr);
 	if (adapter->desc_pool.alloc_virt == NULL) {
 		adapter->desc_pool.alloc_size = 0;
 		return 1;
 	}
+	memset(adapter->desc_pool.alloc_virt, 0, adapter->desc_pool.alloc_size);
 
 	/* Align to the next cache line boundary. */
 	offset = (((ulong) adapter->desc_pool.alloc_virt % DESC_ALIGNMENT) ?
@@ -4790,7 +4799,7 @@ static void transmit_cleanup(struct dev_info *hw_priv, int normal)
 
 	/* Notify the network subsystem that the packet has been sent. */
 	if (dev)
-		netif_trans_update(dev);
+		dev->trans_start = jiffies;
 }
 
 /**
@@ -4965,7 +4974,7 @@ static void netdev_tx_timeout(struct net_device *dev)
 		hw_ena_intr(hw);
 	}
 
-	netif_trans_update(dev);
+	dev->trans_start = jiffies;
 	netif_wake_queue(dev);
 }
 
@@ -5807,19 +5816,24 @@ static int netdev_change_mtu(struct net_device *dev, int new_mtu)
 	if (hw->dev_count > 1)
 		if (dev != hw_priv->dev)
 			return 0;
+	if (new_mtu < 60)
+		return -EINVAL;
 
-	hw_mtu = new_mtu + ETHERNET_HEADER_SIZE + 4;
-	if (hw_mtu > REGULAR_RX_BUF_SIZE) {
-		hw->features |= RX_HUGE_FRAME;
-		hw_mtu = MAX_RX_BUF_SIZE;
-	} else {
-		hw->features &= ~RX_HUGE_FRAME;
-		hw_mtu = REGULAR_RX_BUF_SIZE;
+	if (dev->mtu != new_mtu) {
+		hw_mtu = new_mtu + ETHERNET_HEADER_SIZE + 4;
+		if (hw_mtu > MAX_RX_BUF_SIZE)
+			return -EINVAL;
+		if (hw_mtu > REGULAR_RX_BUF_SIZE) {
+			hw->features |= RX_HUGE_FRAME;
+			hw_mtu = MAX_RX_BUF_SIZE;
+		} else {
+			hw->features &= ~RX_HUGE_FRAME;
+			hw_mtu = REGULAR_RX_BUF_SIZE;
+		}
+		hw_mtu = (hw_mtu + 3) & ~3;
+		hw_priv->mtu = hw_mtu;
+		dev->mtu = new_mtu;
 	}
-	hw_mtu = (hw_mtu + 3) & ~3;
-	hw_priv->mtu = hw_mtu;
-	dev->mtu = new_mtu;
-
 	return 0;
 }
 
@@ -6659,7 +6673,7 @@ static void mib_read_work(struct work_struct *work)
 				wake_up_interruptible(
 					&hw_priv->counter[i].counter);
 			}
-		} else if (time_after_eq(jiffies, hw_priv->counter[i].time)) {
+		} else if (jiffies >= hw_priv->counter[i].time) {
 			/* Only read MIB counters when the port is connected. */
 			if (media_connected == mib->state)
 				hw_priv->counter[i].read = 1;
@@ -6684,7 +6698,7 @@ static void mib_monitor(unsigned long ptr)
 
 	/* This is used to verify Wake-on-LAN is working. */
 	if (hw_priv->pme_wait) {
-		if (time_is_before_eq_jiffies(hw_priv->pme_wait)) {
+		if (hw_priv->pme_wait <= jiffies) {
 			hw_clr_wol_pme_status(&hw_priv->hw);
 			hw_priv->pme_wait = 0;
 		}
@@ -7094,12 +7108,6 @@ static int pcidev_init(struct pci_dev *pdev, const struct pci_device_id *id)
 
 		dev->netdev_ops = &netdev_ops;
 		dev->ethtool_ops = &netdev_ethtool_ops;
-
-		/* MTU range: 60 - 1894 */
-		dev->min_mtu = ETH_ZLEN;
-		dev->max_mtu = MAX_RX_BUF_SIZE -
-			       (ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN);
-
 		if (register_netdev(dev))
 			goto pcidev_init_reg_err;
 		port_set_power_saving(port, true);
@@ -7214,7 +7222,7 @@ static int pcidev_suspend(struct pci_dev *pdev, pm_message_t state)
 
 static char pcidev_name[] = "ksz884xp";
 
-static const struct pci_device_id pcidev_table[] = {
+static DEFINE_PCI_DEVICE_TABLE(pcidev_table) = {
 	{ PCI_VENDOR_ID_MICREL_KS, 0x8841,
 		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ PCI_VENDOR_ID_MICREL_KS, 0x8842,

@@ -42,7 +42,7 @@
 #include <linux/crc32.h>
 #include <linux/bitops.h>
 #include <linux/gfp.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #undef DEBUG
 
@@ -376,7 +376,7 @@ static int catc_tx_run(struct catc *catc)
 	catc->tx_idx = !catc->tx_idx;
 	catc->tx_ptr = 0;
 
-	netif_trans_update(catc->netdev);
+	catc->netdev->trans_start = jiffies;
 	return status;
 }
 
@@ -389,7 +389,7 @@ static void catc_tx_done(struct urb *urb)
 	if (status == -ECONNRESET) {
 		dev_dbg(&urb->dev->dev, "Tx Reset.\n");
 		urb->status = 0;
-		netif_trans_update(catc->netdev);
+		catc->netdev->trans_start = jiffies;
 		catc->netdev->stats.tx_errors++;
 		clear_bit(TX_RUNNING, &catc->flags);
 		netif_wake_queue(catc->netdev);
@@ -641,7 +641,7 @@ static void catc_set_multicast_list(struct net_device *netdev)
 	u8 broadcast[ETH_ALEN];
 	u8 rx = RxEnable | RxPolarity | RxMultiCast;
 
-	eth_broadcast_addr(broadcast);
+	memset(broadcast, 0xff, ETH_ALEN);
 	memset(catc->multicast, 0, 64);
 
 	catc_multicast(broadcast, catc->multicast);
@@ -761,6 +761,7 @@ static const struct net_device_ops catc_netdev_ops = {
 
 	.ndo_tx_timeout		= catc_tx_timeout,
 	.ndo_set_rx_mode	= catc_set_multicast_list,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 };
@@ -776,7 +777,7 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	struct net_device *netdev;
 	struct catc *catc;
 	u8 broadcast[ETH_ALEN];
-	int pktsz, ret;
+	int i, pktsz;
 
 	if (usb_set_interface(usbdev,
 			intf->altsetting->desc.bInterfaceNumber, 1)) {
@@ -811,8 +812,12 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	if ((!catc->ctrl_urb) || (!catc->tx_urb) || 
 	    (!catc->rx_urb) || (!catc->irq_urb)) {
 		dev_err(&intf->dev, "No free urbs available.\n");
-		ret = -ENOMEM;
-		goto fail_free;
+		usb_free_urb(catc->ctrl_urb);
+		usb_free_urb(catc->tx_urb);
+		usb_free_urb(catc->rx_urb);
+		usb_free_urb(catc->irq_urb);
+		free_netdev(netdev);
+		return -ENOMEM;
 	}
 
 	/* The F5U011 has the same vendor/product as the netmate but a device version of 0x130 */
@@ -840,24 +845,15 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
                 catc->irq_buf, 2, catc_irq_done, catc, 1);
 
 	if (!catc->is_f5u011) {
-		u32 *buf;
-		int i;
-
 		dev_dbg(dev, "Checking memory size\n");
 
-		buf = kmalloc(4, GFP_KERNEL);
-		if (!buf) {
-			ret = -ENOMEM;
-			goto fail_free;
-		}
-
-		*buf = 0x12345678;
-		catc_write_mem(catc, 0x7a80, buf, 4);
-		*buf = 0x87654321;
-		catc_write_mem(catc, 0xfa80, buf, 4);
-		catc_read_mem(catc, 0x7a80, buf, 4);
+		i = 0x12345678;
+		catc_write_mem(catc, 0x7a80, &i, 4);
+		i = 0x87654321;	
+		catc_write_mem(catc, 0xfa80, &i, 4);
+		catc_read_mem(catc, 0x7a80, &i, 4);
 	  
-		switch (*buf) {
+		switch (i) {
 		case 0x12345678:
 			catc_set_reg(catc, TxBufCount, 8);
 			catc_set_reg(catc, RxBufCount, 32);
@@ -872,8 +868,6 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 			dev_dbg(dev, "32k Memory\n");
 			break;
 		}
-
-		kfree(buf);
 	  
 		dev_dbg(dev, "Getting MAC from SEEROM.\n");
 	  
@@ -886,7 +880,7 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 		
 		dev_dbg(dev, "Filling the multicast list.\n");
 	  
-		eth_broadcast_addr(broadcast);
+		memset(broadcast, 0xff, ETH_ALEN);
 		catc_multicast(broadcast, catc->multicast);
 		catc_multicast(netdev->dev_addr, catc->multicast);
 		catc_write_mem(catc, 0xfa80, catc->multicast, 64);
@@ -920,21 +914,16 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	usb_set_intfdata(intf, catc);
 
 	SET_NETDEV_DEV(netdev, &intf->dev);
-	ret = register_netdev(netdev);
-	if (ret)
-		goto fail_clear_intfdata;
-
+	if (register_netdev(netdev) != 0) {
+		usb_set_intfdata(intf, NULL);
+		usb_free_urb(catc->ctrl_urb);
+		usb_free_urb(catc->tx_urb);
+		usb_free_urb(catc->rx_urb);
+		usb_free_urb(catc->irq_urb);
+		free_netdev(netdev);
+		return -EIO;
+	}
 	return 0;
-
-fail_clear_intfdata:
-	usb_set_intfdata(intf, NULL);
-fail_free:
-	usb_free_urb(catc->ctrl_urb);
-	usb_free_urb(catc->tx_urb);
-	usb_free_urb(catc->rx_urb);
-	usb_free_urb(catc->irq_urb);
-	free_netdev(netdev);
-	return ret;
 }
 
 static void catc_disconnect(struct usb_interface *intf)

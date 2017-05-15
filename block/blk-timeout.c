@@ -90,7 +90,10 @@ static void blk_rq_timed_out(struct request *req)
 	switch (ret) {
 	case BLK_EH_HANDLED:
 		/* Can we use req->errors here? */
-		__blk_complete_request(req);
+		if (q->mq_ops)
+			__blk_mq_complete_request(req);
+		else
+			__blk_complete_request(req);
 		break;
 	case BLK_EH_RESET_TIMER:
 		blk_add_timer(req);
@@ -110,7 +113,7 @@ static void blk_rq_timed_out(struct request *req)
 	}
 }
 
-static void blk_rq_check_expired(struct request *rq, unsigned long *next_timeout,
+void blk_rq_check_expired(struct request *rq, unsigned long *next_timeout,
 			  unsigned int *next_set)
 {
 	if (time_after_eq(jiffies, rq->deadline)) {
@@ -127,16 +130,13 @@ static void blk_rq_check_expired(struct request *rq, unsigned long *next_timeout
 	}
 }
 
-void blk_timeout_work(struct work_struct *work)
+void blk_rq_timed_out_timer(unsigned long data)
 {
-	struct request_queue *q =
-		container_of(work, struct request_queue, timeout_work);
+	struct request_queue *q = (struct request_queue *) data;
 	unsigned long flags, next = 0;
 	struct request *rq, *tmp;
 	int next_set = 0;
 
-	if (blk_queue_enter(q, true))
-		return;
 	spin_lock_irqsave(q->queue_lock, flags);
 
 	list_for_each_entry_safe(rq, tmp, &q->timeout_list, timeout_list)
@@ -146,7 +146,6 @@ void blk_timeout_work(struct work_struct *work)
 		mod_timer(&q->timeout, round_jiffies_up(next));
 
 	spin_unlock_irqrestore(q->queue_lock, flags);
-	blk_queue_exit(q);
 }
 
 /**
@@ -162,13 +161,8 @@ void blk_abort_request(struct request *req)
 {
 	if (blk_mark_rq_complete(req))
 		return;
-
-	if (req->q->mq_ops) {
-		blk_mq_rq_timed_out(req, false);
-	} else {
-		blk_delete_timer(req);
-		blk_rq_timed_out(req);
-	}
+	blk_delete_timer(req);
+	blk_rq_timed_out(req);
 }
 EXPORT_SYMBOL_GPL(blk_abort_request);
 
@@ -190,15 +184,13 @@ unsigned long blk_rq_timeout(unsigned long timeout)
  * Notes:
  *    Each request has its own timer, and as it is added to the queue, we
  *    set up the timer. When the request completes, we cancel the timer.
- *    Queue lock must be held for the non-mq case, mq case doesn't care.
  */
 void blk_add_timer(struct request *req)
 {
 	struct request_queue *q = req->q;
 	unsigned long expiry;
 
-	/* blk-mq has its own handler, so we don't need ->rq_timed_out_fn */
-	if (!q->mq_ops && !q->rq_timed_out_fn)
+	if (!q->rq_timed_out_fn)
 		return;
 
 	BUG_ON(!list_empty(&req->timeout_list));
@@ -211,11 +203,6 @@ void blk_add_timer(struct request *req)
 		req->timeout = q->rq_timeout;
 
 	req->deadline = jiffies + req->timeout;
-
-	/*
-	 * Only the non-mq case needs to add the request to a protected list.
-	 * For the mq case we simply scan the tag map.
-	 */
 	if (!q->mq_ops)
 		list_add_tail(&req->timeout_list, &req->q->timeout_list);
 

@@ -7,11 +7,11 @@
 #include <linux/kernel.h>
 #include <linux/miscdevice.h>
 #include <linux/fcntl.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/fs.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/sections.h>
 #include <asm/prom.h>
 #include <asm/io.h>

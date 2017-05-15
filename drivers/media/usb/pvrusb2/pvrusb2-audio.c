@@ -23,7 +23,7 @@
 #include "pvrusb2-hdw-internal.h"
 #include "pvrusb2-debug.h"
 #include <linux/videodev2.h>
-#include <media/drv-intf/msp3400.h>
+#include <media/msp3400.h>
 #include <media/v4l2-common.h>
 
 
@@ -74,7 +74,9 @@ void pvr2_msp3400_subdev_update(struct pvr2_hdw *hdw, struct v4l2_subdev *sd)
 			input = sp->def[hdw->input_val];
 		} else {
 			pvr2_trace(PVR2_TRACE_ERROR_LEGS,
-				   "*** WARNING *** subdev msp3400 set_input: Invalid routing scheme (%u) and/or input (%d)",
+				   "*** WARNING *** subdev msp3400 set_input:"
+				   " Invalid routing scheme (%u)"
+				   " and/or input (%d)",
 				   sid, hdw->input_val);
 			return;
 		}
@@ -82,3 +84,13 @@ void pvr2_msp3400_subdev_update(struct pvr2_hdw *hdw, struct v4l2_subdev *sd)
 			MSP_OUTPUT(MSP_SC_IN_DSP_SCART1), 0);
 	}
 }
+
+/*
+  Stuff for Emacs to see, in order to encourage consistent editing style:
+  *** Local Variables: ***
+  *** mode: c ***
+  *** fill-column: 70 ***
+  *** tab-width: 8 ***
+  *** c-basic-offset: 8 ***
+  *** End: ***
+  */

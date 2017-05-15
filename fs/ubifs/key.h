@@ -34,12 +34,6 @@
  * node. We use "r5" hash borrowed from reiserfs.
  */
 
-/*
- * Lot's of the key helpers require a struct ubifs_info *c as the first parameter.
- * But we are not using it at all currently. That's designed for future extensions of
- * different c->key_format. But right now, there is only one key type, UBIFS_SIMPLE_KEY_FMT.
- */
-
 #ifndef __UBIFS_KEY_H__
 #define __UBIFS_KEY_H__
 
@@ -69,7 +63,7 @@ static inline uint32_t key_r5_hash(const char *s, int len)
 	uint32_t a = 0;
 	const signed char *str = (const signed char *)s;
 
-	while (len--) {
+	while (*str) {
 		a += *str << 4;
 		a += *str >> 4;
 		a *= 11;
@@ -153,13 +147,13 @@ static inline void highest_ino_key(const struct ubifs_info *c,
  * @c: UBIFS file-system description object
  * @key: key to initialize
  * @inum: parent inode number
- * @nm: direntry name and length. Not a string when encrypted!
+ * @nm: direntry name and length
  */
 static inline void dent_key_init(const struct ubifs_info *c,
 				 union ubifs_key *key, ino_t inum,
-				 const struct fscrypt_name *nm)
+				 const struct qstr *nm)
 {
-	uint32_t hash = c->key_hash(fname_name(nm), fname_len(nm));
+	uint32_t hash = c->key_hash(nm->name, nm->len);
 
 	ubifs_assert(!(hash & ~UBIFS_S_KEY_HASH_MASK));
 	key->u32[0] = inum;
@@ -191,11 +185,10 @@ static inline void dent_key_init_hash(const struct ubifs_info *c,
  * @nm: direntry name and length
  */
 static inline void dent_key_init_flash(const struct ubifs_info *c, void *k,
-				       ino_t inum,
-				       const struct fscrypt_name *nm)
+				       ino_t inum, const struct qstr *nm)
 {
 	union ubifs_key *key = k;
-	uint32_t hash = c->key_hash(fname_name(nm), fname_len(nm));
+	uint32_t hash = c->key_hash(nm->name, nm->len);
 
 	ubifs_assert(!(hash & ~UBIFS_S_KEY_HASH_MASK));
 	key->j32[0] = cpu_to_le32(inum);
@@ -226,9 +219,9 @@ static inline void lowest_dent_key(const struct ubifs_info *c,
  */
 static inline void xent_key_init(const struct ubifs_info *c,
 				 union ubifs_key *key, ino_t inum,
-				 const struct fscrypt_name *nm)
+				 const struct qstr *nm)
 {
-	uint32_t hash = c->key_hash(fname_name(nm), fname_len(nm));
+	uint32_t hash = c->key_hash(nm->name, nm->len);
 
 	ubifs_assert(!(hash & ~UBIFS_S_KEY_HASH_MASK));
 	key->u32[0] = inum;
@@ -243,10 +236,10 @@ static inline void xent_key_init(const struct ubifs_info *c,
  * @nm: extended attribute entry name and length
  */
 static inline void xent_key_init_flash(const struct ubifs_info *c, void *k,
-				       ino_t inum, const struct fscrypt_name *nm)
+				       ino_t inum, const struct qstr *nm)
 {
 	union ubifs_key *key = k;
-	uint32_t hash = c->key_hash(fname_name(nm), fname_len(nm));
+	uint32_t hash = c->key_hash(nm->name, nm->len);
 
 	ubifs_assert(!(hash & ~UBIFS_S_KEY_HASH_MASK));
 	key->j32[0] = cpu_to_le32(inum);

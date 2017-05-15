@@ -51,7 +51,7 @@ static struct drm_driver driver;
 	.subdevice = PCI_ANY_ID,		\
 	.driver_data = (unsigned long) info }
 
-static const struct pci_device_id pciidlist[] = {
+static DEFINE_PCI_DEVICE_TABLE(pciidlist) = {
 	AST_VGA_DEVICE(PCI_CHIP_AST2000, NULL),
 	AST_VGA_DEVICE(PCI_CHIP_AST2100, NULL),
 	/*	AST_VGA_DEVICE(PCI_CHIP_AST1180, NULL), - don't bind to 1180 for now */
@@ -188,7 +188,9 @@ static const struct file_operations ast_fops = {
 	.unlocked_ioctl = drm_ioctl,
 	.mmap = ast_mmap,
 	.poll = drm_poll,
+#ifdef CONFIG_COMPAT
 	.compat_ioctl = drm_compat_ioctl,
+#endif
 	.read = drm_read,
 };
 
@@ -197,7 +199,6 @@ static struct drm_driver driver = {
 
 	.load = ast_driver_load,
 	.unload = ast_driver_unload,
-	.set_busid = drm_pci_set_busid,
 
 	.fops = &ast_fops,
 	.name = DRIVER_NAME,
@@ -207,7 +208,7 @@ static struct drm_driver driver = {
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 
-	.gem_free_object_unlocked = ast_gem_free_object,
+	.gem_free_object = ast_gem_free_object,
 	.dumb_create = ast_dumb_create,
 	.dumb_map_offset = ast_dumb_mmap_offset,
 	.dumb_destroy = drm_gem_dumb_destroy,
@@ -216,8 +217,10 @@ static struct drm_driver driver = {
 
 static int __init ast_init(void)
 {
+#ifdef CONFIG_VGA_CONSOLE
 	if (vgacon_text_force() && ast_modeset == -1)
 		return -EINVAL;
+#endif
 
 	if (ast_modeset == 0)
 		return -EINVAL;

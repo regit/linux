@@ -270,6 +270,7 @@ static void pci200_pci_remove_one(struct pci_dev *pdev)
 static const struct net_device_ops pci200_ops = {
 	.ndo_open       = pci200_open,
 	.ndo_stop       = pci200_close,
+	.ndo_change_mtu = hdlc_change_mtu,
 	.ndo_start_xmit = hdlc_start_xmit,
 	.ndo_do_ioctl   = pci200_ioctl,
 };
@@ -413,7 +414,7 @@ static int pci200_pci_init_one(struct pci_dev *pdev,
 
 
 
-static const struct pci_device_id pci200_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(pci200_pci_tbl) = {
 	{ PCI_VENDOR_ID_PLX, PCI_DEVICE_ID_PLX_9050, PCI_VENDOR_ID_PLX,
 	  PCI_DEVICE_ID_PLX_PCI200SYN, 0, 0, 0 },
 	{ 0, }

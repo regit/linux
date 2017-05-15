@@ -45,14 +45,6 @@ static const struct vio_device_id *vio_match_device(
 	return NULL;
 }
 
-static int vio_hotplug(struct device *dev, struct kobj_uevent_env *env)
-{
-	const struct vio_dev *vio_dev = to_vio_dev(dev);
-
-	add_uevent_var(env, "MODALIAS=vio:T%sS%s", vio_dev->type, vio_dev->compat);
-	return 0;
-}
-
 static int vio_bus_match(struct device *dev, struct device_driver *drv)
 {
 	struct vio_dev *vio_dev = to_vio_dev(dev);
@@ -113,25 +105,15 @@ static ssize_t type_show(struct device *dev,
 	return sprintf(buf, "%s\n", vdev->type);
 }
 
-static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
-			     char *buf)
-{
-	const struct vio_dev *vdev = to_vio_dev(dev);
-
-	return sprintf(buf, "vio:T%sS%s\n", vdev->type, vdev->compat);
-}
-
 static struct device_attribute vio_dev_attrs[] = {
 	__ATTR_RO(devspec),
 	__ATTR_RO(type),
-	__ATTR_RO(modalias),
 	__ATTR_NULL
 };
 
 static struct bus_type vio_bus_type = {
 	.name		= "vio",
 	.dev_attrs	= vio_dev_attrs,
-	.uevent         = vio_hotplug,
 	.match		= vio_bus_match,
 	.probe		= vio_device_probe,
 	.remove		= vio_device_remove,
@@ -198,25 +180,14 @@ static void vio_fill_channel_info(struct mdesc_handle *hp, u64 mp,
 			vdev->tx_irq = sun4v_build_virq(cdev_cfg_handle, *irq);
 
 		irq = mdesc_get_property(hp, target, "rx-ino", NULL);
-		if (irq) {
+		if (irq)
 			vdev->rx_irq = sun4v_build_virq(cdev_cfg_handle, *irq);
-			vdev->rx_ino = *irq;
-		}
 
 		chan_id = mdesc_get_property(hp, target, "id", NULL);
 		if (chan_id)
 			vdev->channel_id = *chan_id;
 	}
 }
-
-int vio_set_intr(unsigned long dev_ino, int state)
-{
-	int err;
-
-	err = sun4v_vintr_set_valid(cdev_cfg_handle, dev_ino, state);
-	return err;
-}
-EXPORT_SYMBOL(vio_set_intr);
 
 static struct vio_dev *vio_create_one(struct mdesc_handle *hp, u64 mp,
 				      struct device *parent)

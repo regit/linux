@@ -28,7 +28,7 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/ioctl.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/i2c.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
@@ -356,6 +356,7 @@ MODULE_DEVICE_TABLE(i2c, saa7185_id);
 
 static struct i2c_driver saa7185_driver = {
 	.driver = {
+		.owner	= THIS_MODULE,
 		.name	= "saa7185",
 	},
 	.probe		= saa7185_probe,

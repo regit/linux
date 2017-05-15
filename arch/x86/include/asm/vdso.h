@@ -13,18 +13,20 @@ struct vdso_image {
 	void *data;
 	unsigned long size;   /* Always a multiple of PAGE_SIZE */
 
+	/* text_mapping.pages is big enough for data/size page pointers */
+	struct vm_special_mapping text_mapping;
+
 	unsigned long alt, alt_len;
 
-	long sym_vvar_start;  /* Negative offset to the vvar area */
+	unsigned long sym_end_mapping;  /* Total size of the mapping */
 
-	long sym_vvar_page;
-	long sym_hpet_page;
-	long sym_pvclock_page;
-	long sym_VDSO32_NOTE_MASK;
-	long sym___kernel_sigreturn;
-	long sym___kernel_rt_sigreturn;
-	long sym___kernel_vsyscall;
-	long sym_int80_landing_pad;
+	unsigned long sym_vvar_page;
+	unsigned long sym_hpet_page;
+	unsigned long sym_VDSO32_NOTE_MASK;
+	unsigned long sym___kernel_sigreturn;
+	unsigned long sym___kernel_rt_sigreturn;
+	unsigned long sym___kernel_vsyscall;
+	unsigned long sym_VDSO32_SYSENTER_RETURN;
 };
 
 #ifdef CONFIG_X86_64
@@ -36,12 +38,16 @@ extern const struct vdso_image vdso_image_x32;
 #endif
 
 #if defined CONFIG_X86_32 || defined CONFIG_COMPAT
-extern const struct vdso_image vdso_image_32;
+extern const struct vdso_image vdso_image_32_int80;
+#ifdef CONFIG_COMPAT
+extern const struct vdso_image vdso_image_32_syscall;
+#endif
+extern const struct vdso_image vdso_image_32_sysenter;
+
+extern const struct vdso_image *selected_vdso32;
 #endif
 
 extern void __init init_vdso_image(const struct vdso_image *image);
-
-extern int map_vdso_once(const struct vdso_image *image, unsigned long addr);
 
 #endif /* __ASSEMBLER__ */
 

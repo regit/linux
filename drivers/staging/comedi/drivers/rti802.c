@@ -20,7 +20,7 @@
  * Driver: rti802
  * Description: Analog Devices RTI-802
  * Author: Anders Blomdell <anders.blomdell@control.lth.se>
- * Devices: [Analog Devices] RTI-802 (rti802)
+ * Devices: (Analog Devices) RTI-802 [rti802]
  * Status: works
  *
  * Configuration Options:
@@ -45,7 +45,23 @@ struct rti802_private {
 		dac_2comp, dac_straight
 	} dac_coding[8];
 	const struct comedi_lrange *range_type_list[8];
+	unsigned int ao_readback[8];
 };
+
+static int rti802_ao_insn_read(struct comedi_device *dev,
+			       struct comedi_subdevice *s,
+			       struct comedi_insn *insn,
+			       unsigned int *data)
+{
+	struct rti802_private *devpriv = dev->private;
+	unsigned int chan = CR_CHAN(insn->chanspec);
+	int i;
+
+	for (i = 0; i < insn->n; i++)
+		data[i] = devpriv->ao_readback[chan];
+
+	return insn->n;
+}
 
 static int rti802_ao_insn_write(struct comedi_device *dev,
 				struct comedi_subdevice *s,
@@ -54,14 +70,15 @@ static int rti802_ao_insn_write(struct comedi_device *dev,
 {
 	struct rti802_private *devpriv = dev->private;
 	unsigned int chan = CR_CHAN(insn->chanspec);
+	unsigned int val;
 	int i;
 
 	outb(chan, dev->iobase + RTI802_SELECT);
 
 	for (i = 0; i < insn->n; i++) {
-		unsigned int val = data[i];
+		val = data[i];
 
-		s->readback[chan] = val;
+		devpriv->ao_readback[chan] = val;
 
 		/* munge offset binary to two's complement if needed */
 		if (devpriv->dac_coding[chan] == dac_2comp)
@@ -99,13 +116,10 @@ static int rti802_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	s->subdev_flags	= SDF_WRITABLE;
 	s->maxdata	= 0xfff;
 	s->n_chan	= 8;
+	s->insn_read	= rti802_ao_insn_read;
 	s->insn_write	= rti802_ao_insn_write;
-
-	ret = comedi_alloc_subdev_readback(s);
-	if (ret)
-		return ret;
-
 	s->range_table_list = devpriv->range_type_list;
+
 	for (i = 0; i < 8; i++) {
 		devpriv->dac_coding[i] = (it->options[3 + 2 * i])
 			? (dac_straight) : (dac_2comp);

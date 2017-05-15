@@ -9,13 +9,14 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/err.h>
+
+#include <mach/addr-map.h>
 
 #include "clk.h"
 
@@ -46,7 +47,7 @@
 
 static DEFINE_SPINLOCK(clk_lock);
 
-static struct mmp_clk_factor_masks uart_factor_masks = {
+static struct clk_factor_masks uart_factor_masks = {
 	.factor = 2,
 	.num_mask = 0x1fff,
 	.den_mask = 0x1fff,
@@ -54,7 +55,7 @@ static struct mmp_clk_factor_masks uart_factor_masks = {
 	.den_shift = 0,
 };
 
-static struct mmp_clk_factor_tbl uart_factor_tbl[] = {
+static struct clk_factor_tbl uart_factor_tbl[] = {
 	{.num = 8125, .den = 1536},	/*14.745MHZ */
 };
 
@@ -65,8 +66,7 @@ static const char *disp_parent[] = {"pll1_2", "pll1_12"};
 static const char *ccic_parent[] = {"pll1_2", "pll1_12"};
 static const char *ccic_phy_parent[] = {"pll1_6", "pll1_12"};
 
-void __init pxa168_clk_init(phys_addr_t mpmu_phys, phys_addr_t apmu_phys,
-			    phys_addr_t apbc_phys)
+void __init pxa168_clk_init(void)
 {
 	struct clk *clk;
 	struct clk *uart_pll;
@@ -74,31 +74,33 @@ void __init pxa168_clk_init(phys_addr_t mpmu_phys, phys_addr_t apmu_phys,
 	void __iomem *apmu_base;
 	void __iomem *apbc_base;
 
-	mpmu_base = ioremap(mpmu_phys, SZ_4K);
+	mpmu_base = ioremap(APB_PHYS_BASE + 0x50000, SZ_4K);
 	if (mpmu_base == NULL) {
 		pr_err("error to ioremap MPMU base\n");
 		return;
 	}
 
-	apmu_base = ioremap(apmu_phys, SZ_4K);
+	apmu_base = ioremap(AXI_PHYS_BASE + 0x82800, SZ_4K);
 	if (apmu_base == NULL) {
 		pr_err("error to ioremap APMU base\n");
 		return;
 	}
 
-	apbc_base = ioremap(apbc_phys, SZ_4K);
+	apbc_base = ioremap(APB_PHYS_BASE + 0x15000, SZ_4K);
 	if (apbc_base == NULL) {
 		pr_err("error to ioremap APBC base\n");
 		return;
 	}
 
-	clk = clk_register_fixed_rate(NULL, "clk32", NULL, 0, 3200);
+	clk = clk_register_fixed_rate(NULL, "clk32", NULL, CLK_IS_ROOT, 3200);
 	clk_register_clkdev(clk, "clk32", NULL);
 
-	clk = clk_register_fixed_rate(NULL, "vctcxo", NULL, 0, 26000000);
+	clk = clk_register_fixed_rate(NULL, "vctcxo", NULL, CLK_IS_ROOT,
+				26000000);
 	clk_register_clkdev(clk, "vctcxo", NULL);
 
-	clk = clk_register_fixed_rate(NULL, "pll1", NULL, 0, 624000000);
+	clk = clk_register_fixed_rate(NULL, "pll1", NULL, CLK_IS_ROOT,
+				624000000);
 	clk_register_clkdev(clk, "pll1", NULL);
 
 	clk = clk_register_fixed_factor(NULL, "pll1_2", "pll1",
@@ -156,7 +158,7 @@ void __init pxa168_clk_init(phys_addr_t mpmu_phys, phys_addr_t apmu_phys,
 	uart_pll = mmp_clk_register_factor("uart_pll", "pll1_4", 0,
 				mpmu_base + MPMU_UART_PLL,
 				&uart_factor_masks, uart_factor_tbl,
-				ARRAY_SIZE(uart_factor_tbl), &clk_lock);
+				ARRAY_SIZE(uart_factor_tbl));
 	clk_set_rate(uart_pll, 14745600);
 	clk_register_clkdev(uart_pll, "uart_pll", NULL);
 

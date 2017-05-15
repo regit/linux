@@ -71,8 +71,8 @@ static int aic26_hw_params(struct snd_pcm_substream *substream,
 
 	dev_dbg(&aic26->spi->dev, "aic26_hw_params(substream=%p, params=%p)\n",
 		substream, params);
-	dev_dbg(&aic26->spi->dev, "rate=%i width=%d\n", params_rate(params),
-		params_width(params));
+	dev_dbg(&aic26->spi->dev, "rate=%i format=%i\n", params_rate(params),
+		params_format(params));
 
 	switch (params_rate(params)) {
 	case 8000:  fsref = 48000; divisor = AIC26_DIV_6; break;
@@ -89,11 +89,11 @@ static int aic26_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	/* select data word length */
-	switch (params_width(params)) {
-	case 8:  wlen = AIC26_WLEN_16; break;
-	case 16: wlen = AIC26_WLEN_16; break;
-	case 24: wlen = AIC26_WLEN_24; break;
-	case 32: wlen = AIC26_WLEN_32; break;
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S8:     wlen = AIC26_WLEN_16; break;
+	case SNDRV_PCM_FORMAT_S16_BE: wlen = AIC26_WLEN_16; break;
+	case SNDRV_PCM_FORMAT_S24_BE: wlen = AIC26_WLEN_24; break;
+	case SNDRV_PCM_FORMAT_S32_BE: wlen = AIC26_WLEN_32; break;
 	default:
 		dev_dbg(&aic26->spi->dev, "bad format\n"); return -EINVAL;
 	}
@@ -321,14 +321,12 @@ static int aic26_probe(struct snd_soc_codec *codec)
 
 static struct snd_soc_codec_driver aic26_soc_codec_dev = {
 	.probe = aic26_probe,
-	.component_driver = {
-		.controls		= aic26_snd_controls,
-		.num_controls		= ARRAY_SIZE(aic26_snd_controls),
-		.dapm_widgets		= tlv320aic26_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(tlv320aic26_dapm_widgets),
-		.dapm_routes		= tlv320aic26_dapm_routes,
-		.num_dapm_routes	= ARRAY_SIZE(tlv320aic26_dapm_routes),
-	},
+	.controls = aic26_snd_controls,
+	.num_controls = ARRAY_SIZE(aic26_snd_controls),
+	.dapm_widgets = tlv320aic26_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(tlv320aic26_dapm_widgets),
+	.dapm_routes = tlv320aic26_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(tlv320aic26_dapm_routes),
 };
 
 static const struct regmap_config aic26_regmap = {
@@ -375,6 +373,7 @@ static int aic26_spi_remove(struct spi_device *spi)
 static struct spi_driver aic26_spi = {
 	.driver = {
 		.name = "tlv320aic26-codec",
+		.owner = THIS_MODULE,
 	},
 	.probe = aic26_spi_probe,
 	.remove = aic26_spi_remove,

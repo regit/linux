@@ -167,17 +167,17 @@ static int si476x_codec_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	switch (params_width(params)) {
-	case 8:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S8:
 		width = SI476X_PCM_FORMAT_S8;
 		break;
-	case 16:
+	case SNDRV_PCM_FORMAT_S16_LE:
 		width = SI476X_PCM_FORMAT_S16_LE;
 		break;
-	case 20:
+	case SNDRV_PCM_FORMAT_S20_3LE:
 		width = SI476X_PCM_FORMAT_S20_3LE;
 		break;
-	case 24:
+	case SNDRV_PCM_FORMAT_S24_LE:
 		width = SI476X_PCM_FORMAT_S24_LE;
 		break;
 	default:
@@ -208,7 +208,7 @@ out:
 	return err;
 }
 
-static const struct snd_soc_dai_ops si476x_dai_ops = {
+static struct snd_soc_dai_ops si476x_dai_ops = {
 	.hw_params	= si476x_codec_hw_params,
 	.set_fmt	= si476x_codec_set_dai_fmt,
 };
@@ -238,12 +238,10 @@ static struct regmap *si476x_get_regmap(struct device *dev)
 
 static struct snd_soc_codec_driver soc_codec_dev_si476x = {
 	.get_regmap = si476x_get_regmap,
-	.component_driver = {
-		.dapm_widgets		= si476x_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(si476x_dapm_widgets),
-		.dapm_routes		= si476x_dapm_routes,
-		.num_dapm_routes	= ARRAY_SIZE(si476x_dapm_routes),
-	},
+	.dapm_widgets = si476x_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(si476x_dapm_widgets),
+	.dapm_routes = si476x_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(si476x_dapm_routes),
 };
 
 static int si476x_platform_probe(struct platform_device *pdev)
@@ -263,6 +261,7 @@ MODULE_ALIAS("platform:si476x-codec");
 static struct platform_driver si476x_platform_driver = {
 	.driver		= {
 		.name	= "si476x-codec",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= si476x_platform_probe,
 	.remove		= si476x_platform_remove,

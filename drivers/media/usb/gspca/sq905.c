@@ -41,7 +41,8 @@
 #include <linux/slab.h>
 #include "gspca.h"
 
-MODULE_AUTHOR("Adam Baker <linux@baker-net.org.uk>, Theodore Kilgore <kilgota@auburn.edu>");
+MODULE_AUTHOR("Adam Baker <linux@baker-net.org.uk>, "
+		"Theodore Kilgore <kilgota@auburn.edu>");
 MODULE_DESCRIPTION("GSPCA/SQ905 USB Camera Driver");
 MODULE_LICENSE("GPL");
 

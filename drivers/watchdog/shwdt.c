@@ -230,6 +230,10 @@ static int sh_wdt_probe(struct platform_device *pdev)
 	if (pdev->id != -1)
 		return -EINVAL;
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (unlikely(!res))
+		return -EINVAL;
+
 	wdt = devm_kzalloc(&pdev->dev, sizeof(struct sh_wdt), GFP_KERNEL);
 	if (unlikely(!wdt))
 		return -ENOMEM;
@@ -245,14 +249,12 @@ static int sh_wdt_probe(struct platform_device *pdev)
 		wdt->clk = NULL;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	wdt->base = devm_ioremap_resource(wdt->dev, res);
 	if (IS_ERR(wdt->base))
 		return PTR_ERR(wdt->base);
 
 	watchdog_set_nowayout(&sh_wdt_dev, nowayout);
 	watchdog_set_drvdata(&sh_wdt_dev, wdt);
-	sh_wdt_dev.parent = &pdev->dev;
 
 	spin_lock_init(&wdt->lock);
 
@@ -275,7 +277,9 @@ static int sh_wdt_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	setup_timer(&wdt->timer, sh_wdt_ping, (unsigned long)wdt);
+	init_timer(&wdt->timer);
+	wdt->timer.function	= sh_wdt_ping;
+	wdt->timer.data		= (unsigned long)wdt;
 	wdt->timer.expires	= next_ping_period(clock_division_ratio);
 
 	dev_info(&pdev->dev, "initialized.\n");
@@ -302,6 +306,7 @@ static void sh_wdt_shutdown(struct platform_device *pdev)
 static struct platform_driver sh_wdt_driver = {
 	.driver		= {
 		.name	= DRV_NAME,
+		.owner	= THIS_MODULE,
 	},
 
 	.probe		= sh_wdt_probe,

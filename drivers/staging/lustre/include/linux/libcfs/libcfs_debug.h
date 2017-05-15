@@ -15,7 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.gnu.org/licenses/gpl-2.0.html
+ * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
+ * CA 95054 USA or visit www.sun.com if you need additional information or
+ * have any questions.
  *
  * GPL HEADER END
  */
@@ -46,6 +50,7 @@ extern unsigned int libcfs_stack;
 extern unsigned int libcfs_debug;
 extern unsigned int libcfs_printk;
 extern unsigned int libcfs_console_ratelimit;
+extern unsigned int libcfs_watchdog_ratelimit;
 extern unsigned int libcfs_console_max_delay;
 extern unsigned int libcfs_console_min_delay;
 extern unsigned int libcfs_console_backoff;
@@ -69,18 +74,18 @@ struct ptldebug_header {
 	__u32 ph_mask;
 	__u16 ph_cpu_id;
 	__u16 ph_type;
-	/* time_t overflow in 2106 */
 	__u32 ph_sec;
 	__u64 ph_usec;
 	__u32 ph_stack;
 	__u32 ph_pid;
 	__u32 ph_extern_pid;
 	__u32 ph_line_num;
-} __packed;
+} __attribute__((packed));
 
 #define PH_FLAG_FIRST_RECORD 1
 
 /* Debugging subsystems (32 bits, non-overlapping) */
+/* keep these in sync with lnet/utils/debug.c and lnet/libcfs/debug.c */
 #define S_UNDEFINED	0x00000001
 #define S_MDC		0x00000002
 #define S_MDS		0x00000004
@@ -101,7 +106,7 @@ struct ptldebug_header {
 #define S_LOV		0x00020000
 #define S_LQUOTA	0x00040000
 #define S_OSD		0x00080000
-#define S_LFSCK		0x00100000
+/* unused */
 /* unused */
 /* unused */
 #define S_LMV		0x00800000 /* b_new_cmd */
@@ -113,14 +118,10 @@ struct ptldebug_header {
 #define S_MGS		0x20000000
 #define S_FID		0x40000000 /* b_new_cmd */
 #define S_FLD		0x80000000 /* b_new_cmd */
-
-#define LIBCFS_DEBUG_SUBSYS_NAMES {					\
-	"undefined", "mdc", "mds", "osc", "ost", "class", "log",	\
-	"llite", "rpc", "mgmt", "lnet", "lnd", "pinger", "filter", "",	\
-	"echo", "ldlm", "lov", "lquota", "osd", "lfsck", "", "", "lmv",	\
-	"", "sec", "gss", "", "mgc", "mgs", "fid", "fld", NULL }
+/* keep these in sync with lnet/utils/debug.c and lnet/libcfs/debug.c */
 
 /* Debugging masks (32 bits, non-overlapping) */
+/* keep these in sync with lnet/utils/debug.c and lnet/libcfs/debug.c */
 #define D_TRACE		0x00000001 /* ENTRY/EXIT markers */
 #define D_INODE		0x00000002
 #define D_SUPER		0x00000004
@@ -150,14 +151,9 @@ struct ptldebug_header {
 #define D_QUOTA		0x04000000
 #define D_SEC		0x08000000
 #define D_LFSCK		0x10000000 /* For both OI scrub and LFSCK */
-#define D_HSM		0x20000000
+/* keep these in sync with lnet/{utils,libcfs}/debug.c */
 
-#define LIBCFS_DEBUG_MASKS_NAMES {					\
-	"trace", "inode", "super", "ext2", "malloc", "cache", "info",	\
-	"ioctl", "neterror", "net", "warning", "buffs", "other",	\
-	"dentry", "nettrace", "page", "dlmtrace", "error", "emerg",	\
-	"ha", "rpctrace", "vfstrace", "reada", "mmap", "config",	\
-	"console", "quota", "sec", "lfsck", "hsm", NULL }
+#define D_HSM	 D_TRACE
 
 #define D_CANTMASK   (D_ERROR | D_EMERG | D_WARNING | D_CONSOLE)
 
@@ -169,7 +165,7 @@ struct ptldebug_header {
 #define CDEBUG_DEFAULT_MIN_DELAY ((cfs_time_seconds(1) + 1) / 2) /* jiffies */
 #define CDEBUG_DEFAULT_BACKOFF   2
 struct cfs_debug_limit_state {
-	unsigned long   cdls_next;
+	cfs_time_t   cdls_next;
 	unsigned int cdls_delay;
 	int	     cdls_count;
 };
@@ -200,7 +196,7 @@ do {								\
 	       .msg_fn     = __func__,				\
 	       .msg_line   = __LINE__,				\
 	       .msg_cdls   = (cdls)	 };			\
-	dataname.msg_mask   = (mask)
+	dataname.msg_mask   = (mask);
 
 /**
  * Filters out logging messages based on mask and subsystem.
@@ -246,20 +242,32 @@ do {									\
 
 #define LCONSOLE_EMERG(format, ...) CDEBUG(D_CONSOLE | D_EMERG, format, ## __VA_ARGS__)
 
-int libcfs_debug_msg(struct libcfs_debug_msg_data *msgdata,
-		     const char *format1, ...)
-	__printf(2, 3);
+void libcfs_log_goto(struct libcfs_debug_msg_data *, const char *, long_ptr_t);
+#define GOTO(label, rc)							\
+do {									\
+	if (cfs_cdebug_show(D_TRACE, DEBUG_SUBSYSTEM)) {		\
+		LIBCFS_DEBUG_MSG_DATA_DECL(msgdata, D_TRACE, NULL);	\
+		libcfs_log_goto(&msgdata, #label, (long_ptr_t)(rc));	\
+	} else {							\
+		(void)(rc);						\
+	}								\
+	goto label;							\
+} while (0)
 
-int libcfs_debug_vmsg2(struct libcfs_debug_msg_data *msgdata,
-		       const char *format1,
-		       va_list args, const char *format2, ...)
-	__printf(4, 5);
+extern int libcfs_debug_msg(struct libcfs_debug_msg_data *msgdata,
+			    const char *format1, ...)
+	__attribute__ ((format (printf, 2, 3)));
+
+extern int libcfs_debug_vmsg2(struct libcfs_debug_msg_data *msgdata,
+			      const char *format1,
+			      va_list args, const char *format2, ...)
+	__attribute__ ((format (printf, 4, 5)));
 
 /* other external symbols that tracefile provides: */
-int cfs_trace_copyin_string(char *knl_buffer, int knl_buffer_nob,
-			    const char __user *usr_buffer, int usr_buffer_nob);
-int cfs_trace_copyout_string(char __user *usr_buffer, int usr_buffer_nob,
-			     const char *knl_buffer, char *append);
+extern int cfs_trace_copyin_string(char *knl_buffer, int knl_buffer_nob,
+				   const char *usr_buffer, int usr_buffer_nob);
+extern int cfs_trace_copyout_string(char *usr_buffer, int usr_buffer_nob,
+				    const char *knl_buffer, char *append);
 
 #define LIBCFS_DEBUG_FILE_PATH_DEFAULT "/tmp/lustre-log"
 

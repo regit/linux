@@ -16,7 +16,7 @@
  * the instance number and string from the type 41 record and exports
  * it to sysfs.
  *
- * Please see http://linux.dell.com/files/biosdevname/ for more
+ * Please see http://linux.dell.com/wiki/index.php/Oss/libnetdevname for more
  * information.
  */
 
@@ -30,6 +30,8 @@
 #include <linux/acpi.h>
 #include <linux/pci-acpi.h>
 #include "pci.h"
+
+#define	DEVICE_LABEL_DSM	0x07
 
 #ifdef CONFIG_DMI
 enum smbios_attr_enum {
@@ -77,7 +79,7 @@ static umode_t smbios_instance_string_exist(struct kobject *kobj,
 	struct device *dev;
 	struct pci_dev *pdev;
 
-	dev = kobj_to_dev(kobj);
+	dev = container_of(kobj, struct device, kobj);
 	pdev = to_pci_dev(dev);
 
 	return find_smbios_instance_string(pdev, NULL, SMBIOS_ATTR_NONE) ?
@@ -146,6 +148,11 @@ static inline void pci_remove_smbiosname_file(struct pci_dev *pdev)
 #endif
 
 #ifdef CONFIG_ACPI
+static const char device_label_dsm_uuid[] = {
+	0xD0, 0x37, 0xC9, 0xE5, 0x53, 0x35, 0x7A, 0x4D,
+	0x91, 0x17, 0xEA, 0x4D, 0x19, 0xC3, 0x43, 0x4D
+};
+
 enum acpi_attr_enum {
 	ACPI_ATTR_LABEL_SHOW,
 	ACPI_ATTR_INDEX_SHOW,
@@ -154,8 +161,8 @@ enum acpi_attr_enum {
 static void dsm_label_utf16s_to_utf8s(union acpi_object *obj, char *buf)
 {
 	int len;
-	len = utf16s_to_utf8s((const wchar_t *)obj->buffer.pointer,
-			      obj->buffer.length,
+	len = utf16s_to_utf8s((const wchar_t *)obj->string.pointer,
+			      obj->string.length,
 			      UTF16_LITTLE_ENDIAN,
 			      buf, PAGE_SIZE);
 	buf[len] = '\n';
@@ -172,7 +179,7 @@ static int dsm_get_label(struct device *dev, char *buf,
 	if (!handle)
 		return -1;
 
-	obj = acpi_evaluate_dsm(handle, pci_acpi_dsm_uuid, 0x2,
+	obj = acpi_evaluate_dsm(handle, device_label_dsm_uuid, 0x2,
 				DEVICE_LABEL_DSM, NULL);
 	if (!obj)
 		return -1;
@@ -180,22 +187,16 @@ static int dsm_get_label(struct device *dev, char *buf,
 	tmp = obj->package.elements;
 	if (obj->type == ACPI_TYPE_PACKAGE && obj->package.count == 2 &&
 	    tmp[0].type == ACPI_TYPE_INTEGER &&
-	    (tmp[1].type == ACPI_TYPE_STRING ||
-	     tmp[1].type == ACPI_TYPE_BUFFER)) {
+	    tmp[1].type == ACPI_TYPE_STRING) {
 		/*
 		 * The second string element is optional even when
 		 * this _DSM is implemented; when not implemented,
 		 * this entry must return a null string.
 		 */
-		if (attr == ACPI_ATTR_INDEX_SHOW) {
+		if (attr == ACPI_ATTR_INDEX_SHOW)
 			scnprintf(buf, PAGE_SIZE, "%llu\n", tmp->integer.value);
-		} else if (attr == ACPI_ATTR_LABEL_SHOW) {
-			if (tmp[1].type == ACPI_TYPE_STRING)
-				scnprintf(buf, PAGE_SIZE, "%s\n",
-					  tmp[1].string.pointer);
-			else if (tmp[1].type == ACPI_TYPE_BUFFER)
-				dsm_label_utf16s_to_utf8s(tmp + 1, buf);
-		}
+		else if (attr == ACPI_ATTR_LABEL_SHOW)
+			dsm_label_utf16s_to_utf8s(tmp + 1, buf);
 		len = strlen(buf) > 0 ? strlen(buf) : -1;
 	}
 
@@ -212,7 +213,7 @@ static bool device_has_dsm(struct device *dev)
 	if (!handle)
 		return false;
 
-	return !!acpi_check_dsm(handle, pci_acpi_dsm_uuid, 0x2,
+	return !!acpi_check_dsm(handle, device_label_dsm_uuid, 0x2,
 				1 << DEVICE_LABEL_DSM);
 }
 
@@ -221,7 +222,7 @@ static umode_t acpi_index_string_exist(struct kobject *kobj,
 {
 	struct device *dev;
 
-	dev = kobj_to_dev(kobj);
+	dev = container_of(kobj, struct device, kobj);
 
 	if (device_has_dsm(dev))
 		return S_IRUGO;

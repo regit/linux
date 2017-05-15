@@ -111,7 +111,7 @@ static int or51211_load_firmware (struct dvb_frontend* fe,
 	u8 tudata[585];
 	int i;
 
-	dprintk("Firmware is %zu bytes\n", fw->size);
+	dprintk("Firmware is %zd bytes\n",fw->size);
 
 	/* Get eprom data */
 	tudata[0] = 17;
@@ -237,7 +237,7 @@ static int or51211_set_parameters(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int or51211_read_status(struct dvb_frontend *fe, enum fe_status *status)
+static int or51211_read_status(struct dvb_frontend* fe, fe_status_t* status)
 {
 	struct or51211_state* state = fe->demodulator_priv;
 	unsigned char rec_buf[2];
@@ -377,7 +377,8 @@ static int or51211_init(struct dvb_frontend* fe)
 					       OR51211_DEFAULT_FIRMWARE);
 		pr_info("Got Hotplug firmware\n");
 		if (ret) {
-			pr_warn("No firmware uploaded (timeout or file not found?)\n");
+			pr_warn("No firmware uploaded "
+				"(timeout or file not found?)\n");
 			return ret;
 		}
 
@@ -507,7 +508,7 @@ static void or51211_release(struct dvb_frontend* fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops or51211_ops;
+static struct dvb_frontend_ops or51211_ops;
 
 struct dvb_frontend* or51211_attach(const struct or51211_config* config,
 				    struct i2c_adapter* i2c)
@@ -531,7 +532,7 @@ struct dvb_frontend* or51211_attach(const struct or51211_config* config,
 	return &state->frontend;
 }
 
-static const struct dvb_frontend_ops or51211_ops = {
+static struct dvb_frontend_ops or51211_ops = {
 	.delsys = { SYS_ATSC, SYS_DVBC_ANNEX_B },
 	.info = {
 		.name               = "Oren OR51211 VSB Frontend",

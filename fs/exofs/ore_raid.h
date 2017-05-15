@@ -1,6 +1,6 @@
 /*
  * Copyright (C) from 2011
- * Boaz Harrosh <ooo@electrozaur.com>
+ * Boaz Harrosh <bharrosh@panasas.com>
  *
  * This file is part of the objects raid engine (ore).
  *

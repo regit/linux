@@ -41,11 +41,13 @@ MODULE_PARM_DESC(hdpvr_debug, "enable debugging output");
 
 static uint default_video_input = HDPVR_VIDEO_INPUTS;
 module_param(default_video_input, uint, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(default_video_input, "default video input: 0=Component / 1=S-Video / 2=Composite");
+MODULE_PARM_DESC(default_video_input, "default video input: 0=Component / "
+		 "1=S-Video / 2=Composite");
 
 static uint default_audio_input = HDPVR_AUDIO_INPUTS;
 module_param(default_audio_input, uint, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(default_audio_input, "default audio input: 0=RCA back / 1=RCA front / 2=S/PDIF");
+MODULE_PARM_DESC(default_audio_input, "default audio input: 0=RCA back / "
+		 "1=RCA front / 2=S/PDIF");
 
 static bool boost_audio;
 module_param(boost_audio, bool, S_IRUGO|S_IWUSR);
@@ -67,6 +69,10 @@ MODULE_DEVICE_TABLE(usb, hdpvr_table);
 void hdpvr_delete(struct hdpvr_device *dev)
 {
 	hdpvr_free_buffers(dev);
+
+	if (dev->video_dev)
+		video_device_release(dev->video_dev);
+
 	usb_put_dev(dev->udev);
 }
 
@@ -118,6 +124,14 @@ static int device_authorization(struct hdpvr_device *dev)
 	int ret, retval = -ENOMEM;
 	char request_type = 0x38, rcv_request = 0x81;
 	char *response;
+#ifdef HDPVR_DEBUG
+	size_t buf_size = 46;
+	char *print_buf = kzalloc(5*buf_size+1, GFP_KERNEL);
+	if (!print_buf) {
+		v4l2_err(&dev->v4l2_dev, "Out of memory\n");
+		return retval;
+	}
+#endif
 
 	mutex_lock(&dev->usbc_mutex);
 	ret = usb_control_msg(dev->udev,
@@ -133,9 +147,11 @@ static int device_authorization(struct hdpvr_device *dev)
 	}
 #ifdef HDPVR_DEBUG
 	else {
+		hex_dump_to_buffer(dev->usbc_buf, 46, 16, 1, print_buf,
+				   5*buf_size+1, 0);
 		v4l2_dbg(MSG_INFO, hdpvr_debug, &dev->v4l2_dev,
-			 "Status request returned, len %d: %46ph\n",
-			 ret, dev->usbc_buf);
+			 "Status request returned, len %d: %s\n",
+			 ret, print_buf);
 	}
 #endif
 
@@ -163,7 +179,8 @@ static int device_authorization(struct hdpvr_device *dev)
 		dev->flags |= HDPVR_FLAG_AC3_CAP;
 		break;
 	default:
-		v4l2_info(&dev->v4l2_dev, "untested firmware, the driver might not work.\n");
+		v4l2_info(&dev->v4l2_dev, "untested firmware, the driver might"
+			  " not work.\n");
 		if (dev->fw_ver >= HDPVR_FIRMWARE_VERSION_AC3)
 			dev->flags |= HDPVR_FLAG_AC3_CAP;
 		else
@@ -172,13 +189,15 @@ static int device_authorization(struct hdpvr_device *dev)
 
 	response = dev->usbc_buf+38;
 #ifdef HDPVR_DEBUG
-	v4l2_dbg(MSG_INFO, hdpvr_debug, &dev->v4l2_dev, "challenge: %8ph\n",
-		 response);
+	hex_dump_to_buffer(response, 8, 16, 1, print_buf, 5*buf_size+1, 0);
+	v4l2_dbg(MSG_INFO, hdpvr_debug, &dev->v4l2_dev, "challenge: %s\n",
+		 print_buf);
 #endif
 	challenge(response);
 #ifdef HDPVR_DEBUG
-	v4l2_dbg(MSG_INFO, hdpvr_debug, &dev->v4l2_dev, " response: %8ph\n",
-		 response);
+	hex_dump_to_buffer(response, 8, 16, 1, print_buf, 5*buf_size+1, 0);
+	v4l2_dbg(MSG_INFO, hdpvr_debug, &dev->v4l2_dev, " response: %s\n",
+		 print_buf);
 #endif
 
 	msleep(100);
@@ -194,6 +213,9 @@ static int device_authorization(struct hdpvr_device *dev)
 	retval = ret != 8;
 unlock:
 	mutex_unlock(&dev->usbc_mutex);
+#ifdef HDPVR_DEBUG
+	kfree(print_buf);
+#endif
 	return retval;
 }
 
@@ -270,9 +292,7 @@ static int hdpvr_probe(struct usb_interface *interface,
 	struct hdpvr_device *dev;
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
-#if IS_ENABLED(CONFIG_I2C)
 	struct i2c_client *client;
-#endif
 	size_t buffer_size;
 	int i;
 	int retval = -ENOMEM;
@@ -306,6 +326,10 @@ static int hdpvr_probe(struct usb_interface *interface,
 
 	init_waitqueue_head(&dev->wait_buffer);
 	init_waitqueue_head(&dev->wait_data);
+
+	dev->workqueue = create_singlethread_workqueue("hdpvr_buffer");
+	if (!dev->workqueue)
+		goto error;
 
 	dev->options = hdpvr_default_options;
 
@@ -388,7 +412,7 @@ static int hdpvr_probe(struct usb_interface *interface,
 
 	/* let the user know what node this device is now attached to */
 	v4l2_info(&dev->v4l2_dev, "device now attached to %s\n",
-		  video_device_node_name(&dev->video_dev));
+		  video_device_node_name(dev->video_dev));
 	return 0;
 
 reg_fail:
@@ -397,7 +421,9 @@ reg_fail:
 #endif
 error:
 	if (dev) {
-		flush_work(&dev->worker);
+		/* Destroy single thread */
+		if (dev->workqueue)
+			destroy_workqueue(dev->workqueue);
 		/* this frees allocated memory */
 		hdpvr_delete(dev);
 	}
@@ -409,7 +435,7 @@ static void hdpvr_disconnect(struct usb_interface *interface)
 	struct hdpvr_device *dev = to_hdpvr_dev(usb_get_intfdata(interface));
 
 	v4l2_info(&dev->v4l2_dev, "device %s disconnected\n",
-		  video_device_node_name(&dev->video_dev));
+		  video_device_node_name(dev->video_dev));
 	/* prevent more I/O from starting and stop any ongoing */
 	mutex_lock(&dev->io_mutex);
 	dev->status = STATUS_DISCONNECTED;
@@ -418,14 +444,14 @@ static void hdpvr_disconnect(struct usb_interface *interface)
 	mutex_unlock(&dev->io_mutex);
 	v4l2_device_disconnect(&dev->v4l2_dev);
 	msleep(100);
-	flush_work(&dev->worker);
+	flush_workqueue(dev->workqueue);
 	mutex_lock(&dev->io_mutex);
 	hdpvr_cancel_queue(dev);
 	mutex_unlock(&dev->io_mutex);
 #if IS_ENABLED(CONFIG_I2C)
 	i2c_del_adapter(&dev->i2c_adapter);
 #endif
-	video_unregister_device(&dev->video_dev);
+	video_unregister_device(dev->video_dev);
 	atomic_dec(&dev_nr);
 }
 

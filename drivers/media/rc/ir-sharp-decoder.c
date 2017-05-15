@@ -48,6 +48,9 @@ static int ir_sharp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 	struct sharp_dec *data = &dev->raw->sharp;
 	u32 msg, echo, address, command, scancode;
 
+	if (!rc_protocols_enabled(dev, RC_BIT_SHARP))
+		return 0;
+
 	if (!is_timing_event(ev)) {
 		if (ev.reset)
 			data->state = STATE_INACTIVE;
@@ -115,9 +118,7 @@ static int ir_sharp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 
 		if (data->count == SHARP_NBITS) {
 			/* exp,chk bits should be 1,0 */
-			if ((data->bits & 0x3) != 0x2 &&
-			/* DENON variant, both chk bits 0 */
-			    (data->bits & 0x3) != 0x0)
+			if ((data->bits & 0x3) != 0x2)
 				break;
 			data->state = STATE_ECHO_SPACE;
 		} else {
@@ -161,7 +162,7 @@ static int ir_sharp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 		scancode = address << 8 | command;
 		IR_dprintk(1, "Sharp scancode 0x%04x\n", scancode);
 
-		rc_keydown(dev, RC_TYPE_SHARP, scancode, 0);
+		rc_keydown(dev, scancode, 0);
 		data->state = STATE_INACTIVE;
 		return 0;
 	}

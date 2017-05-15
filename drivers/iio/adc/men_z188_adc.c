@@ -78,7 +78,7 @@ static int z188_iio_read_raw(struct iio_dev *iio_dev,
 	return ret;
 }
 
-static const struct iio_info z188_adc_info = {
+static struct iio_info z188_adc_info = {
 	.read_raw = &z188_iio_read_raw,
 	.driver_module = THIS_MODULE,
 };
@@ -152,7 +152,6 @@ static void men_z188_remove(struct mcb_device *dev)
 
 static const struct mcb_device_id men_z188_ids[] = {
 	{ .device = 0xbc },
-	{ }
 };
 MODULE_DEVICE_TABLE(mcb, men_z188_ids);
 

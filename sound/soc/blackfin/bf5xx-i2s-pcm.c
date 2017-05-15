@@ -290,19 +290,19 @@ static int bf5xx_pcm_silence(struct snd_pcm_substream *substream,
 	unsigned int sample_size = runtime->sample_bits / 8;
 	void *buf = runtime->dma_area;
 	struct bf5xx_i2s_pcm_data *dma_data;
-	unsigned int offset, samples;
+	unsigned int offset, size;
 
 	dma_data = snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
 
 	if (dma_data->tdm_mode) {
 		offset = pos * 8 * sample_size;
-		samples = count * 8;
+		size = count * 8 * sample_size;
 	} else {
 		offset = frames_to_bytes(runtime, pos);
-		samples = count * runtime->channels;
+		size = frames_to_bytes(runtime, count);
 	}
 
-	snd_pcm_format_set_silence(runtime->format, buf + offset, samples);
+	snd_pcm_format_set_silence(runtime->format, buf + offset, size);
 
 	return 0;
 }
@@ -342,16 +342,23 @@ static struct snd_soc_platform_driver bf5xx_i2s_soc_platform = {
 
 static int bfin_i2s_soc_platform_probe(struct platform_device *pdev)
 {
-	return devm_snd_soc_register_platform(&pdev->dev,
-					      &bf5xx_i2s_soc_platform);
+	return snd_soc_register_platform(&pdev->dev, &bf5xx_i2s_soc_platform);
+}
+
+static int bfin_i2s_soc_platform_remove(struct platform_device *pdev)
+{
+	snd_soc_unregister_platform(&pdev->dev);
+	return 0;
 }
 
 static struct platform_driver bfin_i2s_pcm_driver = {
 	.driver = {
 		.name = "bfin-i2s-pcm-audio",
+		.owner = THIS_MODULE,
 	},
 
 	.probe = bfin_i2s_soc_platform_probe,
+	.remove = bfin_i2s_soc_platform_remove,
 };
 
 module_platform_driver(bfin_i2s_pcm_driver);

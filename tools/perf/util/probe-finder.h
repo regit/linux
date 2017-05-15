@@ -10,9 +10,6 @@
 #define MAX_PROBES		 128
 #define MAX_PROBE_ARGS		 128
 
-#define PROBE_ARG_VARS		"$vars"
-#define PROBE_ARG_PARAMS	"$params"
-
 static inline int is_c_varname(const char *name)
 {
 	/* TODO */
@@ -34,32 +31,29 @@ struct debuginfo {
 };
 
 /* This also tries to open distro debuginfo */
-struct debuginfo *debuginfo__new(const char *path);
-void debuginfo__delete(struct debuginfo *dbg);
+extern struct debuginfo *debuginfo__new(const char *path);
+extern void debuginfo__delete(struct debuginfo *dbg);
 
 /* Find probe_trace_events specified by perf_probe_event from debuginfo */
-int debuginfo__find_trace_events(struct debuginfo *dbg,
-				 struct perf_probe_event *pev,
-				 struct probe_trace_event **tevs);
+extern int debuginfo__find_trace_events(struct debuginfo *dbg,
+					struct perf_probe_event *pev,
+					struct probe_trace_event **tevs,
+					int max_tevs);
 
 /* Find a perf_probe_point from debuginfo */
-int debuginfo__find_probe_point(struct debuginfo *dbg, unsigned long addr,
-				struct perf_probe_point *ppt);
-
-int debuginfo__get_text_offset(struct debuginfo *dbg, Dwarf_Addr *offs,
-			       bool adjust_offset);
+extern int debuginfo__find_probe_point(struct debuginfo *dbg,
+				       unsigned long addr,
+				       struct perf_probe_point *ppt);
 
 /* Find a line range */
-int debuginfo__find_line_range(struct debuginfo *dbg, struct line_range *lr);
+extern int debuginfo__find_line_range(struct debuginfo *dbg,
+				      struct line_range *lr);
 
 /* Find available variables */
-int debuginfo__find_available_vars_at(struct debuginfo *dbg,
-				      struct perf_probe_event *pev,
-				      struct variable_list **vls);
-
-/* Find a src file from a DWARF tag path */
-int get_real_path(const char *raw_path, const char *comp_dir,
-			 char **new_path);
+extern int debuginfo__find_available_vars_at(struct debuginfo *dbg,
+					     struct perf_probe_event *pev,
+					     struct variable_list **vls,
+					     int max_points, bool externs);
 
 struct probe_finder {
 	struct perf_probe_event	*pev;		/* Target probe event */
@@ -77,13 +71,9 @@ struct probe_finder {
 
 	/* For variable searching */
 #if _ELFUTILS_PREREQ(0, 142)
-	/* Call Frame Information from .eh_frame */
-	Dwarf_CFI		*cfi_eh;
-	/* Call Frame Information from .debug_frame */
-	Dwarf_CFI		*cfi_dbg;
+	Dwarf_CFI		*cfi;		/* Call Frame Information */
 #endif
 	Dwarf_Op		*fb_ops;	/* Frame base attribute */
-	unsigned int		machine;	/* Target machine arch */
 	struct perf_probe_arg	*pvar;		/* Current target variable */
 	struct probe_trace_arg	*tvar;		/* Current result variable */
 };
@@ -102,6 +92,7 @@ struct available_var_finder {
 	struct variable_list	*vls;		/* Found variable lists */
 	int			nvls;		/* Number of variable lists */
 	int			max_vls;	/* Max no. of variable lists */
+	bool			externs;	/* Find external vars too */
 	bool			child;		/* Search child scopes */
 };
 

@@ -5,7 +5,7 @@
  *
  * Author: Frank Haverkamp <haver@linux.vnet.ibm.com>
  * Author: Joerg-Stephan Vogt <jsvogt@de.ibm.com>
- * Author: Michael Jung <mijung@gmx.net>
+ * Author: Michael Jung <mijung@de.ibm.com>
  * Author: Michael Ruettger <michael@ibmra.de>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -53,15 +53,10 @@
  */
 int __genwqe_writeq(struct genwqe_dev *cd, u64 byte_offs, u64 val)
 {
-	struct pci_dev *pci_dev = cd->pci_dev;
-
 	if (cd->err_inject & GENWQE_INJECT_HARDWARE_FAILURE)
 		return -EIO;
 
 	if (cd->mmio == NULL)
-		return -EIO;
-
-	if (pci_channel_offline(pci_dev))
 		return -EIO;
 
 	__raw_writeq((__force u64)cpu_to_be64(val), cd->mmio + byte_offs);
@@ -104,15 +99,10 @@ u64 __genwqe_readq(struct genwqe_dev *cd, u64 byte_offs)
  */
 int __genwqe_writel(struct genwqe_dev *cd, u64 byte_offs, u32 val)
 {
-	struct pci_dev *pci_dev = cd->pci_dev;
-
 	if (cd->err_inject & GENWQE_INJECT_HARDWARE_FAILURE)
 		return -EIO;
 
 	if (cd->mmio == NULL)
-		return -EIO;
-
-	if (pci_channel_offline(pci_dev))
 		return -EIO;
 
 	__raw_writel((__force u32)cpu_to_be32(val), cd->mmio + byte_offs);
@@ -150,7 +140,6 @@ int genwqe_read_app_id(struct genwqe_dev *cd, char *app_name, int len)
 	memset(app_name, 0, len);
 	for (i = 0, j = 0; j < min(len, 4); j++) {
 		char ch = (char)((app_id >> (24 - j*8)) & 0xff);
-
 		if (ch == ' ')
 			continue;
 		app_name[i++] = isprint(ch) ? ch : 'X';
@@ -220,8 +209,7 @@ void *__genwqe_alloc_consistent(struct genwqe_dev *cd, size_t size,
 	if (get_order(size) > MAX_ORDER)
 		return NULL;
 
-	return dma_zalloc_coherent(&cd->pci_dev->dev, size, dma_handle,
-				   GFP_KERNEL);
+	return pci_alloc_consistent(cd->pci_dev, size, dma_handle);
 }
 
 void __genwqe_free_consistent(struct genwqe_dev *cd, size_t size,
@@ -230,7 +218,7 @@ void __genwqe_free_consistent(struct genwqe_dev *cd, size_t size,
 	if (vaddr == NULL)
 		return;
 
-	dma_free_coherent(&cd->pci_dev->dev, size, vaddr, dma_handle);
+	pci_free_consistent(cd->pci_dev, size, vaddr, dma_handle);
 }
 
 static void genwqe_unmap_pages(struct genwqe_dev *cd, dma_addr_t *dma_list,
@@ -306,7 +294,8 @@ int genwqe_alloc_sync_sgl(struct genwqe_dev *cd, struct genwqe_sgl *sgl,
 	sgl->nr_pages = DIV_ROUND_UP(sgl->fpage_offs + user_size, PAGE_SIZE);
 	sgl->lpage_size = (user_size - sgl->fpage_size) % PAGE_SIZE;
 
-	dev_dbg(&pci_dev->dev, "[%s] uaddr=%p usize=%8ld nr_pages=%ld fpage_offs=%lx fpage_size=%ld lpage_size=%ld\n",
+	dev_dbg(&pci_dev->dev, "[%s] uaddr=%p usize=%8ld nr_pages=%ld "
+		"fpage_offs=%lx fpage_size=%ld lpage_size=%ld\n",
 		__func__, user_addr, user_size, sgl->nr_pages,
 		sgl->fpage_offs, sgl->fpage_size, sgl->lpage_size);
 
@@ -352,27 +341,17 @@ int genwqe_alloc_sync_sgl(struct genwqe_dev *cd, struct genwqe_sgl *sgl,
 		if (copy_from_user(sgl->lpage, user_addr + user_size -
 				   sgl->lpage_size, sgl->lpage_size)) {
 			rc = -EFAULT;
-			goto err_out2;
+			goto err_out1;
 		}
 	}
 	return 0;
 
- err_out2:
-	__genwqe_free_consistent(cd, PAGE_SIZE, sgl->lpage,
-				 sgl->lpage_dma_addr);
-	sgl->lpage = NULL;
-	sgl->lpage_dma_addr = 0;
  err_out1:
 	__genwqe_free_consistent(cd, PAGE_SIZE, sgl->fpage,
 				 sgl->fpage_dma_addr);
-	sgl->fpage = NULL;
-	sgl->fpage_dma_addr = 0;
  err_out:
 	__genwqe_free_consistent(cd, sgl->sgl_size, sgl->sgl,
 				 sgl->sgl_dma_addr);
-	sgl->sgl = NULL;
-	sgl->sgl_dma_addr = 0;
-	sgl->sgl_size = 0;
 	return -ENOMEM;
 }
 
@@ -601,8 +580,6 @@ int genwqe_user_vmap(struct genwqe_dev *cd, struct dma_mapping *m, void *uaddr,
 				 m->nr_pages,
 				 1,		/* write by caller */
 				 m->page_list);	/* ptrs to pages */
-	if (rc < 0)
-		goto fail_get_user_pages;
 
 	/* assumption: get_user_pages can be killed by signals. */
 	if (rc < m->nr_pages) {
@@ -675,7 +652,6 @@ int genwqe_user_vunmap(struct genwqe_dev *cd, struct dma_mapping *m,
 u8 genwqe_card_type(struct genwqe_dev *cd)
 {
 	u64 card_type = cd->slu_unitcfg;
-
 	return (u8)((card_type & IO_SLU_UNITCFG_TYPE_MASK) >> 20);
 }
 
@@ -740,11 +716,12 @@ int genwqe_read_softreset(struct genwqe_dev *cd)
 int genwqe_set_interrupt_capability(struct genwqe_dev *cd, int count)
 {
 	int rc;
+	struct pci_dev *pci_dev = cd->pci_dev;
 
-	rc = pci_alloc_irq_vectors(cd->pci_dev, 1, count, PCI_IRQ_MSI);
-	if (rc < 0)
-		return rc;
-	return 0;
+	rc = pci_enable_msi_exact(pci_dev, count);
+	if (rc == 0)
+		cd->flags |= GENWQE_FLAG_MSI_ENABLED;
+	return rc;
 }
 
 /**
@@ -753,7 +730,12 @@ int genwqe_set_interrupt_capability(struct genwqe_dev *cd, int count)
  */
 void genwqe_reset_interrupt_capability(struct genwqe_dev *cd)
 {
-	pci_free_irq_vectors(cd->pci_dev);
+	struct pci_dev *pci_dev = cd->pci_dev;
+
+	if (cd->flags & GENWQE_FLAG_MSI_ENABLED) {
+		pci_disable_msi(pci_dev);
+		cd->flags &= ~GENWQE_FLAG_MSI_ENABLED;
+	}
 }
 
 /**

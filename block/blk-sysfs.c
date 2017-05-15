@@ -6,14 +6,12 @@
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/blkdev.h>
-#include <linux/backing-dev.h>
 #include <linux/blktrace_api.h>
 #include <linux/blk-mq.h>
-#include <linux/blk-cgroup.h>
 
 #include "blk.h"
+#include "blk-cgroup.h"
 #include "blk-mq.h"
-#include "blk-wbt.h"
 
 struct queue_sysfs_entry {
 	struct attribute attr;
@@ -40,19 +38,6 @@ queue_var_store(unsigned long *var, const char *page, size_t count)
 	*var = v;
 
 	return count;
-}
-
-static ssize_t queue_var_store64(s64 *var, const char *page)
-{
-	int err;
-	s64 v;
-
-	err = kstrtos64(page, 10, &v);
-	if (err < 0)
-		return err;
-
-	*var = v;
-	return 0;
 }
 
 static ssize_t queue_requests_show(struct request_queue *q, char *page)
@@ -90,7 +75,7 @@ queue_requests_store(struct request_queue *q, const char *page, size_t count)
 static ssize_t queue_ra_show(struct request_queue *q, char *page)
 {
 	unsigned long ra_kb = q->backing_dev_info.ra_pages <<
-					(PAGE_SHIFT - 10);
+					(PAGE_CACHE_SHIFT - 10);
 
 	return queue_var_show(ra_kb, (page));
 }
@@ -104,7 +89,7 @@ queue_ra_store(struct request_queue *q, const char *page, size_t count)
 	if (ret < 0)
 		return ret;
 
-	q->backing_dev_info.ra_pages = ra_kb >> (PAGE_SHIFT - 10);
+	q->backing_dev_info.ra_pages = ra_kb >> (PAGE_CACHE_SHIFT - 10);
 
 	return ret;
 }
@@ -131,7 +116,7 @@ static ssize_t queue_max_segment_size_show(struct request_queue *q, char *page)
 	if (blk_queue_cluster(q))
 		return queue_var_show(queue_max_segment_size(q), (page));
 
-	return queue_var_show(PAGE_SIZE, (page));
+	return queue_var_show(PAGE_CACHE_SIZE, (page));
 }
 
 static ssize_t queue_logical_block_size_show(struct request_queue *q, char *page)
@@ -142,11 +127,6 @@ static ssize_t queue_logical_block_size_show(struct request_queue *q, char *page
 static ssize_t queue_physical_block_size_show(struct request_queue *q, char *page)
 {
 	return queue_var_show(queue_physical_block_size(q), page);
-}
-
-static ssize_t queue_chunk_sectors_show(struct request_queue *q, char *page)
-{
-	return queue_var_show(q->limits.chunk_sectors, page);
 }
 
 static ssize_t queue_io_min_show(struct request_queue *q, char *page)
@@ -164,40 +144,10 @@ static ssize_t queue_discard_granularity_show(struct request_queue *q, char *pag
 	return queue_var_show(q->limits.discard_granularity, page);
 }
 
-static ssize_t queue_discard_max_hw_show(struct request_queue *q, char *page)
-{
-
-	return sprintf(page, "%llu\n",
-		(unsigned long long)q->limits.max_hw_discard_sectors << 9);
-}
-
 static ssize_t queue_discard_max_show(struct request_queue *q, char *page)
 {
 	return sprintf(page, "%llu\n",
 		       (unsigned long long)q->limits.max_discard_sectors << 9);
-}
-
-static ssize_t queue_discard_max_store(struct request_queue *q,
-				       const char *page, size_t count)
-{
-	unsigned long max_discard;
-	ssize_t ret = queue_var_store(&max_discard, page, count);
-
-	if (ret < 0)
-		return ret;
-
-	if (max_discard & (q->limits.discard_granularity - 1))
-		return -EINVAL;
-
-	max_discard >>= 9;
-	if (max_discard > UINT_MAX)
-		return -EINVAL;
-
-	if (max_discard > q->limits.max_hw_discard_sectors)
-		max_discard = q->limits.max_hw_discard_sectors;
-
-	q->limits.max_discard_sectors = max_discard;
-	return ret;
 }
 
 static ssize_t queue_discard_zeroes_data_show(struct request_queue *q, char *page)
@@ -211,32 +161,23 @@ static ssize_t queue_write_same_max_show(struct request_queue *q, char *page)
 		(unsigned long long)q->limits.max_write_same_sectors << 9);
 }
 
-static ssize_t queue_write_zeroes_max_show(struct request_queue *q, char *page)
-{
-	return sprintf(page, "%llu\n",
-		(unsigned long long)q->limits.max_write_zeroes_sectors << 9);
-}
 
 static ssize_t
 queue_max_sectors_store(struct request_queue *q, const char *page, size_t count)
 {
 	unsigned long max_sectors_kb,
 		max_hw_sectors_kb = queue_max_hw_sectors(q) >> 1,
-			page_kb = 1 << (PAGE_SHIFT - 10);
+			page_kb = 1 << (PAGE_CACHE_SHIFT - 10);
 	ssize_t ret = queue_var_store(&max_sectors_kb, page, count);
 
 	if (ret < 0)
 		return ret;
-
-	max_hw_sectors_kb = min_not_zero(max_hw_sectors_kb, (unsigned long)
-					 q->limits.max_dev_sectors >> 1);
 
 	if (max_sectors_kb > max_hw_sectors_kb || max_sectors_kb < page_kb)
 		return -EINVAL;
 
 	spin_lock_irq(q->queue_lock);
 	q->limits.max_sectors = max_sectors_kb << 1;
-	q->backing_dev_info.io_pages = max_sectors_kb >> (PAGE_SHIFT - 10);
 	spin_unlock_irq(q->queue_lock);
 
 	return ret;
@@ -281,18 +222,6 @@ QUEUE_SYSFS_BIT_FNS(nonrot, NONROT, 1);
 QUEUE_SYSFS_BIT_FNS(random, ADD_RANDOM, 0);
 QUEUE_SYSFS_BIT_FNS(iostats, IO_STAT, 0);
 #undef QUEUE_SYSFS_BIT_FNS
-
-static ssize_t queue_zoned_show(struct request_queue *q, char *page)
-{
-	switch (blk_queue_zoned_model(q)) {
-	case BLK_ZONED_HA:
-		return sprintf(page, "host-aware\n");
-	case BLK_ZONED_HM:
-		return sprintf(page, "host-managed\n");
-	default:
-		return sprintf(page, "none\n");
-	}
-}
 
 static ssize_t queue_nomerges_show(struct request_queue *q, char *page)
 {
@@ -356,167 +285,6 @@ queue_rq_affinity_store(struct request_queue *q, const char *page, size_t count)
 	return ret;
 }
 
-static ssize_t queue_poll_delay_show(struct request_queue *q, char *page)
-{
-	int val;
-
-	if (q->poll_nsec == -1)
-		val = -1;
-	else
-		val = q->poll_nsec / 1000;
-
-	return sprintf(page, "%d\n", val);
-}
-
-static ssize_t queue_poll_delay_store(struct request_queue *q, const char *page,
-				size_t count)
-{
-	int err, val;
-
-	if (!q->mq_ops || !q->mq_ops->poll)
-		return -EINVAL;
-
-	err = kstrtoint(page, 10, &val);
-	if (err < 0)
-		return err;
-
-	if (val == -1)
-		q->poll_nsec = -1;
-	else
-		q->poll_nsec = val * 1000;
-
-	return count;
-}
-
-static ssize_t queue_poll_show(struct request_queue *q, char *page)
-{
-	return queue_var_show(test_bit(QUEUE_FLAG_POLL, &q->queue_flags), page);
-}
-
-static ssize_t queue_poll_store(struct request_queue *q, const char *page,
-				size_t count)
-{
-	unsigned long poll_on;
-	ssize_t ret;
-
-	if (!q->mq_ops || !q->mq_ops->poll)
-		return -EINVAL;
-
-	ret = queue_var_store(&poll_on, page, count);
-	if (ret < 0)
-		return ret;
-
-	spin_lock_irq(q->queue_lock);
-	if (poll_on)
-		queue_flag_set(QUEUE_FLAG_POLL, q);
-	else
-		queue_flag_clear(QUEUE_FLAG_POLL, q);
-	spin_unlock_irq(q->queue_lock);
-
-	return ret;
-}
-
-static ssize_t queue_wb_lat_show(struct request_queue *q, char *page)
-{
-	if (!q->rq_wb)
-		return -EINVAL;
-
-	return sprintf(page, "%llu\n", div_u64(q->rq_wb->min_lat_nsec, 1000));
-}
-
-static ssize_t queue_wb_lat_store(struct request_queue *q, const char *page,
-				  size_t count)
-{
-	struct rq_wb *rwb;
-	ssize_t ret;
-	s64 val;
-
-	ret = queue_var_store64(&val, page);
-	if (ret < 0)
-		return ret;
-	if (val < -1)
-		return -EINVAL;
-
-	rwb = q->rq_wb;
-	if (!rwb) {
-		ret = wbt_init(q);
-		if (ret)
-			return ret;
-
-		rwb = q->rq_wb;
-		if (!rwb)
-			return -EINVAL;
-	}
-
-	if (val == -1)
-		rwb->min_lat_nsec = wbt_default_latency_nsec(q);
-	else if (val >= 0)
-		rwb->min_lat_nsec = val * 1000ULL;
-
-	if (rwb->enable_state == WBT_STATE_ON_DEFAULT)
-		rwb->enable_state = WBT_STATE_ON_MANUAL;
-
-	wbt_update_limits(rwb);
-	return count;
-}
-
-static ssize_t queue_wc_show(struct request_queue *q, char *page)
-{
-	if (test_bit(QUEUE_FLAG_WC, &q->queue_flags))
-		return sprintf(page, "write back\n");
-
-	return sprintf(page, "write through\n");
-}
-
-static ssize_t queue_wc_store(struct request_queue *q, const char *page,
-			      size_t count)
-{
-	int set = -1;
-
-	if (!strncmp(page, "write back", 10))
-		set = 1;
-	else if (!strncmp(page, "write through", 13) ||
-		 !strncmp(page, "none", 4))
-		set = 0;
-
-	if (set == -1)
-		return -EINVAL;
-
-	spin_lock_irq(q->queue_lock);
-	if (set)
-		queue_flag_set(QUEUE_FLAG_WC, q);
-	else
-		queue_flag_clear(QUEUE_FLAG_WC, q);
-	spin_unlock_irq(q->queue_lock);
-
-	return count;
-}
-
-static ssize_t queue_dax_show(struct request_queue *q, char *page)
-{
-	return queue_var_show(blk_queue_dax(q), page);
-}
-
-static ssize_t print_stat(char *page, struct blk_rq_stat *stat, const char *pre)
-{
-	return sprintf(page, "%s samples=%llu, mean=%lld, min=%lld, max=%lld\n",
-			pre, (long long) stat->nr_samples,
-			(long long) stat->mean, (long long) stat->min,
-			(long long) stat->max);
-}
-
-static ssize_t queue_stats_show(struct request_queue *q, char *page)
-{
-	struct blk_rq_stat stat[2];
-	ssize_t ret;
-
-	blk_queue_stat_get(q, stat);
-
-	ret = print_stat(page, &stat[BLK_STAT_READ], "read :");
-	ret += print_stat(page + ret, &stat[BLK_STAT_WRITE], "write:");
-	return ret;
-}
-
 static struct queue_sysfs_entry queue_requests_entry = {
 	.attr = {.name = "nr_requests", .mode = S_IRUGO | S_IWUSR },
 	.show = queue_requests_show,
@@ -576,11 +344,6 @@ static struct queue_sysfs_entry queue_physical_block_size_entry = {
 	.show = queue_physical_block_size_show,
 };
 
-static struct queue_sysfs_entry queue_chunk_sectors_entry = {
-	.attr = {.name = "chunk_sectors", .mode = S_IRUGO },
-	.show = queue_chunk_sectors_show,
-};
-
 static struct queue_sysfs_entry queue_io_min_entry = {
 	.attr = {.name = "minimum_io_size", .mode = S_IRUGO },
 	.show = queue_io_min_show,
@@ -596,15 +359,9 @@ static struct queue_sysfs_entry queue_discard_granularity_entry = {
 	.show = queue_discard_granularity_show,
 };
 
-static struct queue_sysfs_entry queue_discard_max_hw_entry = {
-	.attr = {.name = "discard_max_hw_bytes", .mode = S_IRUGO },
-	.show = queue_discard_max_hw_show,
-};
-
 static struct queue_sysfs_entry queue_discard_max_entry = {
-	.attr = {.name = "discard_max_bytes", .mode = S_IRUGO | S_IWUSR },
+	.attr = {.name = "discard_max_bytes", .mode = S_IRUGO },
 	.show = queue_discard_max_show,
-	.store = queue_discard_max_store,
 };
 
 static struct queue_sysfs_entry queue_discard_zeroes_data_entry = {
@@ -617,20 +374,10 @@ static struct queue_sysfs_entry queue_write_same_max_entry = {
 	.show = queue_write_same_max_show,
 };
 
-static struct queue_sysfs_entry queue_write_zeroes_max_entry = {
-	.attr = {.name = "write_zeroes_max_bytes", .mode = S_IRUGO },
-	.show = queue_write_zeroes_max_show,
-};
-
 static struct queue_sysfs_entry queue_nonrot_entry = {
 	.attr = {.name = "rotational", .mode = S_IRUGO | S_IWUSR },
 	.show = queue_show_nonrot,
 	.store = queue_store_nonrot,
-};
-
-static struct queue_sysfs_entry queue_zoned_entry = {
-	.attr = {.name = "zoned", .mode = S_IRUGO },
-	.show = queue_zoned_show,
 };
 
 static struct queue_sysfs_entry queue_nomerges_entry = {
@@ -657,40 +404,6 @@ static struct queue_sysfs_entry queue_random_entry = {
 	.store = queue_store_random,
 };
 
-static struct queue_sysfs_entry queue_poll_entry = {
-	.attr = {.name = "io_poll", .mode = S_IRUGO | S_IWUSR },
-	.show = queue_poll_show,
-	.store = queue_poll_store,
-};
-
-static struct queue_sysfs_entry queue_poll_delay_entry = {
-	.attr = {.name = "io_poll_delay", .mode = S_IRUGO | S_IWUSR },
-	.show = queue_poll_delay_show,
-	.store = queue_poll_delay_store,
-};
-
-static struct queue_sysfs_entry queue_wc_entry = {
-	.attr = {.name = "write_cache", .mode = S_IRUGO | S_IWUSR },
-	.show = queue_wc_show,
-	.store = queue_wc_store,
-};
-
-static struct queue_sysfs_entry queue_dax_entry = {
-	.attr = {.name = "dax", .mode = S_IRUGO },
-	.show = queue_dax_show,
-};
-
-static struct queue_sysfs_entry queue_stats_entry = {
-	.attr = {.name = "stats", .mode = S_IRUGO },
-	.show = queue_stats_show,
-};
-
-static struct queue_sysfs_entry queue_wb_lat_entry = {
-	.attr = {.name = "wbt_lat_usec", .mode = S_IRUGO | S_IWUSR },
-	.show = queue_wb_lat_show,
-	.store = queue_wb_lat_store,
-};
-
 static struct attribute *default_attrs[] = {
 	&queue_requests_entry.attr,
 	&queue_ra_entry.attr,
@@ -703,27 +416,17 @@ static struct attribute *default_attrs[] = {
 	&queue_hw_sector_size_entry.attr,
 	&queue_logical_block_size_entry.attr,
 	&queue_physical_block_size_entry.attr,
-	&queue_chunk_sectors_entry.attr,
 	&queue_io_min_entry.attr,
 	&queue_io_opt_entry.attr,
 	&queue_discard_granularity_entry.attr,
 	&queue_discard_max_entry.attr,
-	&queue_discard_max_hw_entry.attr,
 	&queue_discard_zeroes_data_entry.attr,
 	&queue_write_same_max_entry.attr,
-	&queue_write_zeroes_max_entry.attr,
 	&queue_nonrot_entry.attr,
-	&queue_zoned_entry.attr,
 	&queue_nomerges_entry.attr,
 	&queue_rq_affinity_entry.attr,
 	&queue_iostats_entry.attr,
 	&queue_random_entry.attr,
-	&queue_poll_entry.attr,
-	&queue_wc_entry.attr,
-	&queue_dax_entry.attr,
-	&queue_stats_entry.attr,
-	&queue_wb_lat_entry.attr,
-	&queue_poll_delay_entry.attr,
 	NULL,
 };
 
@@ -789,17 +492,17 @@ static void blk_free_queue_rcu(struct rcu_head *rcu_head)
  *     Currently, its primary task it to free all the &struct request
  *     structures that were allocated to the queue and the queue itself.
  *
- * Note:
- *     The low level driver must have finished any outstanding requests first
- *     via blk_cleanup_queue().
+ * Caveat:
+ *     Hopefully the low level driver will have finished any
+ *     outstanding requests first...
  **/
 static void blk_release_queue(struct kobject *kobj)
 {
 	struct request_queue *q =
 		container_of(kobj, struct request_queue, kobj);
 
-	wbt_exit(q);
-	bdi_exit(&q->backing_dev_info);
+	blk_sync_queue(q);
+
 	blkcg_exit_queue(q);
 
 	if (q->elevator) {
@@ -814,15 +517,14 @@ static void blk_release_queue(struct kobject *kobj)
 	if (q->queue_tags)
 		__blk_queue_free_tags(q);
 
-	if (!q->mq_ops)
-		blk_free_flush_queue(q->fq);
-	else
-		blk_mq_release(q);
+	if (q->mq_ops)
+		blk_mq_free_queue(q);
+
+	kfree(q->flush_rq);
 
 	blk_trace_shutdown(q);
 
-	if (q->bio_split)
-		bioset_free(q->bio_split);
+	bdi_destroy(&q->backing_dev_info);
 
 	ida_simple_remove(&blk_queue_ida, q->id);
 	call_rcu(&q->rcu_head, blk_free_queue_rcu);
@@ -839,23 +541,6 @@ struct kobj_type blk_queue_ktype = {
 	.release	= blk_release_queue,
 };
 
-static void blk_wb_init(struct request_queue *q)
-{
-#ifndef CONFIG_BLK_WBT_MQ
-	if (q->mq_ops)
-		return;
-#endif
-#ifndef CONFIG_BLK_WBT_SQ
-	if (q->request_fn)
-		return;
-#endif
-
-	/*
-	 * If this fails, we don't get throttling
-	 */
-	wbt_init(q);
-}
-
 int blk_register_queue(struct gendisk *disk)
 {
 	int ret;
@@ -866,19 +551,11 @@ int blk_register_queue(struct gendisk *disk)
 		return -ENXIO;
 
 	/*
-	 * SCSI probing may synchronously create and destroy a lot of
-	 * request_queues for non-existent devices.  Shutting down a fully
-	 * functional queue takes measureable wallclock time as RCU grace
-	 * periods are involved.  To avoid excessive latency in these
-	 * cases, a request_queue starts out in a degraded mode which is
-	 * faster to shut down and is made fully functional here as
-	 * request_queues for non-existent devices never get registered.
+	 * Initialization must be complete by now.  Finish the initial
+	 * bypass from queue allocation.
 	 */
-	if (!blk_queue_init_done(q)) {
-		queue_flag_set_unlocked(QUEUE_FLAG_INIT_DONE, q);
-		percpu_ref_switch_to_percpu(&q->q_usage_counter);
-		blk_queue_bypass_end(q);
-	}
+	blk_queue_bypass_end(q);
+	queue_flag_set_unlocked(QUEUE_FLAG_INIT_DONE, q);
 
 	ret = blk_trace_init_sysfs(dev);
 	if (ret)
@@ -893,9 +570,7 @@ int blk_register_queue(struct gendisk *disk)
 	kobject_uevent(&q->kobj, KOBJ_ADD);
 
 	if (q->mq_ops)
-		blk_mq_register_dev(dev, q);
-
-	blk_wb_init(q);
+		blk_mq_register_disk(disk);
 
 	if (!q->request_fn)
 		return 0;
@@ -920,7 +595,7 @@ void blk_unregister_queue(struct gendisk *disk)
 		return;
 
 	if (q->mq_ops)
-		blk_mq_unregister_dev(disk_to_dev(disk), q);
+		blk_mq_unregister_disk(disk);
 
 	if (q->request_fn)
 		elv_unregister_queue(q);

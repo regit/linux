@@ -175,7 +175,7 @@ static int snd_wl1273_get_audio_route(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wl1273_priv *wl1273 = snd_soc_codec_get_drvdata(codec);
 
-	ucontrol->value.enumerated.item[0] = wl1273->mode;
+	ucontrol->value.integer.value[0] = wl1273->mode;
 
 	return 0;
 }
@@ -193,17 +193,18 @@ static int snd_wl1273_set_audio_route(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wl1273_priv *wl1273 = snd_soc_codec_get_drvdata(codec);
 
-	if (wl1273->mode == ucontrol->value.enumerated.item[0])
+	if (wl1273->mode == ucontrol->value.integer.value[0])
 		return 0;
 
 	/* Do not allow changes while stream is running */
 	if (snd_soc_codec_is_active(codec))
 		return -EPERM;
 
-	if (ucontrol->value.enumerated.item[0] >=  ARRAY_SIZE(wl1273_audio_route))
+	if (ucontrol->value.integer.value[0] < 0 ||
+	    ucontrol->value.integer.value[0] >=  ARRAY_SIZE(wl1273_audio_route))
 		return -EINVAL;
 
-	wl1273->mode = ucontrol->value.enumerated.item[0];
+	wl1273->mode = ucontrol->value.integer.value[0];
 
 	return 1;
 }
@@ -218,7 +219,7 @@ static int snd_wl1273_fm_audio_get(struct snd_kcontrol *kcontrol,
 
 	dev_dbg(codec->dev, "%s: enter.\n", __func__);
 
-	ucontrol->value.enumerated.item[0] = wl1273->core->audio_mode;
+	ucontrol->value.integer.value[0] = wl1273->core->audio_mode;
 
 	return 0;
 }
@@ -232,7 +233,7 @@ static int snd_wl1273_fm_audio_put(struct snd_kcontrol *kcontrol,
 
 	dev_dbg(codec->dev, "%s: enter.\n", __func__);
 
-	val = ucontrol->value.enumerated.item[0];
+	val = ucontrol->value.integer.value[0];
 	if (wl1273->core->audio_mode == val)
 		return 0;
 
@@ -306,10 +307,11 @@ static int wl1273_startup(struct snd_pcm_substream *substream,
 
 	switch (wl1273->mode) {
 	case WL1273_MODE_BT:
-		snd_pcm_hw_constraint_single(substream->runtime,
-					     SNDRV_PCM_HW_PARAM_RATE, 8000);
-		snd_pcm_hw_constraint_single(substream->runtime,
-					     SNDRV_PCM_HW_PARAM_CHANNELS, 1);
+		snd_pcm_hw_constraint_minmax(substream->runtime,
+					     SNDRV_PCM_HW_PARAM_RATE,
+					     8000, 8000);
+		snd_pcm_hw_constraint_minmax(substream->runtime,
+					     SNDRV_PCM_HW_PARAM_CHANNELS, 1, 1);
 		break;
 	case WL1273_MODE_FM_RX:
 		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
@@ -339,9 +341,8 @@ static int wl1273_hw_params(struct snd_pcm_substream *substream,
 	struct wl1273_core *core = wl1273->core;
 	unsigned int rate, width, r;
 
-	if (params_width(params) != 16) {
-		dev_err(dai->dev, "%d bits/sample not supported\n",
-			params_width(params));
+	if (params_format(params) != SNDRV_PCM_FORMAT_S16_LE) {
+		pr_err("Only SNDRV_PCM_FORMAT_S16_LE supported.\n");
 		return -EINVAL;
 	}
 
@@ -450,6 +451,7 @@ static int wl1273_probe(struct snd_soc_codec *codec)
 {
 	struct wl1273_core **core = codec->dev->platform_data;
 	struct wl1273_priv *wl1273;
+	int r;
 
 	dev_dbg(codec->dev, "%s.\n", __func__);
 
@@ -459,15 +461,22 @@ static int wl1273_probe(struct snd_soc_codec *codec)
 	}
 
 	wl1273 = kzalloc(sizeof(struct wl1273_priv), GFP_KERNEL);
-	if (!wl1273)
+	if (wl1273 == NULL) {
+		dev_err(codec->dev, "Cannot allocate memory.\n");
 		return -ENOMEM;
+	}
 
 	wl1273->mode = WL1273_MODE_BT;
 	wl1273->core = *core;
 
 	snd_soc_codec_set_drvdata(codec, wl1273);
 
-	return 0;
+	r = snd_soc_add_codec_controls(codec, wl1273_controls,
+				 ARRAY_SIZE(wl1273_controls));
+	if (r)
+		kfree(wl1273);
+
+	return r;
 }
 
 static int wl1273_remove(struct snd_soc_codec *codec)
@@ -484,14 +493,10 @@ static struct snd_soc_codec_driver soc_codec_dev_wl1273 = {
 	.probe = wl1273_probe,
 	.remove = wl1273_remove,
 
-	.component_driver = {
-		.controls		= wl1273_controls,
-		.num_controls		= ARRAY_SIZE(wl1273_controls),
-		.dapm_widgets		= wl1273_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(wl1273_dapm_widgets),
-		.dapm_routes		= wl1273_dapm_routes,
-		.num_dapm_routes	= ARRAY_SIZE(wl1273_dapm_routes),
-	},
+	.dapm_widgets = wl1273_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(wl1273_dapm_widgets),
+	.dapm_routes = wl1273_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(wl1273_dapm_routes),
 };
 
 static int wl1273_platform_probe(struct platform_device *pdev)
@@ -511,6 +516,7 @@ MODULE_ALIAS("platform:wl1273-codec");
 static struct platform_driver wl1273_platform_driver = {
 	.driver		= {
 		.name	= "wl1273-codec",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= wl1273_platform_probe,
 	.remove		= wl1273_platform_remove,

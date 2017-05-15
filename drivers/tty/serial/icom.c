@@ -22,6 +22,7 @@
   * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
   *
   */
+#define SERIAL_DO_RESTART
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -53,7 +54,7 @@
 
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "icom.h"
 
@@ -1051,6 +1052,11 @@ static void icom_stop_rx(struct uart_port *port)
 	writeb(cmdReg & ~CMD_RCV_ENABLE, &ICOM_PORT->dram->CmdReg);
 }
 
+static void icom_enable_ms(struct uart_port *port)
+{
+	/* no-op */
+}
+
 static void icom_break(struct uart_port *port, int break_state)
 {
 	unsigned char cmdReg;
@@ -1294,6 +1300,7 @@ static struct uart_ops icom_ops = {
 	.start_tx = icom_start_tx,
 	.send_xchar = icom_send_xchar,
 	.stop_rx = icom_stop_rx,
+	.enable_ms = icom_enable_ms,
 	.break_ctl = icom_break,
 	.startup = icom_open,
 	.shutdown = icom_close,
@@ -1503,8 +1510,7 @@ static int icom_probe(struct pci_dev *dev,
 		return retval;
 	}
 
-	retval = pci_request_regions(dev, "icom");
-	if (retval) {
+	if ( (retval = pci_request_regions(dev, "icom"))) {
 		 dev_err(&dev->dev, "pci_request_regions FAILED\n");
 		 pci_disable_device(dev);
 		 return retval;
@@ -1512,8 +1518,7 @@ static int icom_probe(struct pci_dev *dev,
 
 	pci_set_master(dev);
 
-	retval = pci_read_config_dword(dev, PCI_COMMAND, &command_reg);
-	if (retval) {
+	if ( (retval = pci_read_config_dword(dev, PCI_COMMAND, &command_reg))) {
 		dev_err(&dev->dev, "PCI Config read FAILED\n");
 		return retval;
 	}
@@ -1551,14 +1556,13 @@ static int icom_probe(struct pci_dev *dev,
 
 	icom_adapter->base_addr = pci_ioremap_bar(dev, 0);
 
-	if (!icom_adapter->base_addr) {
-		retval = -ENOMEM;
+	if (!icom_adapter->base_addr)
 		goto probe_exit1;
-	}
 
 	 /* save off irq and request irq line */
-	 retval = request_irq(dev->irq, icom_interrupt, IRQF_SHARED, ICOM_DRIVER_NAME, (void *)icom_adapter);
-	 if (retval) {
+	 if ( (retval = request_irq(dev->irq, icom_interrupt,
+				   IRQF_SHARED, ICOM_DRIVER_NAME,
+				   (void *) icom_adapter))) {
 		  goto probe_exit2;
 	 }
 

@@ -49,7 +49,7 @@
 
 #include <asm/io.h>
 #include <asm/byteorder.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define PCNET_CMD	0x00
 #define PCNET_DATAPORT	0x10	/* NatSemi-defined port window offset. */
@@ -111,11 +111,11 @@ static void pcnet_detach(struct pcmcia_device *p_dev);
 
 /*====================================================================*/
 
-struct hw_info {
+typedef struct hw_info_t {
     u_int	offset;
     u_char	a0, a1, a2;
     u_int	flags;
-};
+} hw_info_t;
 
 #define DELAY_OUTPUT	0x01
 #define HAS_MISC_REG	0x02
@@ -132,7 +132,7 @@ struct hw_info {
 #define MII_PHYID_REG1		0x02
 #define MII_PHYID_REG2		0x03
 
-static struct hw_info hw_info[] = {
+static hw_info_t hw_info[] = {
     { /* Accton EN2212 */ 0x0ff0, 0x00, 0x00, 0xe8, DELAY_OUTPUT },
     { /* Allied Telesis LA-PCM */ 0x0ff0, 0x00, 0x00, 0xf4, 0 },
     { /* APEX MultiCard */ 0x03f4, 0x00, 0x20, 0xe5, 0 },
@@ -196,11 +196,11 @@ static struct hw_info hw_info[] = {
 
 #define NR_INFO		ARRAY_SIZE(hw_info)
 
-static struct hw_info default_info = { 0, 0, 0, 0, 0 };
-static struct hw_info dl10019_info = { 0, 0, 0, 0, IS_DL10019|HAS_MII };
-static struct hw_info dl10022_info = { 0, 0, 0, 0, IS_DL10022|HAS_MII };
+static hw_info_t default_info = { 0, 0, 0, 0, 0 };
+static hw_info_t dl10019_info = { 0, 0, 0, 0, IS_DL10019|HAS_MII };
+static hw_info_t dl10022_info = { 0, 0, 0, 0, IS_DL10022|HAS_MII };
 
-struct pcnet_dev {
+typedef struct pcnet_dev_t {
 	struct pcmcia_device	*p_dev;
     u_int		flags;
     void		__iomem *base;
@@ -210,12 +210,12 @@ struct pcnet_dev {
     u_char		eth_phy, pna_phy;
     u_short		link_status;
     u_long		mii_reset;
-};
+} pcnet_dev_t;
 
-static inline struct pcnet_dev *PRIV(struct net_device *dev)
+static inline pcnet_dev_t *PRIV(struct net_device *dev)
 {
 	char *p = netdev_priv(dev);
-	return (struct pcnet_dev *)(p + sizeof(struct ei_device));
+	return (pcnet_dev_t *)(p + sizeof(struct ei_device));
 }
 
 static const struct net_device_ops pcnet_netdev_ops = {
@@ -227,6 +227,7 @@ static const struct net_device_ops pcnet_netdev_ops = {
 	.ndo_do_ioctl 		= ei_ioctl,
 	.ndo_set_rx_mode	= ei_set_multicast_list,
 	.ndo_tx_timeout 	= ei_tx_timeout,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -236,13 +237,13 @@ static const struct net_device_ops pcnet_netdev_ops = {
 
 static int pcnet_probe(struct pcmcia_device *link)
 {
-    struct pcnet_dev *info;
+    pcnet_dev_t *info;
     struct net_device *dev;
 
     dev_dbg(&link->dev, "pcnet_attach()\n");
 
     /* Create new ethernet device */
-    dev = __alloc_ei_netdev(sizeof(struct pcnet_dev));
+    dev = __alloc_ei_netdev(sizeof(pcnet_dev_t));
     if (!dev) return -ENOMEM;
     info = PRIV(dev);
     info->p_dev = link;
@@ -275,7 +276,7 @@ static void pcnet_detach(struct pcmcia_device *link)
 
 ======================================================================*/
 
-static struct hw_info *get_hwinfo(struct pcmcia_device *link)
+static hw_info_t *get_hwinfo(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
     u_char __iomem *base, *virt;
@@ -316,7 +317,7 @@ static struct hw_info *get_hwinfo(struct pcmcia_device *link)
 
 ======================================================================*/
 
-static struct hw_info *get_prom(struct pcmcia_device *link)
+static hw_info_t *get_prom(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
     unsigned int ioaddr = dev->base_addr;
@@ -370,7 +371,7 @@ static struct hw_info *get_prom(struct pcmcia_device *link)
 
 ======================================================================*/
 
-static struct hw_info *get_dl10019(struct pcmcia_device *link)
+static hw_info_t *get_dl10019(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
     int i;
@@ -392,7 +393,7 @@ static struct hw_info *get_dl10019(struct pcmcia_device *link)
 
 ======================================================================*/
 
-static struct hw_info *get_ax88190(struct pcmcia_device *link)
+static hw_info_t *get_ax88190(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
     unsigned int ioaddr = dev->base_addr;
@@ -423,7 +424,7 @@ static struct hw_info *get_ax88190(struct pcmcia_device *link)
 
 ======================================================================*/
 
-static struct hw_info *get_hwired(struct pcmcia_device *link)
+static hw_info_t *get_hwired(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
     int i;
@@ -488,12 +489,12 @@ static int pcnet_confcheck(struct pcmcia_device *p_dev, void *priv_data)
 	return try_io_port(p_dev);
 }
 
-static struct hw_info *pcnet_try_config(struct pcmcia_device *link,
-					int *has_shmem, int try)
+static hw_info_t *pcnet_try_config(struct pcmcia_device *link,
+				   int *has_shmem, int try)
 {
 	struct net_device *dev = link->priv;
-	struct hw_info *local_hw_info;
-	struct pcnet_dev *info = PRIV(dev);
+	hw_info_t *local_hw_info;
+	pcnet_dev_t *info = PRIV(dev);
 	int priv = try;
 	int ret;
 
@@ -552,10 +553,10 @@ static struct hw_info *pcnet_try_config(struct pcmcia_device *link,
 static int pcnet_config(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     int start_pg, stop_pg, cm_offset;
     int has_shmem = 0;
-    struct hw_info *local_hw_info;
+    hw_info_t *local_hw_info;
     struct ei_device *ei_local;
 
     dev_dbg(&link->dev, "pcnet_config\n");
@@ -638,7 +639,7 @@ failed:
 
 static void pcnet_release(struct pcmcia_device *link)
 {
-	struct pcnet_dev *info = PRIV(link->priv);
+	pcnet_dev_t *info = PRIV(link->priv);
 
 	dev_dbg(&link->dev, "pcnet_release\n");
 
@@ -835,7 +836,7 @@ static void write_asic(unsigned int ioaddr, int location, short asic_data)
 static void set_misc_reg(struct net_device *dev)
 {
     unsigned int nic_base = dev->base_addr;
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     u_char tmp;
 
     if (info->flags & HAS_MISC_REG) {
@@ -872,7 +873,7 @@ static void set_misc_reg(struct net_device *dev)
 
 static void mii_phy_probe(struct net_device *dev)
 {
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     unsigned int mii_addr = dev->base_addr + DLINK_GPIO;
     int i;
     u_int tmp, phyid;
@@ -897,7 +898,7 @@ static void mii_phy_probe(struct net_device *dev)
 static int pcnet_open(struct net_device *dev)
 {
     int ret;
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     struct pcmcia_device *link = info->p_dev;
     unsigned int nic_base = dev->base_addr;
 
@@ -917,8 +918,11 @@ static int pcnet_open(struct net_device *dev)
 
     info->phy_id = info->eth_phy;
     info->link_status = 0x00;
-    setup_timer(&info->watchdog, ei_watchdog, (u_long)dev);
-    mod_timer(&info->watchdog, jiffies + HZ);
+    init_timer(&info->watchdog);
+    info->watchdog.function = ei_watchdog;
+    info->watchdog.data = (u_long)dev;
+    info->watchdog.expires = jiffies + HZ;
+    add_timer(&info->watchdog);
 
     return ei_open(dev);
 } /* pcnet_open */
@@ -927,7 +931,7 @@ static int pcnet_open(struct net_device *dev)
 
 static int pcnet_close(struct net_device *dev)
 {
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     struct pcmcia_device *link = info->p_dev;
 
     dev_dbg(&link->dev, "pcnet_close('%s')\n", dev->name);
@@ -978,7 +982,7 @@ static void pcnet_reset_8390(struct net_device *dev)
 
 static int set_config(struct net_device *dev, struct ifmap *map)
 {
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     if ((map->port != (u_char)(-1)) && (map->port != dev->if_port)) {
 	if (!(info->flags & HAS_MISC_REG))
 	    return -EOPNOTSUPP;
@@ -996,7 +1000,7 @@ static int set_config(struct net_device *dev, struct ifmap *map)
 static irqreturn_t ei_irq_wrapper(int irq, void *dev_id)
 {
     struct net_device *dev = dev_id;
-    struct pcnet_dev *info;
+    pcnet_dev_t *info;
     irqreturn_t ret = ei_interrupt(irq, dev_id);
 
     if (ret == IRQ_HANDLED) {
@@ -1009,7 +1013,7 @@ static irqreturn_t ei_irq_wrapper(int irq, void *dev_id)
 static void ei_watchdog(u_long arg)
 {
     struct net_device *dev = (struct net_device *)arg;
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     unsigned int nic_base = dev->base_addr;
     unsigned int mii_addr = nic_base + DLINK_GPIO;
     u_short link;
@@ -1097,7 +1101,7 @@ reschedule:
 
 static int ei_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     struct mii_ioctl_data *data = if_mii(rq);
     unsigned int mii_addr = dev->base_addr + DLINK_GPIO;
 
@@ -1210,7 +1214,7 @@ static void dma_block_output(struct net_device *dev, int count,
 			     const u_char *buf, const int start_page)
 {
     unsigned int nic_base = dev->base_addr;
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
 #ifdef PCMCIA_DEBUG
     int retries = 0;
     struct ei_device *ei_local = netdev_priv(dev);
@@ -1399,7 +1403,7 @@ static int setup_shmem_window(struct pcmcia_device *link, int start_pg,
 			      int stop_pg, int cm_offset)
 {
     struct net_device *dev = link->priv;
-    struct pcnet_dev *info = PRIV(dev);
+    pcnet_dev_t *info = PRIV(dev);
     int i, window_size, offset, ret;
 
     window_size = (stop_pg - start_pg) << 8;
@@ -1500,7 +1504,6 @@ static const struct pcmcia_device_id pcnet_ids[] = {
 	PCMCIA_DEVICE_MANF_CARD(0x026f, 0x030a),
 	PCMCIA_DEVICE_MANF_CARD(0x0274, 0x1103),
 	PCMCIA_DEVICE_MANF_CARD(0x0274, 0x1121),
-	PCMCIA_DEVICE_MANF_CARD(0xc001, 0x0009),
 	PCMCIA_DEVICE_PROD_ID12("2408LAN", "Ethernet", 0x352fff7f, 0x00b2e941),
 	PCMCIA_DEVICE_PROD_ID1234("Socket", "CF 10/100 Ethernet Card", "Revision B", "05/11/06", 0xb38bcc2e, 0x4de88352, 0xeaca6c8d, 0x7e57c22e),
 	PCMCIA_DEVICE_PROD_ID123("Cardwell", "PCMCIA", "ETHERNET", 0x9533672e, 0x281f1c5d, 0x3ff7175b),

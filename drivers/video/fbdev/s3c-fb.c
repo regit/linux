@@ -1105,7 +1105,8 @@ static int s3c_fb_alloc_memory(struct s3c_fb *sfb, struct s3c_fb_win *win)
 
 	dev_dbg(sfb->dev, "want %u bytes for window\n", size);
 
-	fbi->screen_base = dma_alloc_wc(sfb->dev, size, &map_dma, GFP_KERNEL);
+	fbi->screen_base = dma_alloc_writecombine(sfb->dev, size,
+						  &map_dma, GFP_KERNEL);
 	if (!fbi->screen_base)
 		return -ENOMEM;
 
@@ -1130,8 +1131,8 @@ static void s3c_fb_free_memory(struct s3c_fb *sfb, struct s3c_fb_win *win)
 	struct fb_info *fbi = win->fbinfo;
 
 	if (fbi->screen_base)
-		dma_free_wc(sfb->dev, PAGE_ALIGN(fbi->fix.smem_len),
-		            fbi->screen_base, fbi->fix.smem_start);
+		dma_free_writecombine(sfb->dev, PAGE_ALIGN(fbi->fix.smem_len),
+			      fbi->screen_base, fbi->fix.smem_start);
 }
 
 /**
@@ -1629,7 +1630,7 @@ static int s3c_fb_resume(struct device *dev)
 }
 #endif
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_RUNTIME
 static int s3c_fb_runtime_suspend(struct device *dev)
 {
 	struct s3c_fb *sfb = dev_get_drvdata(dev);
@@ -1804,6 +1805,38 @@ static struct s3c_fb_driverdata s3c_fb_data_64xx = {
 	.win[4]	= &s3c_fb_data_64xx_wins[4],
 };
 
+static struct s3c_fb_driverdata s3c_fb_data_s5pc100 = {
+	.variant = {
+		.nr_windows	= 5,
+		.vidtcon	= VIDTCON0,
+		.wincon		= WINCON(0),
+		.winmap		= WINxMAP(0),
+		.keycon		= WKEYCON,
+		.osd		= VIDOSD_BASE,
+		.osd_stride	= 16,
+		.buf_start	= VIDW_BUF_START(0),
+		.buf_size	= VIDW_BUF_SIZE(0),
+		.buf_end	= VIDW_BUF_END(0),
+
+		.palette = {
+			[0] = 0x2400,
+			[1] = 0x2800,
+			[2] = 0x2c00,
+			[3] = 0x3000,
+			[4] = 0x3400,
+		},
+
+		.has_prtcon	= 1,
+		.has_blendcon	= 1,
+		.has_clksel	= 1,
+	},
+	.win[0]	= &s3c_fb_data_s5p_wins[0],
+	.win[1]	= &s3c_fb_data_s5p_wins[1],
+	.win[2]	= &s3c_fb_data_s5p_wins[2],
+	.win[3]	= &s3c_fb_data_s5p_wins[3],
+	.win[4]	= &s3c_fb_data_s5p_wins[4],
+};
+
 static struct s3c_fb_driverdata s3c_fb_data_s5pv210 = {
 	.variant = {
 		.nr_windows	= 5,
@@ -1937,10 +1970,40 @@ static struct s3c_fb_driverdata s3c_fb_data_s3c2443 = {
 	},
 };
 
-static const struct platform_device_id s3c_fb_driver_ids[] = {
+static struct s3c_fb_driverdata s3c_fb_data_s5p64x0 = {
+	.variant = {
+		.nr_windows	= 3,
+		.vidtcon	= VIDTCON0,
+		.wincon		= WINCON(0),
+		.winmap		= WINxMAP(0),
+		.keycon		= WKEYCON,
+		.osd		= VIDOSD_BASE,
+		.osd_stride	= 16,
+		.buf_start	= VIDW_BUF_START(0),
+		.buf_size	= VIDW_BUF_SIZE(0),
+		.buf_end	= VIDW_BUF_END(0),
+
+		.palette = {
+			[0] = 0x2400,
+			[1] = 0x2800,
+			[2] = 0x2c00,
+		},
+
+		.has_blendcon	= 1,
+		.has_fixvclk	= 1,
+	},
+	.win[0] = &s3c_fb_data_s5p_wins[0],
+	.win[1] = &s3c_fb_data_s5p_wins[1],
+	.win[2] = &s3c_fb_data_s5p_wins[2],
+};
+
+static struct platform_device_id s3c_fb_driver_ids[] = {
 	{
 		.name		= "s3c-fb",
 		.driver_data	= (unsigned long)&s3c_fb_data_64xx,
+	}, {
+		.name		= "s5pc100-fb",
+		.driver_data	= (unsigned long)&s3c_fb_data_s5pc100,
 	}, {
 		.name		= "s5pv210-fb",
 		.driver_data	= (unsigned long)&s3c_fb_data_s5pv210,
@@ -1953,6 +2016,9 @@ static const struct platform_device_id s3c_fb_driver_ids[] = {
 	}, {
 		.name		= "s3c2443-fb",
 		.driver_data	= (unsigned long)&s3c_fb_data_s3c2443,
+	}, {
+		.name		= "s5p64x0-fb",
+		.driver_data	= (unsigned long)&s3c_fb_data_s5p64x0,
 	},
 	{},
 };
@@ -1970,6 +2036,7 @@ static struct platform_driver s3c_fb_driver = {
 	.id_table	= s3c_fb_driver_ids,
 	.driver		= {
 		.name	= "s3c-fb",
+		.owner	= THIS_MODULE,
 		.pm	= &s3cfb_pm_ops,
 	},
 };

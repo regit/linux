@@ -16,6 +16,7 @@
 #include <linux/swap.h>
 #include <linux/pagemap.h>
 #include <linux/blkdev.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
 #include "ext4.h"
 
@@ -128,12 +129,12 @@ static void debug_print_tree(struct ext4_sb_info *sbi)
 	node = rb_first(&sbi->system_blks);
 	while (node) {
 		entry = rb_entry(node, struct ext4_system_zone, node);
-		printk(KERN_CONT "%s%llu-%llu", first ? "" : ", ",
+		printk("%s%llu-%llu", first ? "" : ", ",
 		       entry->start_blk, entry->start_blk + entry->count - 1);
 		first = 0;
 		node = rb_next(node);
 	}
-	printk(KERN_CONT "\n");
+	printk("\n");
 }
 
 int ext4_setup_system_zone(struct super_block *sb)
@@ -234,7 +235,7 @@ int ext4_check_blockref(const char *function, unsigned int line,
 			es->s_last_error_block = cpu_to_le64(blk);
 			ext4_error_inode(inode, function, line, blk,
 					 "invalid block");
-			return -EFSCORRUPTED;
+			return -EIO;
 		}
 	}
 	return 0;

@@ -518,7 +518,7 @@ enum clk_type_t {
 	CLK_INT_SING = 2,	/* Internal single ended */
 };
 
-enum xgene_phy_mode {
+enum phy_mode {
 	MODE_SATA	= 0,	/* List them for simple reference */
 	MODE_SGMII	= 1,
 	MODE_PCIE	= 2,
@@ -542,7 +542,7 @@ struct xgene_sata_override_param {
 struct xgene_phy_ctx {
 	struct device *dev;
 	struct phy *phy;
-	enum xgene_phy_mode mode;		/* Mode of operation */
+	enum phy_mode mode;		/* Mode of operation */
 	enum clk_type_t clk_type;	/* Input clock selection */
 	void __iomem *sds_base;		/* PHY CSR base addr */
 	struct clk *clk;		/* Optional clock */
@@ -1657,6 +1657,7 @@ static int xgene_phy_probe(struct platform_device *pdev)
 	struct phy_provider *phy_provider;
 	struct xgene_phy_ctx *ctx;
 	struct resource *res;
+	int rc = 0;
 	u32 default_spd[] = DEFAULT_SATA_SPD_SEL;
 	u32 default_txboost_gain[] = DEFAULT_SATA_TXBOOST_GAIN;
 	u32 default_txeye_direction[] = DEFAULT_SATA_TXEYEDIRECTION;
@@ -1675,8 +1676,10 @@ static int xgene_phy_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	ctx->sds_base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(ctx->sds_base))
-		return PTR_ERR(ctx->sds_base);
+	if (IS_ERR(ctx->sds_base)) {
+		rc = PTR_ERR(ctx->sds_base);
+		goto error;
+	}
 
 	/* Retrieve optional clock */
 	ctx->clk = clk_get(&pdev->dev, NULL);
@@ -1701,17 +1704,28 @@ static int xgene_phy_probe(struct platform_device *pdev)
 	for (i = 0; i < MAX_LANE; i++)
 		ctx->sata_param.speed[i] = 2; /* Default to Gen3 */
 
+	ctx->dev = &pdev->dev;
 	platform_set_drvdata(pdev, ctx);
 
-	ctx->phy = devm_phy_create(ctx->dev, NULL, &xgene_phy_ops);
+	ctx->phy = devm_phy_create(ctx->dev, &xgene_phy_ops, NULL);
 	if (IS_ERR(ctx->phy)) {
 		dev_dbg(&pdev->dev, "Failed to create PHY\n");
-		return PTR_ERR(ctx->phy);
+		rc = PTR_ERR(ctx->phy);
+		goto error;
 	}
 	phy_set_drvdata(ctx->phy, ctx);
 
-	phy_provider = devm_of_phy_provider_register(ctx->dev, xgene_phy_xlate);
-	return PTR_ERR_OR_ZERO(phy_provider);
+	phy_provider = devm_of_phy_provider_register(ctx->dev,
+						     xgene_phy_xlate);
+	if (IS_ERR(phy_provider)) {
+		rc = PTR_ERR(phy_provider);
+		goto error;
+	}
+
+	return 0;
+
+error:
+	return rc;
 }
 
 static const struct of_device_id xgene_phy_of_match[] = {
@@ -1724,6 +1738,7 @@ static struct platform_driver xgene_phy_driver = {
 	.probe = xgene_phy_probe,
 	.driver = {
 		   .name = "xgene-phy",
+		   .owner = THIS_MODULE,
 		   .of_match_table = xgene_phy_of_match,
 	},
 };

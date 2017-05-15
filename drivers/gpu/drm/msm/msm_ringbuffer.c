@@ -23,8 +23,7 @@ struct msm_ringbuffer *msm_ringbuffer_new(struct msm_gpu *gpu, int size)
 	struct msm_ringbuffer *ring;
 	int ret;
 
-	if (WARN_ON(!is_power_of_2(size)))
-		return ERR_PTR(-EINVAL);
+	size = ALIGN(size, 4);   /* size should be dword aligned */
 
 	ring = kzalloc(sizeof(*ring), GFP_KERNEL);
 	if (!ring) {
@@ -40,11 +39,7 @@ struct msm_ringbuffer *msm_ringbuffer_new(struct msm_gpu *gpu, int size)
 		goto fail;
 	}
 
-	ring->start = msm_gem_get_vaddr_locked(ring->bo);
-	if (IS_ERR(ring->start)) {
-		ret = PTR_ERR(ring->start);
-		goto fail;
-	}
+	ring->start = msm_gem_vaddr_locked(ring->bo);
 	ring->end   = ring->start + (size / 4);
 	ring->cur   = ring->start;
 
@@ -60,9 +55,7 @@ fail:
 
 void msm_ringbuffer_destroy(struct msm_ringbuffer *ring)
 {
-	if (ring->bo) {
-		msm_gem_put_vaddr(ring->bo);
-		drm_gem_object_unreference_unlocked(ring->bo);
-	}
+	if (ring->bo)
+		drm_gem_object_unreference(ring->bo);
 	kfree(ring);
 }

@@ -22,7 +22,6 @@
 #include "hash.h"
 #include "transaction.h"
 #include "xattr.h"
-#include "compression.h"
 
 #define BTRFS_PROP_HANDLERS_HT_BITS 8
 static DEFINE_HASHTABLE(prop_handlers_ht, BTRFS_PROP_HANDLERS_HT_BITS);
@@ -50,16 +49,18 @@ static struct prop_handler prop_handlers[] = {
 		.extract = prop_compression_extract,
 		.inheritable = 1
 	},
+	{
+		.xattr_name = NULL
+	}
 };
 
 void __init btrfs_props_init(void)
 {
-	int i;
+	struct prop_handler *p;
 
 	hash_init(prop_handlers_ht);
 
-	for (i = 0; i < ARRAY_SIZE(prop_handlers); i++) {
-		struct prop_handler *p = &prop_handlers[i];
+	for (p = &prop_handlers[0]; p->xattr_name; p++) {
 		u64 h = btrfs_name_hash(p->xattr_name, strlen(p->xattr_name));
 
 		hash_add(prop_handlers_ht, &p->node, h);
@@ -300,17 +301,15 @@ static int inherit_props(struct btrfs_trans_handle *trans,
 			 struct inode *inode,
 			 struct inode *parent)
 {
+	const struct prop_handler *h;
 	struct btrfs_root *root = BTRFS_I(inode)->root;
-	struct btrfs_fs_info *fs_info = root->fs_info;
 	int ret;
-	int i;
 
 	if (!test_bit(BTRFS_INODE_HAS_PROPS,
 		      &BTRFS_I(parent)->runtime_flags))
 		return 0;
 
-	for (i = 0; i < ARRAY_SIZE(prop_handlers); i++) {
-		const struct prop_handler *h = &prop_handlers[i];
+	for (h = &prop_handlers[0]; h->xattr_name; h++) {
 		const char *value;
 		u64 num_bytes;
 
@@ -321,14 +320,14 @@ static int inherit_props(struct btrfs_trans_handle *trans,
 		if (!value)
 			continue;
 
-		num_bytes = btrfs_calc_trans_metadata_size(fs_info, 1);
+		num_bytes = btrfs_calc_trans_metadata_size(root, 1);
 		ret = btrfs_block_rsv_add(root, trans->block_rsv,
 					  num_bytes, BTRFS_RESERVE_NO_FLUSH);
 		if (ret)
 			goto out;
 		ret = __btrfs_set_prop(trans, inode, h->xattr_name,
 				       value, strlen(value), 0);
-		btrfs_block_rsv_release(fs_info, trans->block_rsv, num_bytes);
+		btrfs_block_rsv_release(root, trans->block_rsv, num_bytes);
 		if (ret)
 			goto out;
 	}
@@ -351,7 +350,6 @@ int btrfs_subvol_inherit_props(struct btrfs_trans_handle *trans,
 			       struct btrfs_root *root,
 			       struct btrfs_root *parent_root)
 {
-	struct super_block *sb = root->fs_info->sb;
 	struct btrfs_key key;
 	struct inode *parent_inode, *child_inode;
 	int ret;
@@ -360,11 +358,12 @@ int btrfs_subvol_inherit_props(struct btrfs_trans_handle *trans,
 	key.type = BTRFS_INODE_ITEM_KEY;
 	key.offset = 0;
 
-	parent_inode = btrfs_iget(sb, &key, parent_root, NULL);
+	parent_inode = btrfs_iget(parent_root->fs_info->sb, &key,
+				  parent_root, NULL);
 	if (IS_ERR(parent_inode))
 		return PTR_ERR(parent_inode);
 
-	child_inode = btrfs_iget(sb, &key, root, NULL);
+	child_inode = btrfs_iget(root->fs_info->sb, &key, root, NULL);
 	if (IS_ERR(child_inode)) {
 		iput(parent_inode);
 		return PTR_ERR(child_inode);
@@ -426,5 +425,3 @@ static const char *prop_compression_extract(struct inode *inode)
 
 	return NULL;
 }
-
-

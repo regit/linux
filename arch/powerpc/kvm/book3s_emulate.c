@@ -23,7 +23,6 @@
 #include <asm/reg.h>
 #include <asm/switch_to.h>
 #include <asm/time.h>
-#include "book3s.h"
 
 #define OP_19_XOP_RFID		18
 #define OP_19_XOP_RFI		50
@@ -440,6 +439,12 @@ int kvmppc_core_emulate_mtspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong spr_val)
 		    (mfmsr() & MSR_HV))
 			vcpu->arch.hflags |= BOOK3S_HFLAG_DCBZ32;
 		break;
+	case SPRN_PURR:
+		to_book3s(vcpu)->purr_offset = spr_val - get_tb();
+		break;
+	case SPRN_SPURR:
+		to_book3s(vcpu)->spurr_offset = spr_val - get_tb();
+		break;
 	case SPRN_GQR0:
 	case SPRN_GQR1:
 	case SPRN_GQR2:
@@ -450,10 +455,10 @@ int kvmppc_core_emulate_mtspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong spr_val)
 	case SPRN_GQR7:
 		to_book3s(vcpu)->gqr[sprn - SPRN_GQR0] = spr_val;
 		break;
-#ifdef CONFIG_PPC_BOOK3S_64
 	case SPRN_FSCR:
-		kvmppc_set_fscr(vcpu, spr_val);
+		vcpu->arch.fscr = spr_val;
 		break;
+#ifdef CONFIG_PPC_BOOK3S_64
 	case SPRN_BESCR:
 		vcpu->arch.bescr = spr_val;
 		break;
@@ -498,7 +503,6 @@ int kvmppc_core_emulate_mtspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong spr_val)
 	case SPRN_MMCR0:
 	case SPRN_MMCR1:
 	case SPRN_MMCR2:
-	case SPRN_UMMCR2:
 #endif
 		break;
 unprivileged:
@@ -568,22 +572,10 @@ int kvmppc_core_emulate_mfspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong *spr_val
 		*spr_val = 0;
 		break;
 	case SPRN_PURR:
-		/*
-		 * On exit we would have updated purr
-		 */
-		*spr_val = vcpu->arch.purr;
+		*spr_val = get_tb() + to_book3s(vcpu)->purr_offset;
 		break;
 	case SPRN_SPURR:
-		/*
-		 * On exit we would have updated spurr
-		 */
-		*spr_val = vcpu->arch.spurr;
-		break;
-	case SPRN_VTB:
-		*spr_val = to_book3s(vcpu)->vtb;
-		break;
-	case SPRN_IC:
-		*spr_val = vcpu->arch.ic;
+		*spr_val = get_tb() + to_book3s(vcpu)->purr_offset;
 		break;
 	case SPRN_GQR0:
 	case SPRN_GQR1:
@@ -595,10 +587,10 @@ int kvmppc_core_emulate_mfspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong *spr_val
 	case SPRN_GQR7:
 		*spr_val = to_book3s(vcpu)->gqr[sprn - SPRN_GQR0];
 		break;
-#ifdef CONFIG_PPC_BOOK3S_64
 	case SPRN_FSCR:
 		*spr_val = vcpu->arch.fscr;
 		break;
+#ifdef CONFIG_PPC_BOOK3S_64
 	case SPRN_BESCR:
 		*spr_val = vcpu->arch.bescr;
 		break;
@@ -641,7 +633,6 @@ int kvmppc_core_emulate_mfspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong *spr_val
 	case SPRN_MMCR0:
 	case SPRN_MMCR1:
 	case SPRN_MMCR2:
-	case SPRN_UMMCR2:
 	case SPRN_TIR:
 #endif
 		*spr_val = 0;

@@ -152,7 +152,7 @@ static void lcdc_write(unsigned int val, unsigned int addr)
 
 struct da8xx_fb_par {
 	struct device		*dev;
-	dma_addr_t		p_palette_base;
+	resource_size_t p_palette_base;
 	unsigned char *v_palette_base;
 	dma_addr_t		vram_phys;
 	unsigned long		vram_size;
@@ -209,7 +209,8 @@ static struct fb_videomode known_lcd_panels[] = {
 		.lower_margin   = 2,
 		.hsync_len      = 0,
 		.vsync_len      = 0,
-		.sync           = FB_SYNC_CLK_INVERT,
+		.sync           = FB_SYNC_CLK_INVERT |
+			FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 	},
 	/* Sharp LK043T1DG01 */
 	[1] = {
@@ -223,7 +224,7 @@ static struct fb_videomode known_lcd_panels[] = {
 		.lower_margin   = 2,
 		.hsync_len      = 41,
 		.vsync_len      = 10,
-		.sync           = 0,
+		.sync           = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 		.flag           = 0,
 	},
 	[2] = {
@@ -238,7 +239,7 @@ static struct fb_videomode known_lcd_panels[] = {
 		.lower_margin   = 10,
 		.hsync_len      = 10,
 		.vsync_len      = 10,
-		.sync           = 0,
+		.sync           = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 		.flag           = 0,
 	},
 	[3] = {
@@ -418,7 +419,7 @@ static void lcd_cfg_horizontal_sync(int back_porch, int pulse_width,
 {
 	u32 reg;
 
-	reg = lcdc_read(LCD_RASTER_TIMING_0_REG) & 0x3ff;
+	reg = lcdc_read(LCD_RASTER_TIMING_0_REG) & 0xf;
 	reg |= (((back_porch-1) & 0xff) << 24)
 	    | (((front_porch-1) & 0xff) << 16)
 	    | (((pulse_width-1) & 0x3f) << 10);
@@ -713,7 +714,7 @@ static int da8xx_fb_config_clk_divider(struct da8xx_fb_par *par,
 
 	if (par->lcdc_clk_rate != lcdc_clk_rate) {
 		ret = clk_set_rate(par->lcdc_clk, lcdc_clk_rate);
-		if (ret) {
+		if (IS_ERR_VALUE(ret)) {
 			dev_err(par->dev,
 				"unable to set clock rate at %u\n",
 				lcdc_clk_rate);
@@ -784,7 +785,7 @@ static int lcd_init(struct da8xx_fb_par *par, const struct lcd_ctrl_config *cfg,
 	int ret = 0;
 
 	ret = da8xx_fb_calc_config_clk_divider(par, panel);
-	if (ret) {
+	if (IS_ERR_VALUE(ret)) {
 		dev_err(par->dev, "unable to configure clock\n");
 		return ret;
 	}
@@ -1427,7 +1428,7 @@ static int fb_probe(struct platform_device *device)
 
 	par->vram_virt = dma_alloc_coherent(NULL,
 					    par->vram_size,
-					    &par->vram_phys,
+					    (resource_size_t *) &par->vram_phys,
 					    GFP_KERNEL | GFP_DMA);
 	if (!par->vram_virt) {
 		dev_err(&device->dev,
@@ -1446,15 +1447,18 @@ static int fb_probe(struct platform_device *device)
 		da8xx_fb_fix.line_length - 1;
 
 	/* allocate palette buffer */
-	par->v_palette_base = dma_zalloc_coherent(NULL, PALETTE_SIZE,
-						  &par->p_palette_base,
-						  GFP_KERNEL | GFP_DMA);
+	par->v_palette_base = dma_alloc_coherent(NULL,
+					       PALETTE_SIZE,
+					       (resource_size_t *)
+					       &par->p_palette_base,
+					       GFP_KERNEL | GFP_DMA);
 	if (!par->v_palette_base) {
 		dev_err(&device->dev,
 			"GLCD: kmalloc for palette buffer failed\n");
 		ret = -EINVAL;
 		goto err_release_fb_mem;
 	}
+	memset(par->v_palette_base, 0, PALETTE_SIZE);
 
 	par->irq = platform_get_irq(device, 0);
 	if (par->irq < 0) {
@@ -1658,6 +1662,7 @@ static struct platform_driver da8xx_fb_driver = {
 	.remove = fb_remove,
 	.driver = {
 		   .name = DRIVER_NAME,
+		   .owner = THIS_MODULE,
 		   .pm	= &fb_pm_ops,
 		   },
 };

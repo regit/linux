@@ -64,12 +64,12 @@ name_show(struct device *dev, struct device_attribute *attr, char *buf)
 	struct thermal_hwmon_device *hwmon = dev_get_drvdata(dev);
 	return sprintf(buf, "%s\n", hwmon->type);
 }
-static DEVICE_ATTR_RO(name);
+static DEVICE_ATTR(name, 0444, name_show, NULL);
 
 static ssize_t
 temp_input_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	int temperature;
+	long temperature;
 	int ret;
 	struct thermal_hwmon_attr *hwmon_attr
 			= container_of(attr, struct thermal_hwmon_attr, attr);
@@ -83,7 +83,7 @@ temp_input_show(struct device *dev, struct device_attribute *attr, char *buf)
 	if (ret)
 		return ret;
 
-	return sprintf(buf, "%d\n", temperature);
+	return sprintf(buf, "%ld\n", temperature);
 }
 
 static ssize_t
@@ -95,14 +95,14 @@ temp_crit_show(struct device *dev, struct device_attribute *attr, char *buf)
 			= container_of(hwmon_attr, struct thermal_hwmon_temp,
 				       temp_crit);
 	struct thermal_zone_device *tz = temp->tz;
-	int temperature;
+	long temperature;
 	int ret;
 
-	ret = tz->ops->get_crit_temp(tz, &temperature);
+	ret = tz->ops->get_trip_temp(tz, 0, &temperature);
 	if (ret)
 		return ret;
 
-	return sprintf(buf, "%d\n", temperature);
+	return sprintf(buf, "%ld\n", temperature);
 }
 
 
@@ -142,7 +142,7 @@ thermal_hwmon_lookup_temp(const struct thermal_hwmon_device *hwmon,
 
 static bool thermal_zone_crit_temp_valid(struct thermal_zone_device *tz)
 {
-	int temp;
+	unsigned long temp;
 	return tz->ops->get_crit_temp && !tz->ops->get_crit_temp(tz, &temp);
 }
 
@@ -232,7 +232,6 @@ int thermal_add_hwmon_sysfs(struct thermal_zone_device *tz)
 
 	return result;
 }
-EXPORT_SYMBOL_GPL(thermal_add_hwmon_sysfs);
 
 void thermal_remove_hwmon_sysfs(struct thermal_zone_device *tz)
 {
@@ -271,4 +270,3 @@ void thermal_remove_hwmon_sysfs(struct thermal_zone_device *tz)
 	hwmon_device_unregister(hwmon->device);
 	kfree(hwmon);
 }
-EXPORT_SYMBOL_GPL(thermal_remove_hwmon_sysfs);

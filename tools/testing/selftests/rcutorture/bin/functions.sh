@@ -64,26 +64,6 @@ configfrag_boot_params () {
 	fi
 }
 
-# configfrag_boot_cpus bootparam-string config-fragment-file config-cpus
-#
-# Decreases number of CPUs based on any maxcpus= boot parameters specified.
-configfrag_boot_cpus () {
-	local bootargs="`configfrag_boot_params "$1" "$2"`"
-	local maxcpus
-	if echo "${bootargs}" | grep -q 'maxcpus=[0-9]'
-	then
-		maxcpus="`echo "${bootargs}" | sed -e 's/^.*maxcpus=\([0-9]*\).*$/\1/'`"
-		if test "$3" -gt "$maxcpus"
-		then
-			echo $maxcpus
-		else
-			echo $3
-		fi
-	else
-		echo $3
-	fi
-}
-
 # configfrag_hotplug_cpu config-fragment-file
 #
 # Returns 1 if the config fragment specifies hotplug CPU.
@@ -99,9 +79,8 @@ configfrag_hotplug_cpu () {
 # identify_boot_image qemu-cmd
 #
 # Returns the relative path to the kernel build image.  This will be
-# arch/<arch>/boot/bzImage or vmlinux if bzImage is not a target for the
-# architecture, unless overridden with the TORTURE_BOOT_IMAGE environment
-# variable.
+# arch/<arch>/boot/bzImage unless overridden with the TORTURE_BOOT_IMAGE
+# environment variable.
 identify_boot_image () {
 	if test -n "$TORTURE_BOOT_IMAGE"
 	then
@@ -111,8 +90,11 @@ identify_boot_image () {
 		qemu-system-x86_64|qemu-system-i386)
 			echo arch/x86/boot/bzImage
 			;;
+		qemu-system-ppc64)
+			echo arch/powerpc/boot/bzImage
+			;;
 		*)
-			echo vmlinux
+			echo ""
 			;;
 		esac
 	fi
@@ -173,7 +155,7 @@ identify_qemu_args () {
 	qemu-system-x86_64|qemu-system-i386)
 		;;
 	qemu-system-ppc64)
-		echo -enable-kvm -M pseries -nodefaults
+		echo -enable-kvm -M pseries -cpu POWER7 -nodefaults
 		echo -device spapr-vscsi
 		if test -n "$TORTURE_QEMU_INTERACTIVE" -a -n "$TORTURE_QEMU_MAC"
 		then

@@ -56,7 +56,7 @@
 
 #include <asm/io.h>
 #include <asm/dma.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 static const char* version = "SDLA driver v0.30, 12 Sep 1996, mike.mclagan@linux.org";
 
@@ -1631,8 +1631,7 @@ static int __init init_sdla(void)
 
 	printk("%s.\n", version);
 
-	sdla = alloc_netdev(sizeof(struct frad_local), "sdla0",
-			    NET_NAME_UNKNOWN, setup_sdla);
+	sdla = alloc_netdev(sizeof(struct frad_local), "sdla0", setup_sdla);
 	if (!sdla) 
 		return -ENOMEM;
 

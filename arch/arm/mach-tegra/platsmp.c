@@ -11,28 +11,27 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
-#include <linux/clk/tegra.h>
+#include <linux/init.h>
+#include <linux/errno.h>
 #include <linux/delay.h>
 #include <linux/device.h>
-#include <linux/errno.h>
-#include <linux/init.h>
-#include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/smp.h>
-
-#include <soc/tegra/fuse.h>
-#include <soc/tegra/pmc.h>
+#include <linux/io.h>
+#include <linux/clk/tegra.h>
 
 #include <asm/cacheflush.h>
 #include <asm/mach-types.h>
-#include <asm/smp_plat.h>
 #include <asm/smp_scu.h>
+#include <asm/smp_plat.h>
+
+#include "fuse.h"
+#include "flowctrl.h"
+#include "reset.h"
+#include "pmc.h"
 
 #include "common.h"
-#include "flowctrl.h"
 #include "iomap.h"
-#include "reset.h"
 
 static cpumask_t tegra_cpu_init_mask;
 
@@ -108,9 +107,19 @@ static int tegra30_boot_secondary(unsigned int cpu, struct task_struct *idle)
 	 * be un-gated by un-toggling the power gate register
 	 * manually.
 	 */
-	ret = tegra_pmc_cpu_power_on(cpu);
-	if (ret)
-		return ret;
+	if (!tegra_pmc_cpu_is_powered(cpu)) {
+		ret = tegra_pmc_cpu_power_on(cpu);
+		if (ret)
+			return ret;
+
+		/* Wait for the power to come up. */
+		timeout = jiffies + msecs_to_jiffies(100);
+		while (!tegra_pmc_cpu_is_powered(cpu)) {
+			if (time_after(jiffies, timeout))
+				return -ETIMEDOUT;
+			udelay(10);
+		}
+	}
 
 remove_clamps:
 	/* CPU partition is powered. Enable the CPU clock. */
@@ -161,13 +170,13 @@ static int tegra114_boot_secondary(unsigned int cpu, struct task_struct *idle)
 static int tegra_boot_secondary(unsigned int cpu,
 					  struct task_struct *idle)
 {
-	if (IS_ENABLED(CONFIG_ARCH_TEGRA_2x_SOC) && tegra_get_chip_id() == TEGRA20)
+	if (IS_ENABLED(CONFIG_ARCH_TEGRA_2x_SOC) && tegra_chip_id == TEGRA20)
 		return tegra20_boot_secondary(cpu, idle);
-	if (IS_ENABLED(CONFIG_ARCH_TEGRA_3x_SOC) && tegra_get_chip_id() == TEGRA30)
+	if (IS_ENABLED(CONFIG_ARCH_TEGRA_3x_SOC) && tegra_chip_id == TEGRA30)
 		return tegra30_boot_secondary(cpu, idle);
-	if (IS_ENABLED(CONFIG_ARCH_TEGRA_114_SOC) && tegra_get_chip_id() == TEGRA114)
+	if (IS_ENABLED(CONFIG_ARCH_TEGRA_114_SOC) && tegra_chip_id == TEGRA114)
 		return tegra114_boot_secondary(cpu, idle);
-	if (IS_ENABLED(CONFIG_ARCH_TEGRA_124_SOC) && tegra_get_chip_id() == TEGRA124)
+	if (IS_ENABLED(CONFIG_ARCH_TEGRA_124_SOC) && tegra_chip_id == TEGRA124)
 		return tegra114_boot_secondary(cpu, idle);
 
 	return -EINVAL;
@@ -182,7 +191,7 @@ static void __init tegra_smp_prepare_cpus(unsigned int max_cpus)
 		scu_enable(IO_ADDRESS(scu_a9_get_base()));
 }
 
-const struct smp_operations tegra_smp_ops __initconst = {
+struct smp_operations tegra_smp_ops __initdata = {
 	.smp_prepare_cpus	= tegra_smp_prepare_cpus,
 	.smp_secondary_init	= tegra_secondary_init,
 	.smp_boot_secondary	= tegra_boot_secondary,

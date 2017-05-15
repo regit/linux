@@ -10,7 +10,7 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -653,7 +653,7 @@ static const struct sunxi_desc_pin sun5i_a10s_pins[] = {
 		  SUNXI_FUNCTION(0x0, "gpio_in"),
 		  SUNXI_FUNCTION(0x1, "gpio_out"),
 		  SUNXI_FUNCTION(0x2, "spi1"),		/* CS1 */
-		  SUNXI_FUNCTION(0x3, "pwm"),		/* PWM1 */
+		  SUNXI_FUNCTION(0x3, "uart3"),		/* PWM1 */
 		  SUNXI_FUNCTION(0x5, "uart2"),		/* CTS */
 		  SUNXI_FUNCTION_IRQ(0x6, 13)),		/* EINT13 */
 };
@@ -661,7 +661,6 @@ static const struct sunxi_desc_pin sun5i_a10s_pins[] = {
 static const struct sunxi_pinctrl_desc sun5i_a10s_pinctrl_data = {
 	.pins = sun5i_a10s_pins,
 	.npins = ARRAY_SIZE(sun5i_a10s_pins),
-	.irq_banks = 1,
 };
 
 static int sun5i_a10s_pinctrl_probe(struct platform_device *pdev)
@@ -670,16 +669,22 @@ static int sun5i_a10s_pinctrl_probe(struct platform_device *pdev)
 				  &sun5i_a10s_pinctrl_data);
 }
 
-static const struct of_device_id sun5i_a10s_pinctrl_match[] = {
+static struct of_device_id sun5i_a10s_pinctrl_match[] = {
 	{ .compatible = "allwinner,sun5i-a10s-pinctrl", },
 	{}
 };
+MODULE_DEVICE_TABLE(of, sun5i_a10s_pinctrl_match);
 
 static struct platform_driver sun5i_a10s_pinctrl_driver = {
 	.probe	= sun5i_a10s_pinctrl_probe,
 	.driver	= {
 		.name		= "sun5i-a10s-pinctrl",
+		.owner		= THIS_MODULE,
 		.of_match_table	= sun5i_a10s_pinctrl_match,
 	},
 };
-builtin_platform_driver(sun5i_a10s_pinctrl_driver);
+module_platform_driver(sun5i_a10s_pinctrl_driver);
+
+MODULE_AUTHOR("Maxime Ripard <maxime.ripard@free-electrons.com");
+MODULE_DESCRIPTION("Allwinner A10s pinctrl driver");
+MODULE_LICENSE("GPL");

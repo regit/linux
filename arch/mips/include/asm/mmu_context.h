@@ -16,24 +16,14 @@
 #include <linux/smp.h>
 #include <linux/slab.h>
 #include <asm/cacheflush.h>
-#include <asm/dsemul.h>
 #include <asm/hazards.h>
 #include <asm/tlbflush.h>
 #include <asm-generic/mm_hooks.h>
-
-#define htw_set_pwbase(pgd)						\
-do {									\
-	if (cpu_has_htw) {						\
-		write_c0_pwbase(pgd);					\
-		back_to_back_c0_hazard();				\
-	}								\
-} while (0)
 
 #define TLBMISS_HANDLER_SETUP_PGD(pgd)					\
 do {									\
 	extern void tlbmiss_handler_setup_pgd(unsigned long);		\
 	tlbmiss_handler_setup_pgd((unsigned long)(pgd));		\
-	htw_set_pwbase((unsigned long)pgd);				\
 } while (0)
 
 #ifdef CONFIG_MIPS_PGD_C0_CONTEXT
@@ -66,32 +56,37 @@ extern unsigned long pgd_current[];
 	back_to_back_c0_hazard();					\
 	TLBMISS_HANDLER_SETUP_PGD(swapper_pg_dir)
 #endif /* CONFIG_MIPS_PGD_C0_CONTEXT*/
+#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
 
-/*
- *  All unused by hardware upper bits will be considered
- *  as a software asid extension.
- */
-static unsigned long asid_version_mask(unsigned int cpu)
-{
-	unsigned long asid_mask = cpu_asid_mask(&cpu_data[cpu]);
+#define ASID_INC	0x40
+#define ASID_MASK	0xfc0
 
-	return ~(asid_mask | (asid_mask - 1));
-}
+#elif defined(CONFIG_CPU_R8000)
 
-static unsigned long asid_first_version(unsigned int cpu)
-{
-	return ~asid_version_mask(cpu) + 1;
-}
+#define ASID_INC	0x10
+#define ASID_MASK	0xff0
+
+#else /* FIXME: not correct for R6000 */
+
+#define ASID_INC	0x1
+#define ASID_MASK	0xff
+
+#endif
 
 #define cpu_context(cpu, mm)	((mm)->context.asid[cpu])
+#define cpu_asid(cpu, mm)	(cpu_context((cpu), (mm)) & ASID_MASK)
 #define asid_cache(cpu)		(cpu_data[cpu].asid_cache)
-#define cpu_asid(cpu, mm) \
-	(cpu_context((cpu), (mm)) & cpu_asid_mask(&cpu_data[cpu]))
 
 static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
 {
 }
 
+/*
+ *  All unused by hardware upper bits will be considered
+ *  as a software asid extension.
+ */
+#define ASID_VERSION_MASK  ((unsigned long)~(ASID_MASK|(ASID_MASK-1)))
+#define ASID_FIRST_VERSION ((unsigned long)(~ASID_VERSION_MASK) + 1)
 
 /* Normal, classic MIPS get_new_mmu_context */
 static inline void
@@ -100,7 +95,7 @@ get_new_mmu_context(struct mm_struct *mm, unsigned long cpu)
 	extern void kvm_local_flush_tlb_all(void);
 	unsigned long asid = asid_cache(cpu);
 
-	if (!((asid += cpu_asid_inc()) & cpu_asid_mask(&cpu_data[cpu]))) {
+	if (! ((asid += ASID_INC) & ASID_MASK) ) {
 		if (cpu_has_vtag_icache)
 			flush_icache_all();
 #ifdef CONFIG_KVM
@@ -109,7 +104,7 @@ get_new_mmu_context(struct mm_struct *mm, unsigned long cpu)
 		local_flush_tlb_all();	/* start new asid cycle */
 #endif
 		if (!asid)		/* fix version if needed */
-			asid = asid_first_version(cpu);
+			asid = ASID_FIRST_VERSION;
 	}
 
 	cpu_context(cpu, mm) = asid_cache(cpu) = asid;
@@ -127,12 +122,6 @@ init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 	for_each_possible_cpu(i)
 		cpu_context(i, mm) = 0;
 
-	atomic_set(&mm->context.fp_mode_switching, 0);
-
-	mm->context.bd_emupage_allocmap = NULL;
-	spin_lock_init(&mm->context.bd_emupage_lock);
-	init_waitqueue_head(&mm->context.bd_emupage_queue);
-
 	return 0;
 }
 
@@ -143,9 +132,8 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	unsigned long flags;
 	local_irq_save(flags);
 
-	htw_stop();
 	/* Check if our ASID is of an older version and thus invalid */
-	if ((cpu_context(cpu, next) ^ asid_cache(cpu)) & asid_version_mask(cpu))
+	if ((cpu_context(cpu, next) ^ asid_cache(cpu)) & ASID_VERSION_MASK)
 		get_new_mmu_context(next, cpu);
 	write_c0_entryhi(cpu_asid(cpu, next));
 	TLBMISS_HANDLER_SETUP_PGD(next->pgd);
@@ -156,7 +144,6 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	 */
 	cpumask_clear_cpu(cpu, mm_cpumask(prev));
 	cpumask_set_cpu(cpu, mm_cpumask(next));
-	htw_start();
 
 	local_irq_restore(flags);
 }
@@ -167,7 +154,6 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
  */
 static inline void destroy_context(struct mm_struct *mm)
 {
-	dsemul_mm_cleanup(mm);
 }
 
 #define deactivate_mm(tsk, mm)	do { } while (0)
@@ -184,7 +170,6 @@ activate_mm(struct mm_struct *prev, struct mm_struct *next)
 
 	local_irq_save(flags);
 
-	htw_stop();
 	/* Unconditionally get a new ASID.  */
 	get_new_mmu_context(next, cpu);
 
@@ -194,7 +179,6 @@ activate_mm(struct mm_struct *prev, struct mm_struct *next)
 	/* mark mmu ownership change */
 	cpumask_clear_cpu(cpu, mm_cpumask(prev));
 	cpumask_set_cpu(cpu, mm_cpumask(next));
-	htw_start();
 
 	local_irq_restore(flags);
 }
@@ -209,7 +193,6 @@ drop_mmu_context(struct mm_struct *mm, unsigned cpu)
 	unsigned long flags;
 
 	local_irq_save(flags);
-	htw_stop();
 
 	if (cpumask_test_cpu(cpu, mm_cpumask(mm)))  {
 		get_new_mmu_context(mm, cpu);
@@ -218,7 +201,6 @@ drop_mmu_context(struct mm_struct *mm, unsigned cpu)
 		/* will get a new context next time */
 		cpu_context(cpu, mm) = 0;
 	}
-	htw_start();
 	local_irq_restore(flags);
 }
 

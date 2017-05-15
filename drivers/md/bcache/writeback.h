@@ -57,13 +57,13 @@ static inline bool should_writeback(struct cached_dev *dc, struct bio *bio,
 	if (would_skip)
 		return false;
 
-	return op_is_sync(bio->bi_opf) || in_use <= CUTOFF_WRITEBACK;
+	return bio->bi_rw & REQ_SYNC ||
+		in_use <= CUTOFF_WRITEBACK;
 }
 
 static inline void bch_writeback_queue(struct cached_dev *dc)
 {
-	if (!IS_ERR_OR_NULL(dc->writeback_thread))
-		wake_up_process(dc->writeback_thread);
+	wake_up_process(dc->writeback_thread);
 }
 
 static inline void bch_writeback_add(struct cached_dev *dc)
@@ -85,7 +85,6 @@ static inline void bch_writeback_add(struct cached_dev *dc)
 void bcache_dev_sectors_dirty_add(struct cache_set *, unsigned, uint64_t, int);
 
 void bch_sectors_dirty_init(struct cached_dev *dc);
-void bch_cached_dev_writeback_init(struct cached_dev *);
-int bch_cached_dev_writeback_start(struct cached_dev *);
+int bch_cached_dev_writeback_init(struct cached_dev *);
 
 #endif

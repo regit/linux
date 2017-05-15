@@ -224,19 +224,23 @@ static int read_frontend_details(struct xenbus_device *xendev)
 
 int xenbus_dev_is_online(struct xenbus_device *dev)
 {
-	return !!xenbus_read_unsigned(dev->nodename, "online", 0);
+	int rc, val;
+
+	rc = xenbus_scanf(XBT_NIL, dev->nodename, "online", "%d", &val);
+	if (rc != 1)
+		val = 0; /* no online node present */
+
+	return val;
 }
 EXPORT_SYMBOL_GPL(xenbus_dev_is_online);
 
-int __xenbus_register_backend(struct xenbus_driver *drv, struct module *owner,
-			      const char *mod_name)
+int xenbus_register_backend(struct xenbus_driver *drv)
 {
 	drv->read_otherend_details = read_frontend_details;
 
-	return xenbus_register_driver_common(drv, &xenbus_backend,
-					     owner, mod_name);
+	return xenbus_register_driver_common(drv, &xenbus_backend);
 }
-EXPORT_SYMBOL_GPL(__xenbus_register_backend);
+EXPORT_SYMBOL_GPL(xenbus_register_backend);
 
 static int backend_probe_and_watch(struct notifier_block *notifier,
 				   unsigned long event,

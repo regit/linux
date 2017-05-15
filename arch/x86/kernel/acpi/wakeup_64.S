@@ -5,7 +5,6 @@
 #include <asm/page_types.h>
 #include <asm/msr.h>
 #include <asm/asm-offsets.h>
-#include <asm/frame.h>
 
 # Copyright 2003 Pavel Machek <pavel@suse.cz>, distribute under GPLv2
 
@@ -40,7 +39,6 @@ bogus_64_magic:
 	jmp	bogus_64_magic
 
 ENTRY(do_suspend_lowlevel)
-	FRAME_BEGIN
 	subq	$8, %rsp
 	xorl	%eax, %eax
 	call	save_processor_state
@@ -64,7 +62,7 @@ ENTRY(do_suspend_lowlevel)
 	pushfq
 	popq	pt_regs_flags(%rax)
 
-	movq	$.Lresume_point, saved_rip(%rip)
+	movq	$resume_point, saved_rip(%rip)
 
 	movq	%rsp, saved_rsp
 	movq	%rbp, saved_rbp
@@ -77,10 +75,10 @@ ENTRY(do_suspend_lowlevel)
 	xorl	%eax, %eax
 	call	x86_acpi_enter_sleep_state
 	/* in case something went wrong, restore the machine status and go on */
-	jmp	.Lresume_point
+	jmp	resume_point
 
 	.align 4
-.Lresume_point:
+resume_point:
 	/* We don't restore %rax, it must be 0 anyway */
 	movq	$saved_context, %rax
 	movq	saved_context_cr4(%rax), %rbx
@@ -109,18 +107,8 @@ ENTRY(do_suspend_lowlevel)
 	movq	pt_regs_r14(%rax), %r14
 	movq	pt_regs_r15(%rax), %r15
 
-#ifdef CONFIG_KASAN
-	/*
-	 * The suspend path may have poisoned some areas deeper in the stack,
-	 * which we now need to unpoison.
-	 */
-	movq	%rsp, %rdi
-	call	kasan_unpoison_task_stack_below
-#endif
-
 	xorl	%eax, %eax
 	addq	$8, %rsp
-	FRAME_END
 	jmp	restore_processor_state
 ENDPROC(do_suspend_lowlevel)
 

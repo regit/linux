@@ -59,6 +59,10 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>		/* needed for in_interrupt() proto */
 #include <linux/dma-mapping.h>
+#include <asm/io.h>
+#ifdef CONFIG_MTRR
+#include <asm/mtrr.h>
+#endif
 #include <linux/kthread.h>
 #include <scsi/scsi_host.h>
 
@@ -645,10 +649,12 @@ mptbase_reply(MPT_ADAPTER *ioc, MPT_FRAME_HDR *req, MPT_FRAME_HDR *reply)
 	case MPI_FUNCTION_CONFIG:
 	case MPI_FUNCTION_SAS_IO_UNIT_CONTROL:
 		ioc->mptbase_cmds.status |= MPT_MGMT_STATUS_COMMAND_GOOD;
-		ioc->mptbase_cmds.status |= MPT_MGMT_STATUS_RF_VALID;
-		memcpy(ioc->mptbase_cmds.reply, reply,
-		    min(MPT_DEFAULT_FRAME_SIZE,
-			4 * reply->u.reply.MsgLength));
+		if (reply) {
+			ioc->mptbase_cmds.status |= MPT_MGMT_STATUS_RF_VALID;
+			memcpy(ioc->mptbase_cmds.reply, reply,
+			    min(MPT_DEFAULT_FRAME_SIZE,
+				4 * reply->u.reply.MsgLength));
+		}
 		if (ioc->mptbase_cmds.status & MPT_MGMT_STATUS_PENDING) {
 			ioc->mptbase_cmds.status &= ~MPT_MGMT_STATUS_PENDING;
 			complete(&ioc->mptbase_cmds.done);
@@ -1396,13 +1402,14 @@ mpt_verify_adapter(int iocid, MPT_ADAPTER **iocpp)
  *	@vendor: pci vendor id
  *	@device: pci device id
  *	@revision: pci revision id
+ *	@prod_name: string returned
  *
  *	Returns product string displayed when driver loads,
  *	in /proc/mpt/summary and /sysfs/class/scsi_host/host<X>/version_product
  *
  **/
-static const char*
-mpt_get_product_name(u16 vendor, u16 device, u8 revision)
+static void
+mpt_get_product_name(u16 vendor, u16 device, u8 revision, char *prod_name)
 {
 	char *product_str = NULL;
 
@@ -1628,7 +1635,8 @@ mpt_get_product_name(u16 vendor, u16 device, u8 revision)
 	}
 
  out:
-	return product_str;
+	if (product_str)
+		sprintf(prod_name, "%s", product_str);
 }
 
 /**
@@ -1801,7 +1809,8 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	ioc->pcidev = pdev;
 	if (mpt_mapresources(ioc)) {
-		goto out_free_ioc;
+		kfree(ioc);
+		return r;
 	}
 
 	/*
@@ -1865,20 +1874,21 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	snprintf(ioc->reset_work_q_name, MPT_KOBJ_NAME_LEN,
 		 "mpt_poll_%d", ioc->id);
-	ioc->reset_work_q = alloc_workqueue(ioc->reset_work_q_name,
-					    WQ_MEM_RECLAIM, 0);
+	ioc->reset_work_q =
+		create_singlethread_workqueue(ioc->reset_work_q_name);
 	if (!ioc->reset_work_q) {
 		printk(MYIOC_s_ERR_FMT "Insufficient memory to add adapter!\n",
 		    ioc->name);
-		r = -ENOMEM;
-		goto out_unmap_resources;
+		pci_release_selected_regions(pdev, ioc->bars);
+		kfree(ioc);
+		return -ENOMEM;
 	}
 
 	dinitprintk(ioc, printk(MYIOC_s_INFO_FMT "facts @ %p, pfacts[0] @ %p\n",
 	    ioc->name, &ioc->facts, &ioc->pfacts[0]));
 
-	ioc->prod_name = mpt_get_product_name(pdev->vendor, pdev->device,
-					      pdev->revision);
+	mpt_get_product_name(pdev->vendor, pdev->device, pdev->revision,
+			     ioc->prod_name);
 
 	switch (pdev->device)
 	{
@@ -1992,29 +2002,17 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_LIST_HEAD(&ioc->fw_event_list);
 	spin_lock_init(&ioc->fw_event_lock);
 	snprintf(ioc->fw_event_q_name, MPT_KOBJ_NAME_LEN, "mpt/%d", ioc->id);
-	ioc->fw_event_q = alloc_workqueue(ioc->fw_event_q_name,
-					  WQ_MEM_RECLAIM, 0);
-	if (!ioc->fw_event_q) {
-		printk(MYIOC_s_ERR_FMT "Insufficient memory to add adapter!\n",
-		    ioc->name);
-		r = -ENOMEM;
-		goto out_remove_ioc;
-	}
+	ioc->fw_event_q = create_singlethread_workqueue(ioc->fw_event_q_name);
 
 	if ((r = mpt_do_ioc_recovery(ioc, MPT_HOSTEVENT_IOC_BRINGUP,
 	    CAN_SLEEP)) != 0){
 		printk(MYIOC_s_ERR_FMT "didn't initialize properly! (%d)\n",
 		    ioc->name, r);
 
-		destroy_workqueue(ioc->fw_event_q);
-		ioc->fw_event_q = NULL;
-
 		list_del(&ioc->list);
 		if (ioc->alt_ioc)
 			ioc->alt_ioc->alt_ioc = NULL;
 		iounmap(ioc->memmap);
-		if (pci_is_enabled(pdev))
-			pci_disable_device(pdev);
 		if (r != -5)
 			pci_release_selected_regions(pdev, ioc->bars);
 
@@ -2022,6 +2020,7 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 		ioc->reset_work_q = NULL;
 
 		kfree(ioc);
+		pci_set_drvdata(pdev, NULL);
 		return r;
 	}
 
@@ -2049,24 +2048,6 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 			msecs_to_jiffies(MPT_POLLING_INTERVAL));
 
 	return 0;
-
-out_remove_ioc:
-	list_del(&ioc->list);
-	if (ioc->alt_ioc)
-		ioc->alt_ioc->alt_ioc = NULL;
-
-	destroy_workqueue(ioc->reset_work_q);
-	ioc->reset_work_q = NULL;
-
-out_unmap_resources:
-	iounmap(ioc->memmap);
-	pci_disable_device(pdev);
-	pci_release_selected_regions(pdev, ioc->bars);
-
-out_free_ioc:
-	kfree(ioc);
-
-	return r;
 }
 
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
@@ -2585,7 +2566,10 @@ mpt_do_ioc_recovery(MPT_ADAPTER *ioc, u32 reason, int sleepFlag)
 				(void) GetLanConfigPages(ioc);
 				a = (u8*)&ioc->lan_cnfg_page1.HardwareAddressLow;
 				dprintk(ioc, printk(MYIOC_s_DEBUG_FMT
-					"LanAddr = %pMR\n", ioc->name, a));
+					"LanAddr = %02X:%02X:%02X"
+					":%02X:%02X:%02X\n",
+					ioc->name, a[5], a[4],
+					a[3], a[2], a[1], a[0]));
 			}
 			break;
 
@@ -2840,6 +2824,13 @@ mpt_adapter_dispose(MPT_ADAPTER *ioc)
 	pci_disable_device(ioc->pcidev);
 	pci_release_selected_regions(ioc->pcidev, ioc->bars);
 
+#if defined(CONFIG_MTRR) && 0
+	if (ioc->mtrr_reg > 0) {
+		mtrr_del(ioc->mtrr_reg, 0, 0);
+		dprintk(ioc, printk(MYIOC_s_INFO_FMT "MTRR region de-registered\n", ioc->name));
+	}
+#endif
+
 	/*  Zap the adapter lookup ptr!  */
 	list_del(&ioc->list);
 
@@ -2865,21 +2856,21 @@ MptDisplayIocCapabilities(MPT_ADAPTER *ioc)
 
 	printk(KERN_INFO "%s: ", ioc->name);
 	if (ioc->prod_name)
-		pr_cont("%s: ", ioc->prod_name);
-	pr_cont("Capabilities={");
+		printk("%s: ", ioc->prod_name);
+	printk("Capabilities={");
 
 	if (ioc->pfacts[0].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_INITIATOR) {
-		pr_cont("Initiator");
+		printk("Initiator");
 		i++;
 	}
 
 	if (ioc->pfacts[0].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_TARGET) {
-		pr_cont("%sTarget", i ? "," : "");
+		printk("%sTarget", i ? "," : "");
 		i++;
 	}
 
 	if (ioc->pfacts[0].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_LAN) {
-		pr_cont("%sLAN", i ? "," : "");
+		printk("%sLAN", i ? "," : "");
 		i++;
 	}
 
@@ -2888,12 +2879,12 @@ MptDisplayIocCapabilities(MPT_ADAPTER *ioc)
 	 *  This would probably evoke more questions than it's worth
 	 */
 	if (ioc->pfacts[0].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_TARGET) {
-		pr_cont("%sLogBusAddr", i ? "," : "");
+		printk("%sLogBusAddr", i ? "," : "");
 		i++;
 	}
 #endif
 
-	pr_cont("}\n");
+	printk("}\n");
 }
 
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
@@ -3184,7 +3175,12 @@ GetIocFacts(MPT_ADAPTER *ioc, int sleepFlag, int reason)
 			facts->FWImageSize = le32_to_cpu(facts->FWImageSize);
 		}
 
-		facts->FWImageSize = ALIGN(facts->FWImageSize, 4);
+		sz = facts->FWImageSize;
+		if ( sz & 0x01 )
+			sz += 1;
+		if ( sz & 0x02 )
+			sz += 2;
+		facts->FWImageSize = sz;
 
 		if (!facts->RequestFrameSize) {
 			/*  Something is wrong!  */
@@ -4524,6 +4520,19 @@ PrimeIocFifos(MPT_ADAPTER *ioc)
 			 	ioc->name, mem, (void *)(ulong)alloc_dma));
 
 		ioc->req_frames_low_dma = (u32) (alloc_dma & 0xFFFFFFFF);
+
+#if defined(CONFIG_MTRR) && 0
+		/*
+		 *  Enable Write Combining MTRR for IOC's memory region.
+		 *  (at least as much as we can; "size and base must be
+		 *  multiples of 4 kiB"
+		 */
+		ioc->mtrr_reg = mtrr_add(ioc->req_frames_dma,
+					 sz,
+					 MTRR_TYPE_WRCOMB, 1);
+		dprintk(ioc, printk(MYIOC_s_DEBUG_FMT "MTRR region registered (base:size=%08x:%x)\n",
+				ioc->name, ioc->req_frames_dma, sz));
+#endif
 
 		for (i = 0; i < ioc->req_depth; i++) {
 			alloc_dma += ioc->req_sz;
@@ -6253,7 +6262,7 @@ mpt_get_manufacturing_pg_0(MPT_ADAPTER *ioc)
 	memcpy(ioc->board_assembly, pbuf->BoardAssembly, sizeof(ioc->board_assembly));
 	memcpy(ioc->board_tracer, pbuf->BoardTracerNumber, sizeof(ioc->board_tracer));
 
-out:
+	out:
 
 	if (pbuf)
 		pci_free_consistent(ioc->pcidev, hdr.PageLength * 4, pbuf, buf_dma);
@@ -6780,7 +6789,8 @@ static int mpt_iocinfo_proc_show(struct seq_file *m, void *v)
 		if (ioc->bus_type == FC) {
 			if (ioc->pfacts[p].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_LAN) {
 				u8 *a = (u8*)&ioc->lan_cnfg_page1.HardwareAddressLow;
-				seq_printf(m, "    LanAddr = %pMR\n", a);
+				seq_printf(m, "    LanAddr = %02X:%02X:%02X:%02X:%02X:%02X\n",
+						a[5], a[4], a[3], a[2], a[1], a[0]);
 			}
 			seq_printf(m, "    WWN = %08X%08X:%08X%08X\n",
 					ioc->fc_port_page0[p].WWNN.High,
@@ -6857,7 +6867,8 @@ mpt_print_ioc_summary(MPT_ADAPTER *ioc, char *buffer, int *size, int len, int sh
 
 	if (showlan && (ioc->pfacts[0].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_LAN)) {
 		u8 *a = (u8*)&ioc->lan_cnfg_page1.HardwareAddressLow;
-		y += sprintf(buffer+len+y, ", LanAddr=%pMR", a);
+		y += sprintf(buffer+len+y, ", LanAddr=%02X:%02X:%02X:%02X:%02X:%02X",
+			a[5], a[4], a[3], a[2], a[1], a[0]);
 	}
 
 	y += sprintf(buffer+len+y, ", IRQ=%d", ioc->pci_irq);
@@ -6870,7 +6881,6 @@ mpt_print_ioc_summary(MPT_ADAPTER *ioc, char *buffer, int *size, int len, int sh
 	*size = y;
 }
 
-#ifdef CONFIG_PROC_FS
 static void seq_mpt_print_ioc_summary(MPT_ADAPTER *ioc, struct seq_file *m, int showlan)
 {
 	char expVer[32];
@@ -6891,7 +6901,8 @@ static void seq_mpt_print_ioc_summary(MPT_ADAPTER *ioc, struct seq_file *m, int 
 
 	if (showlan && (ioc->pfacts[0].ProtocolFlags & MPI_PORTFACTS_PROTOCOL_LAN)) {
 		u8 *a = (u8*)&ioc->lan_cnfg_page1.HardwareAddressLow;
-		seq_printf(m, ", LanAddr=%pMR", a);
+		seq_printf(m, ", LanAddr=%02X:%02X:%02X:%02X:%02X:%02X",
+			a[5], a[4], a[3], a[2], a[1], a[0]);
 	}
 
 	seq_printf(m, ", IRQ=%d", ioc->pci_irq);
@@ -6901,7 +6912,6 @@ static void seq_mpt_print_ioc_summary(MPT_ADAPTER *ioc, struct seq_file *m, int 
 
 	seq_putc(m, '\n');
 }
-#endif
 
 /**
  *	mpt_set_taskmgmt_in_progress_flag - set flags associated with task management
@@ -6997,7 +7007,7 @@ EXPORT_SYMBOL(mpt_halt_firmware);
  *	IOC doesn't reply to any outstanding request. This will transfer IOC
  *	to READY state.
  **/
-static int
+int
 mpt_SoftResetHandler(MPT_ADAPTER *ioc, int sleepFlag)
 {
 	int		 rc;

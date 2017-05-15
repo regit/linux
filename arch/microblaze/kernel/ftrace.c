@@ -27,9 +27,6 @@ void prepare_ftrace_return(unsigned long *parent, unsigned long self_addr)
 	unsigned long return_hooker = (unsigned long)
 				&return_to_handler;
 
-	if (unlikely(ftrace_graph_is_dead()))
-		return;
-
 	if (unlikely(atomic_read(&current->tracing_graph_pause)))
 		return;
 
@@ -63,7 +60,7 @@ void prepare_ftrace_return(unsigned long *parent, unsigned long self_addr)
 		return;
 	}
 
-	err = ftrace_push_return_trace(old, self_addr, &trace.depth, 0, NULL);
+	err = ftrace_push_return_trace(old, self_addr, &trace.depth, 0);
 	if (err == -EBUSY) {
 		*parent = old;
 		return;
