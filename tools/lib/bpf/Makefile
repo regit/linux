@@ -97,7 +97,7 @@ includedir_SQ = $(subst ','\'',$(includedir))
 plugin_dir_SQ = $(subst ','\'',$(plugin_dir))
 
 LIB_FILE = libbpf.a libbpf.so
-HEADER_FILE = libbpf.h
+HEADER_FILE = libbpf.h bpf.h
 
 VERSION		= $(BPF_VERSION)
 PATCHLEVEL	= $(BPF_PATCHLEVEL)
