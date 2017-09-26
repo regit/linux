@@ -245,4 +245,6 @@ long libbpf_get_error(const void *ptr);
 
 int bpf_prog_load(const char *file, enum bpf_prog_type type,
 		  struct bpf_object **pobj, int *prog_fd);
+
+int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags);
 #endif
