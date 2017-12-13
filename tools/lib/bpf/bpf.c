@@ -26,6 +26,7 @@
 #include <linux/bpf.h>
 #include "bpf.h"
 #include "libbpf.h"
+#include "nlattr.h"
 #include <linux/rtnetlink.h>
 #include <sys/socket.h>
 #include <errno.h>
@@ -436,6 +437,7 @@ int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags)
 	struct nlmsghdr *nh;
 	struct nlmsgerr *err;
 	socklen_t addrlen;
+	int one;
 
 	memset(&sa, 0, sizeof(sa));
 	sa.nl_family = AF_NETLINK;
@@ -443,6 +445,12 @@ int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags)
 	sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 	if (sock < 0) {
 		return -errno;
+	}
+
+	if (setsockopt(sock, SOL_NETLINK, NETLINK_EXT_ACK,
+		       &one, sizeof(one)) < 0) {
+		/* debug/verbose message that it is not supported */
+		fprintf(stderr, "Netlink error reporting not supported\n"); 
 	}
 
 	if (bind(sock, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
@@ -521,6 +529,7 @@ int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags)
 			if (!err->error)
 				continue;
 			ret = err->error;
+			nla_dump_errormsg(nh);
 			goto cleanup;
 		case NLMSG_DONE:
 			break;
