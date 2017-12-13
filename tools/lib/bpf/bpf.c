@@ -26,6 +26,7 @@
 #include <linux/bpf.h>
 #include "bpf.h"
 #include "libbpf.h"
+#include "nlattr.h"
 #include <linux/rtnetlink.h>
 #include <sys/socket.h>
 #include <errno.h>
@@ -517,6 +518,7 @@ int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags)
 		}
 		switch (nh->nlmsg_type) {
 		case NLMSG_ERROR:
+			nla_dump_errormsg(nh);
 			err = (struct nlmsgerr *)NLMSG_DATA(nh);
 			if (!err->error)
 				continue;
