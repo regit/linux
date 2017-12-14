@@ -77,7 +77,7 @@ int bpf_create_map_node(enum bpf_map_type map_type, const char *name,
 			int key_size, int value_size, int max_entries,
 			__u32 map_flags, int node)
 {
-	__u32 name_len = name ? strlen(name) : 0;
+	//__u32 name_len = name ? strlen(name) : 0;
 	union bpf_attr attr;
 
 	memset(&attr, '\0', sizeof(attr));
@@ -87,7 +87,7 @@ int bpf_create_map_node(enum bpf_map_type map_type, const char *name,
 	attr.value_size = value_size;
 	attr.max_entries = max_entries;
 	attr.map_flags = map_flags;
-	memcpy(attr.map_name, name, min(name_len, BPF_OBJ_NAME_LEN - 1));
+	//memcpy(attr.map_name, name, min(name_len, BPF_OBJ_NAME_LEN - 1));
 
 	if (node >= 0) {
 		attr.map_flags |= BPF_F_NUMA_NODE;
@@ -154,7 +154,7 @@ int bpf_load_program_name(enum bpf_prog_type type, const char *name,
 {
 	int fd;
 	union bpf_attr attr;
-	__u32 name_len = name ? strlen(name) : 0;
+	//__u32 name_len = name ? strlen(name) : 0;
 
 	bzero(&attr, sizeof(attr));
 	attr.prog_type = type;
@@ -165,7 +165,7 @@ int bpf_load_program_name(enum bpf_prog_type type, const char *name,
 	attr.log_size = 0;
 	attr.log_level = 0;
 	attr.kern_version = kern_version;
-	memcpy(attr.prog_name, name, min(name_len, BPF_OBJ_NAME_LEN - 1));
+	//memcpy(attr.prog_name, name, min(name_len, BPF_OBJ_NAME_LEN - 1));
 
 	fd = sys_bpf(BPF_PROG_LOAD, &attr, sizeof(attr));
 	if (fd >= 0 || !log_buf || !log_buf_sz)
