@@ -412,6 +412,7 @@ bpf_object__init_prog_names(struct bpf_object *obj)
 					   prog->section_name);
 				return -LIBBPF_ERRNO__LIBELF;
 			}
+			break;
 		}
 
 		if (!name) {
