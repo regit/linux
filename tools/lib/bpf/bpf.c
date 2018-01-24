@@ -29,6 +29,8 @@
 #include "bpf.h"
 #include "libbpf.h"
 #include "nlattr.h"
+/* avoid multiple definition of netlink features */
+#define __LINUX_NETLINK_H
 #include <uapi/linux/rtnetlink.h>
 #include <sys/socket.h>
 #include <errno.h>
@@ -37,6 +39,10 @@
 #define IFLA_XDP	43
 #define IFLA_XDP_FD	1
 #define IFLA_XDP_FLAGS	3
+#endif
+
+#ifndef SOL_NETLINK
+#define SOL_NETLINK 270
 #endif
 
 /*

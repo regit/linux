@@ -15,8 +15,6 @@
 #define __NLATTR_H
 
 #include <stdint.h>
-/* avoid multiple definition of netlink features */
-#define __LINUX_NETLINK_H
 #include <uapi/linux/netlink.h>
 
 /**
