@@ -29,7 +29,7 @@
 #include "bpf.h"
 #include "libbpf.h"
 #include "nlattr.h"
-#include <uapi/linux/rtnetlink.h>
+#include <linux/rtnetlink.h>
 #include <sys/socket.h>
 #include <errno.h>
 
