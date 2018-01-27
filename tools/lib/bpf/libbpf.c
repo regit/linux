@@ -826,6 +826,13 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 			void *reloc = obj->efile.reloc;
 			int nr_reloc = obj->efile.nr_reloc + 1;
 
+			/* Skip decoding of "eh" exception frames */
+			if (strcmp(name, ".rel.eh_frame") == 0) {
+				pr_debug("skip relo section %s(%d) for section(%d)\n",
+					 name, idx, sh.sh_info);
+				continue;
+			}
+
 			reloc = realloc(reloc,
 					sizeof(*obj->efile.reloc) * nr_reloc);
 			if (!reloc) {
