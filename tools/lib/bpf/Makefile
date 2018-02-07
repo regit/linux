@@ -147,11 +147,11 @@ LIB_FILE := $(addprefix $(OUTPUT),$(LIB_FILE))
 
 CMD_TARGETS = $(LIB_FILE)
 
-TARGETS = $(CMD_TARGETS) test_libbpf_open
+TARGETS = $(CMD_TARGETS)
 
 all: fixdep all_cmd
 
-all_cmd: $(TARGETS)
+all_cmd: $(CMD_TARGETS)
 
 $(BPF_IN): force elfdep bpfdep
 	@(test -f ../../include/uapi/linux/bpf.h -a -f ../../../include/uapi/linux/bpf.h && ( \
@@ -173,9 +173,6 @@ $(OUTPUT)libbpf.so: $(BPF_IN)
 
 $(OUTPUT)libbpf.a: $(BPF_IN)
 	$(QUIET_LINK)$(RM) $@; $(AR) rcs $@ $^
-
-test_libbpf_open: test_libbpf_open.c $(OUTPUT)libbpf.a
-	$(QUIET_LINK)$(CC) -lelf -Wall $< $(OUTPUT)libbpf.a -o $(OUTPUT)$@
 
 define do_install
 	if [ ! -d '$(DESTDIR_SQ)$2' ]; then		\
